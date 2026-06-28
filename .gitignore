@@ -1,0 +1,11 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Go build outputs
+bin/
+build/
+
+# Generator scratch dirs
+.wails-gen-*
