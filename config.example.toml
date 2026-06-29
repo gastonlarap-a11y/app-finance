@@ -1,0 +1,13 @@
+# Configuration for App Finance — copy to config.toml (gitignored) and adjust.
+display_name = "App Finance"
+log_level = "info"
+db_filename = "app-finance.db"
+data_strategy = "osstandard" # "osstandard" | "besideexe" (ignored when data_dir is set)
+
+# Optional initial DB folder. You can also set it from the app (Settings tab), which
+# takes precedence. If unset, the DB lives in the OS app-support folder.
+# data_dir = "/Users/you/Documents/bases de datos/sqlite"
+
+# Backups (local snapshots + Google Drive) are configured entirely from the
+# Settings tab in the app — no config needed here.
+# backup_local_dir = ""   # default: <data_dir>/backups

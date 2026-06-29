@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=App Finance
+Comment=Personal finance desktop app
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/app-finance %u
+Terminal=false
+Type=Application
+Icon=app-finance
+Categories=Utility;
+StartupWMClass=app-finance
+
+ 

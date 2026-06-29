@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v3.json",
+  "name": "App Finance",
+  "outputfilename": "app-finance",
+  "info": {
+    "productName": "App Finance"
+  },
+  "frontend": {
+    "dir": "frontend",
+    "install": "npm install",
+    "build": "npm run build",
+    "dev": {
+      "command": "npm run dev",
+      "serverUrl": "auto"
+    }
+  }
+}

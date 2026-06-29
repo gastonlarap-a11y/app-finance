@@ -3,9 +3,49 @@
 *.iml
 .vscode/
 
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
 # Go build outputs
 bin/
-build/
+# Binario macOS que a veces se genera en la raíz en vez de bin/
+/app-finance
 
-# Generator scratch dirs
+# Wails generator scratch
 .wails-gen-*
+
+# Task runner checksums (caché de builds, no código)
+.task/
+
+# Frontend: generated bindings (wails3 generate bindings -ts) y build
+frontend/dist/
+frontend/node_modules/
+frontend/bindings/
+
+# App config local (tiene rutas hardcodeadas y datos sensibles)
+config.toml
+
+# Variables de entorno locales
+.env
+*.env
+
+# Logs
+logs/
+
+# Secretos OAuth / tokens (nunca commitear)
+*.local.go
+secrets.env
+google-token.json
+
+# Datos personales
+*.csv
+
+# Plataformas no usadas (generadas por el template de Wails v3)
+build/android/
+build/ios/
+build/docker/
+
+# Binarios auto-generados durante el build
+build/darwin/Assets.car
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

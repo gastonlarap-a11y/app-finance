@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "App Finance",
+			"FileDescription": "Personal finance desktop app",
+			"LegalCopyright": "© now, My Company",
+			"ProductName": "App Finance",
+			"Comments": "This is a comment"
+		}
+	}
+}

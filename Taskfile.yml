@@ -1,0 +1,91 @@
+version: '3'
+
+# Canonical Wails v3 root Taskfile. Drives `wails3 dev` / `wails3 build` via the
+# per-OS task graphs under ./build. Regenerate the build/ assets with
+# `wails3 task common:update:build-assets` after editing build/config.yml.
+
+vars:
+  APP_NAME: "app-finance"
+  BIN_DIR: "bin"
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+  ios: ./build/ios/Taskfile.yml
+  android: ./build/android/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{OS}}:build"
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{OS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{OS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  setup:docker:
+    summary: Builds Docker image for cross-compilation (~800MB download)
+    cmds:
+      - task: common:setup:docker
+
+  build:windows:
+    summary: Cross-compiles a Windows .exe (amd64/x86_64) from macOS — for standard Windows PCs
+    cmds:
+      - task: windows:build
+        vars:
+          ARCH: amd64
+
+  build:windows:arm64:
+    summary: Cross-compiles a Windows .exe (arm64) from macOS — for ARM Windows devices
+    cmds:
+      - task: windows:build
+        vars:
+          ARCH: arm64
+
+  build:windows:clean:
+    summary: Removes the Windows .exe from bin/
+    cmds:
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
+
+  package:windows:
+    summary: Creates a Windows NSIS installer (amd64) — requires 'brew install makensis'
+    cmds:
+      - task: windows:package
+        vars:
+          ARCH: amd64
+
+  build:server:
+    summary: Builds the application in server mode (no GUI, HTTP server only)
+    cmds:
+      - task: common:build:server
+
+  run:server:
+    summary: Runs the application in server mode
+    cmds:
+      - task: common:run:server
+
+  build:docker:
+    summary: Builds a Docker image for server mode deployment
+    cmds:
+      - task: common:build:docker
+
+  run:docker:
+    summary: Builds and runs the Docker image
+    cmds:
+      - task: common:run:docker

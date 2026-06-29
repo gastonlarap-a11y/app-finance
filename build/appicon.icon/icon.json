@@ -1,0 +1,28 @@
+{
+  "fill" : {
+    "solid" : "srgb:0.0,0.0,0.0,0.0"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "appicon.png",
+          "name" : "appicon",
+          "position" : {
+            "scale" : 0.85,
+            "translation-in-points" : [
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
