@@ -126,6 +126,9 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
         </Field>
         <Field label="Día de corte (factura)">
           <input className={inputCls} type="number" min="1" max="28" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
+          <p className="mt-1 text-xs text-slate-500">
+            Compras hasta el día anterior (inclusive) quedan en el mes actual. El día del corte y los siguientes van al mes siguiente.
+          </p>
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>

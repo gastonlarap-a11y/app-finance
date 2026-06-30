@@ -47,3 +47,11 @@ export function todayISO(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+export function formatDate(d: unknown): string {
+  if (!d) return '—'
+  const iso = String(d).slice(0, 10)
+  const [y, mo, day] = iso.split('-')
+  const dt = new Date(Number(y), Number(mo) - 1, Number(day))
+  return dt.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
+}

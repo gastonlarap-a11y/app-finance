@@ -1,8 +1,21 @@
 import { useState } from 'react'
 import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense } from '@/services/finance'
 import { failed } from '@/lib/result'
-import { todayISO } from '@/lib/format'
+import { periodLabel, todayISO } from '@/lib/format'
 import { Button, Field, Modal, inputCls } from './ui'
+
+function computeFirstPeriod(dateStr: string, billingDay: number): string {
+  if (!dateStr) return ''
+  const parts = dateStr.split('-')
+  let year = Number(parts[0])
+  let month = Number(parts[1])
+  const day = Number(parts[2])
+  if (billingDay > 0 && day >= billingDay) {
+    month += 1
+    if (month > 12) { month = 1; year += 1 }
+  }
+  return `${year}-${String(month).padStart(2, '0')}`
+}
 
 type Props = {
   cards: Card[]
@@ -26,6 +39,9 @@ export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Pr
   const [busy, setBusy] = useState(false)
 
   const isCuotas = kind === KIND_CUOTAS
+
+  const selectedCard = cards.find((c) => String(c.id) === cardId)
+  const firstPeriod = isCuotas && selectedCard && date ? computeFirstPeriod(date, selectedCard.billingDay) : null
 
   // Keep the expense's current category selectable even if it was removed from
   // the managed list (e.g. editing an old expense).
@@ -116,6 +132,12 @@ export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Pr
         <Field label="Fecha de compra">
           <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
+
+        {firstPeriod && (
+          <p className="text-xs text-slate-400">
+            Primera cuota en: <strong>{periodLabel(firstPeriod)}</strong>
+          </p>
+        )}
 
         <p className="text-xs text-slate-500">
           {isCuotas

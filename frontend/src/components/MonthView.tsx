@@ -10,7 +10,7 @@ import {
 } from '@/services/finance'
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
-import { formatCLP } from '@/lib/format'
+import { formatCLP, formatDate } from '@/lib/format'
 import { Bar, Button, Empty, Section, Spinner, StatCard } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
@@ -122,6 +122,7 @@ export function MonthView() {
                       <th className="pb-2">Categoría</th>
                       <th className="pb-2">Tarjeta</th>
                       <th className="pb-2">Cuota</th>
+                      <th className="pb-2">Fecha</th>
                       <th className="pb-2 text-right">Monto</th>
                       <th className="pb-2 text-center">Estado</th>
                       <th className="pb-2"></th>
@@ -137,6 +138,7 @@ export function MonthView() {
                           <td className="py-2 text-slate-400">{m.category}</td>
                           <td className="py-2 text-slate-400">{m.cardName || '—'}</td>
                           <td className="py-2 text-slate-400">{isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}</td>
+                          <td className="py-2 text-slate-400">{isFijo ? '—' : formatDate(m.date)}</td>
                           <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
                           <td className="py-2 text-center">
                             <button

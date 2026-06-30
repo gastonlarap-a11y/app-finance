@@ -1,6 +1,8 @@
 package finance
 
 import (
+	"time"
+
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
@@ -82,6 +84,7 @@ type Movimiento struct {
 	Total         int           `json:"total"`
 	Amount        types.Decimal `json:"amount"`
 	Status        string        `json:"status"`
+	Date          *time.Time    `json:"date"` // nil para gastos fijos
 }
 
 type CategoryTotal struct {

@@ -846,6 +846,7 @@ func (s *FinanceService) MonthlySummary(ctx context.Context, period string) Mont
 			mv.Category = ex.Category
 			mv.CardID = ex.CardID
 			mv.Kind = ex.Kind
+			mv.Date = &ex.Date
 			if ex.Category != "" {
 				cat = ex.Category
 			}

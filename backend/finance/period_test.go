@@ -18,7 +18,7 @@ func TestPeriodOf(t *testing.T) {
 	}{
 		{"compra después del corte rueda al mes siguiente", d(2026, 6, 26), 24, "2026-07"},
 		{"compra antes del corte queda en el mes", d(2026, 6, 23), 24, "2026-06"},
-		{"compra el día del corte queda en el mes", d(2026, 6, 24), 24, "2026-06"},
+		{"compra el día del corte rueda al mes siguiente", d(2026, 6, 24), 24, "2026-07"},
 		{"sin tarjeta (billingDay 0) no rueda", d(2026, 6, 26), 0, "2026-06"},
 		{"diciembre rueda a enero del año siguiente", d(2026, 12, 31), 24, "2027-01"},
 	}
