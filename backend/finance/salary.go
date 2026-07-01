@@ -11,6 +11,7 @@ import (
 type PeriodSalary struct {
 	bun.BaseModel `bun:"table:period_salaries,alias:ps"`
 
+	UserID int64         `bun:"user_id,pk" json:"userId"`
 	Period string        `bun:"period,pk" json:"period"` // YYYY-MM
 	Amount types.Decimal `bun:"amount,notnull" json:"amount"`
 }

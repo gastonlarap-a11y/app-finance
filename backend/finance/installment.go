@@ -20,6 +20,7 @@ type Installment struct {
 	bun.BaseModel `bun:"table:installments,alias:inst"`
 
 	ID        int64         `bun:"id,pk,autoincrement" json:"id"`
+	UserID    int64         `bun:"user_id,notnull" json:"userId"`
 	ExpenseID int64         `bun:"expense_id,notnull" json:"expenseId"`
 	Number    int           `bun:"number,notnull" json:"number"` // 1..Total
 	Total     int           `bun:"total,notnull" json:"total"`

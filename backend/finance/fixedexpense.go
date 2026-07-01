@@ -16,12 +16,14 @@ type FixedExpense struct {
 	bun.BaseModel `bun:"table:fixed_expenses,alias:fe"`
 
 	ID          int64     `bun:"id,pk,autoincrement" json:"id"`
-	Description  string    `bun:"description,notnull" json:"description"`
+	UserID      int64     `bun:"user_id,notnull" json:"userId"`
+	Description string    `bun:"description,notnull" json:"description"`
 	Category    string    `bun:"category,notnull" json:"category"`
 	CardID      *int64    `bun:"card_id" json:"cardId"`
-	StartPeriod string    `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM: primer mes cobrado
-	EndPeriod   string    `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
-	CreatedAt   time.Time `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
+	StartPeriod string     `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM: primer mes cobrado
+	EndPeriod   string     `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
+	CreatedAt   time.Time  `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
+	DeletedAt   *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
 }
 
 // FixedExpenseAmount is the amount that becomes effective for a fixed expense from

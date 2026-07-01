@@ -146,3 +146,21 @@ type YearSummaryResult struct {
 	Data  *YearSummary     `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
 }
+
+// --- Trash (papelera) ---
+
+// TrashItem is one soft-deleted record of any entity type, shown in the trash
+// view with a Restore action.
+type TrashItem struct {
+	Type        string         `json:"type"` // card|category|income|expense|fixedexpense
+	ID          int64          `json:"id"`
+	Description string         `json:"description"`
+	Amount      *types.Decimal `json:"amount,omitempty"`
+	Period      string         `json:"period,omitempty"`
+	DeletedAt   time.Time      `json:"deletedAt"`
+}
+
+type TrashResult struct {
+	Data  []TrashItem      `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}

@@ -10,6 +10,7 @@ import (
 
 	financemigrations "github.com/gastonlarap-a11y/app-finance/backend/finance/migrations"
 	windowstatemigrations "github.com/gastonlarap-a11y/app-finance/backend/shared/windowstate/migrations"
+	usersmigrations "github.com/gastonlarap-a11y/app-finance/backend/users/migrations"
 )
 
 // RunMigrations discovers and applies every domain's SQL migrations.
@@ -21,6 +22,7 @@ func RunMigrations(ctx context.Context, bdb *bun.DB) error {
 	for _, fsys := range []embed.FS{
 		financemigrations.Migrations,
 		windowstatemigrations.Migrations,
+		usersmigrations.Migrations,
 	} {
 		if err := m.Discover(fsys); err != nil {
 			return fmt.Errorf("discovering migrations: %w", err)

@@ -6,8 +6,10 @@ import { YearView } from '@/components/YearView'
 import { CardsView } from '@/components/CardsView'
 import { CategoriesView } from '@/components/CategoriesView'
 import { FixedExpensesView } from '@/components/FixedExpensesView'
+import { TrashView } from '@/components/TrashView'
 import { SettingsView } from '@/components/SettingsView'
 import { BackupControl } from '@/components/BackupControl'
+import { UserSwitcher } from '@/components/UserSwitcher'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'mes', label: 'Mes' },
@@ -15,6 +17,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'fijos', label: 'Fijos' },
   { id: 'tarjetas', label: 'Tarjetas' },
   { id: 'categorias', label: 'Categorías' },
+  { id: 'papelera', label: 'Papelera' },
   { id: 'ajustes', label: 'Ajustes' },
 ]
 
@@ -30,7 +33,10 @@ function App() {
             <h1 className="text-2xl font-bold text-primary">App Finance</h1>
             <p className="text-sm text-slate-400">Tus cuentas mes a mes · ¿alcanza?</p>
           </div>
-          <BackupControl />
+          <div className="flex items-center gap-3">
+            <UserSwitcher />
+            <BackupControl />
+          </div>
         </div>
 
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 pb-4">
@@ -96,6 +102,7 @@ function App() {
         {tab === 'fijos' && <FixedExpensesView />}
         {tab === 'tarjetas' && <CardsView />}
         {tab === 'categorias' && <CategoriesView />}
+        {tab === 'papelera' && <TrashView />}
         {tab === 'ajustes' && <SettingsView />}
       </main>
     </div>

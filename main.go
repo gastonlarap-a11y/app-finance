@@ -21,6 +21,7 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/logger"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/prefs"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/windowstate"
+	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
 // Placeholder dist is generated so this embed compiles before the first
@@ -45,7 +46,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	financeSvc := finance.NewFinanceService(bdb)
+	// Restore the last selected finance profile (defaults to the seeded "Gastón").
+	session := users.NewSession()
+	session.SetActive(users.ResolveActiveID(context.Background(), bdb, prefs.Load(appName).ActiveUserID))
+
+	financeSvc := finance.NewFinanceService(bdb, session)
+	usersSvc := users.NewService(bdb, session, appName)
 	driveMgr := drive.NewManager(appName, func() (string, string) {
 		p := prefs.Load(appName)
 		return p.OAuthClientID, p.OAuthClientSecret
@@ -55,6 +61,7 @@ func main() {
 
 	services := []application.Service{
 		application.NewService(financeSvc),
+		application.NewService(usersSvc),
 		application.NewService(settingsSvc),
 		application.NewService(diagnostics.NewDiagnosticsService()),
 		application.NewService(reports.NewReportsService()),
