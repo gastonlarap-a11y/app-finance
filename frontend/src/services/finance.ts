@@ -23,6 +23,8 @@ export {
   SalaryResult,
   Settings,
   SettingsResult,
+  TrashItem,
+  TrashResult,
   YearMonth,
   YearSummary,
   YearSummaryResult,

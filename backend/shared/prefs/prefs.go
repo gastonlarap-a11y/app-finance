@@ -22,6 +22,7 @@ type Prefs struct {
 	BackupOnClose     bool   `json:"backupOnClose"`     // run backup when the app closes
 	OAuthClientID     string `json:"oauthClientId"`     // optional override of the baked-in client
 	OAuthClientSecret string `json:"oauthClientSecret"` // optional override of the baked-in client
+	ActiveUserID      int64  `json:"activeUserId"`      // selected finance profile (0 = default to first user)
 }
 
 func defaults() Prefs {

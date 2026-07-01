@@ -12,17 +12,25 @@ import (
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
+	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
 // FinanceService is the Wails v3 service for the whole finance domain. Public
-// methods are auto-bound to TypeScript by `wails3 generate bindings`.
+// methods are auto-bound to TypeScript by `wails3 generate bindings`. Every query
+// is scoped to the active user (session.Active()) so each profile sees only its data.
 type FinanceService struct {
-	db *bun.DB
+	db      *bun.DB
+	session *users.Session
 }
 
-func NewFinanceService(db *bun.DB) *FinanceService { return &FinanceService{db: db} }
+func NewFinanceService(db *bun.DB, session *users.Session) *FinanceService {
+	return &FinanceService{db: db, session: session}
+}
 
 func (s *FinanceService) ServiceName() string { return "FinanceService" }
+
+// uid is the active user id; every query filters/sets user_id with it.
+func (s *FinanceService) uid() int64 { return s.session.Active() }
 
 // ---------- helpers ----------
 
@@ -62,7 +70,7 @@ func (s *FinanceService) GetSettings(ctx context.Context) SettingsResult {
 // salaryFor returns the salary saved for a period, or zero when none is set.
 func (s *FinanceService) salaryFor(ctx context.Context, period string) (types.Decimal, error) {
 	ps := new(PeriodSalary)
-	err := s.db.NewSelect().Model(ps).Where("period = ?", period).Scan(ctx)
+	err := s.db.NewSelect().Model(ps).Where("user_id = ? AND period = ?", s.uid(), period).Scan(ctx)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return types.Zero(), nil
@@ -91,9 +99,9 @@ func (s *FinanceService) SetSalary(ctx context.Context, period, amount string) S
 	if aerr != nil {
 		return SalaryResult{Error: aerr}
 	}
-	ps := &PeriodSalary{Period: period, Amount: amt}
+	ps := &PeriodSalary{UserID: s.uid(), Period: period, Amount: amt}
 	if _, err := s.db.NewInsert().Model(ps).
-		On("CONFLICT (period) DO UPDATE").
+		On("CONFLICT (user_id, period) DO UPDATE").
 		Set("amount = EXCLUDED.amount").Exec(ctx); err != nil {
 		return SalaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -104,7 +112,7 @@ func (s *FinanceService) SetSalary(ctx context.Context, period, amount string) S
 
 func (s *FinanceService) ListCards(ctx context.Context) ([]Card, error) {
 	var cards []Card
-	err := s.db.NewSelect().Model(&cards).Order("name ASC").Scan(ctx)
+	err := s.db.NewSelect().Model(&cards).Where("user_id = ?", s.uid()).Order("name ASC").Scan(ctx)
 	return cards, err
 }
 
@@ -119,7 +127,7 @@ func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit strin
 	if billingDay < 1 || billingDay > 28 {
 		billingDay = 24
 	}
-	card := &Card{Name: strings.TrimSpace(name), CreditLimit: limit, BillingDay: billingDay}
+	card := &Card{UserID: s.uid(), Name: strings.TrimSpace(name), CreditLimit: limit, BillingDay: billingDay}
 	if _, err := s.db.NewInsert().Model(card).Returning("*").Exec(ctx); err != nil {
 		return CardResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -141,7 +149,7 @@ func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditL
 		Set("name = ?", strings.TrimSpace(name)).
 		Set("credit_limit = ?", limit).
 		Set("billing_day = ?", billingDay).
-		Where("id = ?", id).Exec(ctx)
+		Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx)
 	if err != nil {
 		return CardResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -149,34 +157,53 @@ func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditL
 		return CardResult{Error: shared.NewError(shared.ErrNotFound, "tarjeta no encontrada")}
 	}
 	card := new(Card)
-	if err := s.db.NewSelect().Model(card).Where("id = ?", id).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(card).Where("id = ? AND user_id = ?", id, s.uid()).Scan(ctx); err != nil {
 		return CardResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	return CardResult{Data: card}
 }
 
-// DeleteCard unlinks its expenses (card_id = NULL) then removes the card. We do
-// not rely on SQLite ON DELETE (foreign keys are not enabled on the connection).
+// DeleteCard soft-deletes the card. Expenses keep their card_id pointing at it so
+// history (e.g. the card's name on old movimientos) survives; see cardMapAll.
 func (s *FinanceService) DeleteCard(ctx context.Context, id int64) OpResult {
-	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().Model((*Expense)(nil)).
-			Set("card_id = NULL").Where("card_id = ?", id).Exec(ctx); err != nil {
-			return err
-		}
-		_, err := tx.NewDelete().Model((*Card)(nil)).Where("id = ?", id).Exec(ctx)
-		return err
-	})
-	if err != nil {
+	if _, err := s.db.NewDelete().Model((*Card)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	return OpResult{}
+}
+
+// RestoreCard undoes a soft delete.
+func (s *FinanceService) RestoreCard(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*Card)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
+	if err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "tarjeta no encontrada")}
+	}
+	return OpResult{}
+}
+
+// cardMapAll returns every card (including soft-deleted ones) keyed by id, for
+// resolving a card's name on historical movimientos even after it was deleted.
+func (s *FinanceService) cardMapAll(ctx context.Context) (map[int64]Card, error) {
+	var cards []Card
+	if err := s.db.NewSelect().Model(&cards).WhereAllWithDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return nil, err
+	}
+	out := make(map[int64]Card, len(cards))
+	for _, c := range cards {
+		out[c.ID] = c
+	}
+	return out, nil
 }
 
 // ---------- categories ----------
 
 func (s *FinanceService) ListCategories(ctx context.Context) ([]Category, error) {
 	var cats []Category
-	err := s.db.NewSelect().Model(&cats).Order("name ASC").Scan(ctx)
+	err := s.db.NewSelect().Model(&cats).Where("user_id = ?", s.uid()).Order("name ASC").Scan(ctx)
 	return cats, err
 }
 
@@ -185,7 +212,7 @@ func (s *FinanceService) CreateCategory(ctx context.Context, name string) Catego
 	if name == "" {
 		return CategoryResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
 	}
-	cat := &Category{Name: name}
+	cat := &Category{UserID: s.uid(), Name: name}
 	if _, err := s.db.NewInsert().Model(cat).Returning("*").Exec(ctx); err != nil {
 		if isUniqueViolation(err) {
 			return CategoryResult{Error: shared.NewError(shared.ErrValidation, "la categoría ya existe")}
@@ -205,23 +232,23 @@ func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name stri
 	cat := new(Category)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		old := new(Category)
-		if err := tx.NewSelect().Model(old).Where("id = ?", id).Scan(ctx); err != nil {
+		if err := tx.NewSelect().Model(old).Where("id = ? AND user_id = ?", id, s.uid()).Scan(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return shared.NewError(shared.ErrNotFound, "categoría no encontrada")
 			}
 			return err
 		}
 		if _, err := tx.NewUpdate().Model((*Category)(nil)).
-			Set("name = ?", name).Where("id = ?", id).Exec(ctx); err != nil {
+			Set("name = ?", name).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
 			return err
 		}
 		if old.Name != name {
 			if _, err := tx.NewUpdate().Model((*Expense)(nil)).
-				Set("category = ?", name).Where("category = ?", old.Name).Exec(ctx); err != nil {
+				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, s.uid()).Exec(ctx); err != nil {
 				return err
 			}
 		}
-		return tx.NewSelect().Model(cat).Where("id = ?", id).Scan(ctx)
+		return tx.NewSelect().Model(cat).Where("id = ? AND user_id = ?", id, s.uid()).Scan(ctx)
 	})
 	if err != nil {
 		if ae, ok := err.(*shared.AppError); ok {
@@ -238,8 +265,25 @@ func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name stri
 // DeleteCategory removes the category from the managed list. Expenses keep their
 // category text (history is preserved); the name simply stops being offered.
 func (s *FinanceService) DeleteCategory(ctx context.Context, id int64) OpResult {
-	if _, err := s.db.NewDelete().Model((*Category)(nil)).Where("id = ?", id).Exec(ctx); err != nil {
+	if _, err := s.db.NewDelete().Model((*Category)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return OpResult{}
+}
+
+// RestoreCategory undoes a soft delete. Fails with ErrConflict if an active
+// category now uses the same name (the unique index only allows one active row).
+func (s *FinanceService) RestoreCategory(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*Category)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return OpResult{Error: shared.NewError(shared.ErrConflict, "ya existe una categoría activa con ese nombre")}
+		}
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "categoría no encontrada")}
 	}
 	return OpResult{}
 }
@@ -248,7 +292,7 @@ func (s *FinanceService) DeleteCategory(ctx context.Context, id int64) OpResult 
 
 func (s *FinanceService) ListIncomes(ctx context.Context, period string) ([]Income, error) {
 	var incomes []Income
-	err := s.db.NewSelect().Model(&incomes).Where("period = ?", period).Order("created_at ASC").Scan(ctx)
+	err := s.db.NewSelect().Model(&incomes).Where("user_id = ? AND period = ?", s.uid(), period).Order("created_at ASC").Scan(ctx)
 	return incomes, err
 }
 
@@ -263,7 +307,7 @@ func (s *FinanceService) CreateIncome(ctx context.Context, period, description, 
 	if aerr != nil {
 		return IncomeResult{Error: aerr}
 	}
-	inc := &Income{Period: period, Description: strings.TrimSpace(description), Amount: amt}
+	inc := &Income{UserID: s.uid(), Period: period, Description: strings.TrimSpace(description), Amount: amt}
 	if _, err := s.db.NewInsert().Model(inc).Returning("*").Exec(ctx); err != nil {
 		return IncomeResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -271,8 +315,21 @@ func (s *FinanceService) CreateIncome(ctx context.Context, period, description, 
 }
 
 func (s *FinanceService) DeleteIncome(ctx context.Context, id int64) OpResult {
-	if _, err := s.db.NewDelete().Model((*Income)(nil)).Where("id = ?", id).Exec(ctx); err != nil {
+	if _, err := s.db.NewDelete().Model((*Income)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return OpResult{}
+}
+
+// RestoreIncome undoes a soft delete.
+func (s *FinanceService) RestoreIncome(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*Income)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
+	if err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "ingreso no encontrado")}
 	}
 	return OpResult{}
 }
@@ -283,7 +340,8 @@ func (s *FinanceService) ListExpenses(ctx context.Context, period string) ([]Exp
 	// Expenses that have at least one installment in the given period.
 	var expenses []Expense
 	err := s.db.NewSelect().Model(&expenses).
-		Where("id IN (SELECT expense_id FROM installments WHERE period = ?)", period).
+		Where("user_id = ?", s.uid()).
+		Where("id IN (SELECT expense_id FROM installments WHERE period = ? AND user_id = ?)", period, s.uid()).
 		Order("date DESC").Scan(ctx)
 	return expenses, err
 }
@@ -295,7 +353,7 @@ func (s *FinanceService) billingDayFor(ctx context.Context, cardID *int64) (int,
 		return 0, nil
 	}
 	card := new(Card)
-	if err := s.db.NewSelect().Model(card).Where("id = ?", *cardID).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(card).Where("id = ? AND user_id = ?", *cardID, s.uid()).Scan(ctx); err != nil {
 		return 0, shared.NewError(shared.ErrValidation, "la tarjeta indicada no existe")
 	}
 	return card.BillingDay, nil
@@ -341,20 +399,20 @@ func (s *FinanceService) UpdateExpense(
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		// Preserve how many installments were already paid, then regenerate.
 		paidCount, err := tx.NewSelect().Model((*Installment)(nil)).
-			Where("expense_id = ? AND status = ?", id, StatusPagado).Count(ctx)
+			Where("expense_id = ? AND user_id = ? AND status = ?", id, s.uid(), StatusPagado).Count(ctx)
 		if err != nil {
 			return err
 		}
 		res, err := tx.NewUpdate().Model(ex).
 			Column("date", "description", "category", "card_id", "kind", "installment_amount", "installments_total").
-			WherePK().Exec(ctx)
+			WherePK().Where("user_id = ?", s.uid()).Exec(ctx)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return shared.NewError(shared.ErrNotFound, "gasto no encontrado")
 		}
-		if _, err := tx.NewDelete().Model((*Installment)(nil)).Where("expense_id = ?", id).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*Installment)(nil)).Where("expense_id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
 			return err
 		}
 		return generateInstallments(ctx, tx, ex, billingDay, paidCount)
@@ -368,16 +426,26 @@ func (s *FinanceService) UpdateExpense(
 	return ExpenseResult{Data: ex}
 }
 
+// DeleteExpense soft-deletes the expense. Its installments stay physically
+// intact (they have no deleted_at of their own) so restoring brings them all
+// back unchanged; queries that sum installments must filter out ones whose
+// parent expense is deleted (see the explicit subqueries below).
 func (s *FinanceService) DeleteExpense(ctx context.Context, id int64) OpResult {
-	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewDelete().Model((*Installment)(nil)).Where("expense_id = ?", id).Exec(ctx); err != nil {
-			return err
-		}
-		_, err := tx.NewDelete().Model((*Expense)(nil)).Where("id = ?", id).Exec(ctx)
-		return err
-	})
+	if _, err := s.db.NewDelete().Model((*Expense)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return OpResult{}
+}
+
+// RestoreExpense undoes a soft delete.
+func (s *FinanceService) RestoreExpense(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*Expense)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
 	if err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "gasto no encontrado")}
 	}
 	return OpResult{}
 }
@@ -411,6 +479,7 @@ func (s *FinanceService) validateExpense(
 		return nil, shared.NewError(shared.ErrValidation, "tipo inválido (use 'unico' o 'cuotas')")
 	}
 	return &Expense{
+		UserID:            s.uid(),
 		Date:              date,
 		Description:       strings.TrimSpace(description),
 		Category:          strings.TrimSpace(category),
@@ -433,6 +502,7 @@ func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDa
 	insts := make([]Installment, 0, total)
 	for i := 0; i < total; i++ {
 		inst := Installment{
+			UserID:    ex.UserID,
 			ExpenseID: ex.ID,
 			Number:    i + 1,
 			Total:     total,
@@ -452,7 +522,7 @@ func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDa
 }
 
 func (s *FinanceService) SetInstallmentPaid(ctx context.Context, id int64, paid bool) OpResult {
-	q := s.db.NewUpdate().Model((*Installment)(nil)).Where("id = ?", id)
+	q := s.db.NewUpdate().Model((*Installment)(nil)).Where("id = ? AND user_id = ?", id, s.uid())
 	if paid {
 		q = q.Set("status = ?", StatusPagado).Set("paid_at = ?", time.Now())
 	} else {
@@ -467,15 +537,27 @@ func (s *FinanceService) SetInstallmentPaid(ctx context.Context, id int64, paid 
 // ---------- fixed expenses (recurring) ----------
 
 // loadFixed returns every fixed expense plus its amount history grouped by id.
-func (s *FinanceService) loadFixed(ctx context.Context) ([]FixedExpense, map[int64][]FixedExpenseAmount, error) {
+// deletedOnly selects only soft-deleted fixed expenses (used by ListTrash); the
+// amount/payment history tables have no deleted_at of their own and ride along
+// with the parent automatically.
+func (s *FinanceService) loadFixed(ctx context.Context, deletedOnly bool) ([]FixedExpense, map[int64][]FixedExpenseAmount, error) {
 	var fixed []FixedExpense
-	if err := s.db.NewSelect().Model(&fixed).Scan(ctx); err != nil {
+	q := s.db.NewSelect().Model(&fixed).Where("user_id = ?", s.uid())
+	if deletedOnly {
+		q = q.WhereDeleted()
+	}
+	if err := q.Scan(ctx); err != nil {
 		return nil, nil, err
 	}
 	byID := map[int64][]FixedExpenseAmount{}
 	if len(fixed) > 0 {
+		ids := make([]int64, len(fixed))
+		for i, fe := range fixed {
+			ids[i] = fe.ID
+		}
 		var amounts []FixedExpenseAmount
-		if err := s.db.NewSelect().Model(&amounts).Scan(ctx); err != nil {
+		if err := s.db.NewSelect().Model(&amounts).
+			Where("fixed_expense_id IN (?)", bun.In(ids)).Scan(ctx); err != nil {
 			return nil, nil, err
 		}
 		for _, a := range amounts {
@@ -488,7 +570,7 @@ func (s *FinanceService) loadFixed(ctx context.Context) ([]FixedExpense, map[int
 // fixedChargesFor builds the movimientos for every fixed expense billed in `period`,
 // resolving the amount in effect and the paid/pending status for that month.
 func (s *FinanceService) fixedChargesFor(ctx context.Context, period string) ([]Movimiento, error) {
-	fixed, amountsByID, err := s.loadFixed(ctx)
+	fixed, amountsByID, err := s.loadFixed(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +612,7 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, period string) ([]
 // sumFixedBefore totals every fixed-expense charge for all months strictly before
 // `period`, used to carry the running balance forward.
 func (s *FinanceService) sumFixedBefore(ctx context.Context, period string) (types.Decimal, error) {
-	fixed, amountsByID, err := s.loadFixed(ctx)
+	fixed, amountsByID, err := s.loadFixed(ctx, false)
 	if err != nil {
 		return types.Zero(), err
 	}
@@ -549,17 +631,15 @@ func (s *FinanceService) sumFixedBefore(ctx context.Context, period string) (typ
 }
 
 func (s *FinanceService) ListFixedExpenses(ctx context.Context) ([]FixedExpenseView, error) {
-	fixed, amountsByID, err := s.loadFixed(ctx)
+	fixed, amountsByID, err := s.loadFixed(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	cards, err := s.ListCards(ctx)
+	// cardMapAll (not ListCards) so a fixed expense still shows the name of a
+	// card that was since soft-deleted.
+	cardByID, err := s.cardMapAll(ctx)
 	if err != nil {
 		return nil, err
-	}
-	cardByID := make(map[int64]Card, len(cards))
-	for _, c := range cards {
-		cardByID[c.ID] = c
 	}
 	now := currentPeriod()
 	out := make([]FixedExpenseView, 0, len(fixed))
@@ -608,6 +688,7 @@ func (s *FinanceService) CreateFixedExpense(
 		}
 	}
 	fe := &FixedExpense{
+		UserID:      s.uid(),
 		Description: desc,
 		Category:    strings.TrimSpace(category),
 		CardID:      cardID,
@@ -641,7 +722,7 @@ func (s *FinanceService) UpdateFixedExpense(
 	}
 	fe := &FixedExpense{ID: id, Description: desc, Category: strings.TrimSpace(category), CardID: cardID}
 	res, err := s.db.NewUpdate().Model(fe).
-		Column("description", "category", "card_id").WherePK().Exec(ctx)
+		Column("description", "category", "card_id").WherePK().Where("user_id = ?", s.uid()).Exec(ctx)
 	if err != nil {
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -681,7 +762,7 @@ func (s *FinanceService) EndFixedExpense(ctx context.Context, id int64, fromPeri
 	}
 	end := addMonths(fromPeriod, -1)
 	res, err := s.db.NewUpdate().Model((*FixedExpense)(nil)).
-		Set("end_period = ?", end).Where("id = ?", id).Exec(ctx)
+		Set("end_period = ?", end).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx)
 	if err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -691,19 +772,24 @@ func (s *FinanceService) EndFixedExpense(ctx context.Context, id int64, fromPeri
 	return OpResult{}
 }
 
+// DeleteFixedExpense soft-deletes the fixed expense. Its amount/payment history
+// rows are never touched, so restoring brings the full history back untouched.
 func (s *FinanceService) DeleteFixedExpense(ctx context.Context, id int64) OpResult {
-	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewDelete().Model((*FixedExpenseAmount)(nil)).Where("fixed_expense_id = ?", id).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewDelete().Model((*FixedExpensePayment)(nil)).Where("fixed_expense_id = ?", id).Exec(ctx); err != nil {
-			return err
-		}
-		_, err := tx.NewDelete().Model((*FixedExpense)(nil)).Where("id = ?", id).Exec(ctx)
-		return err
-	})
+	if _, err := s.db.NewDelete().Model((*FixedExpense)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return OpResult{}
+}
+
+// RestoreFixedExpense undoes a soft delete.
+func (s *FinanceService) RestoreFixedExpense(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*FixedExpense)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
 	if err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "gasto fijo no encontrado")}
 	}
 	return OpResult{}
 }
@@ -740,7 +826,7 @@ func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, period str
 	total := types.Zero()
 
 	var salaries []PeriodSalary
-	if err := s.db.NewSelect().Model(&salaries).Where("period < ?", period).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&salaries).Where("user_id = ? AND period < ?", s.uid(), period).Scan(ctx); err != nil {
 		return types.Zero(), err
 	}
 	for _, sal := range salaries {
@@ -748,7 +834,7 @@ func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, period str
 	}
 
 	var incomes []Income
-	if err := s.db.NewSelect().Model(&incomes).Where("period < ?", period).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&incomes).Where("user_id = ? AND period < ?", s.uid(), period).Scan(ctx); err != nil {
 		return types.Zero(), err
 	}
 	for _, inc := range incomes {
@@ -756,7 +842,10 @@ func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, period str
 	}
 
 	var insts []Installment
-	if err := s.db.NewSelect().Model(&insts).Where("period < ?", period).Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&insts).
+		Where("user_id = ? AND period < ?", s.uid(), period).
+		Where("expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)").
+		Scan(ctx); err != nil {
 		return types.Zero(), err
 	}
 	for _, inst := range insts {
@@ -796,15 +885,22 @@ func (s *FinanceService) MonthlySummary(ctx context.Context, period string) Mont
 	if err != nil {
 		return MonthlySummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
-	cardByID := make(map[int64]Card, len(cards))
-	for _, c := range cards {
-		cardByID[c.ID] = c
+	// cardMapAll (not ListCards) so a movimiento still shows the name of a card
+	// that was since soft-deleted.
+	cardByID, err := s.cardMapAll(ctx)
+	if err != nil {
+		return MonthlySummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 
-	// Installments billed this period (with their expense joined in).
+	// Installments billed this period (with their expense joined in). A
+	// soft-deleted expense's installments are excluded explicitly: the
+	// Relation("Expense") join leaves Expense nil for them rather than
+	// dropping the row, which would otherwise leak into the totals below.
 	var insts []Installment
 	if err := s.db.NewSelect().Model(&insts).Relation("Expense").
-		Where("inst.period = ?", period).Order("inst.id ASC").Scan(ctx); err != nil {
+		Where("inst.user_id = ? AND inst.period = ?", s.uid(), period).
+		Where("inst.expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)").
+		Order("inst.id ASC").Scan(ctx); err != nil {
 		return MonthlySummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 
@@ -922,7 +1018,7 @@ func (s *FinanceService) MonthlySummary(ctx context.Context, period string) Mont
 func (s *FinanceService) pendingByCard(ctx context.Context) (map[int64]types.Decimal, error) {
 	var pend []Installment
 	if err := s.db.NewSelect().Model(&pend).Relation("Expense").
-		Where("inst.status = ?", StatusPendiente).Scan(ctx); err != nil {
+		Where("inst.user_id = ? AND inst.status = ?", s.uid(), StatusPendiente).Scan(ctx); err != nil {
 		return nil, err
 	}
 	out := map[int64]types.Decimal{}
@@ -948,7 +1044,7 @@ func (s *FinanceService) YearSummary(ctx context.Context, year int) YearSummaryR
 	}
 
 	var salaries []PeriodSalary
-	if err := s.db.NewSelect().Model(&salaries).Where("period LIKE ?", prefix+"%").Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&salaries).Where("user_id = ? AND period LIKE ?", s.uid(), prefix+"%").Scan(ctx); err != nil {
 		return YearSummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	salaryByMonth := map[string]types.Decimal{}
@@ -957,12 +1053,14 @@ func (s *FinanceService) YearSummary(ctx context.Context, year int) YearSummaryR
 	}
 
 	var incomes []Income
-	if err := s.db.NewSelect().Model(&incomes).Where("period LIKE ?", prefix+"%").Scan(ctx); err != nil {
+	if err := s.db.NewSelect().Model(&incomes).Where("user_id = ? AND period LIKE ?", s.uid(), prefix+"%").Scan(ctx); err != nil {
 		return YearSummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	var insts []Installment
 	if err := s.db.NewSelect().Model(&insts).Relation("Expense").
-		Where("inst.period LIKE ?", prefix+"%").Scan(ctx); err != nil {
+		Where("inst.user_id = ? AND inst.period LIKE ?", s.uid(), prefix+"%").
+		Where("inst.expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)").
+		Scan(ctx); err != nil {
 		return YearSummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 
@@ -982,7 +1080,7 @@ func (s *FinanceService) YearSummary(ctx context.Context, year int) YearSummaryR
 	}
 
 	// Fold recurring fixed expenses into each month's gastos and the category totals.
-	fixed, amountsByID, err := s.loadFixed(ctx)
+	fixed, amountsByID, err := s.loadFixed(ctx, false)
 	if err != nil {
 		return YearSummaryResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
@@ -1029,6 +1127,65 @@ func (s *FinanceService) YearSummary(ctx context.Context, year int) YearSummaryR
 	out.TotalBalance = out.TotalIngresos.Sub(out.TotalGastos)
 	out.PorCategoria = sortedCategoryTotals(catTotals)
 	return YearSummaryResult{Data: out}
+}
+
+// ---------- trash (papelera) ----------
+
+// ListTrash returns every soft-deleted record for the active user across all
+// entity types, newest deletion first.
+func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {
+	var out []TrashItem
+
+	var cards []Card
+	if err := s.db.NewSelect().Model(&cards).WhereDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	for _, c := range cards {
+		out = append(out, TrashItem{Type: "card", ID: c.ID, Description: c.Name, DeletedAt: *c.DeletedAt})
+	}
+
+	var cats []Category
+	if err := s.db.NewSelect().Model(&cats).WhereDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	for _, c := range cats {
+		out = append(out, TrashItem{Type: "category", ID: c.ID, Description: c.Name, DeletedAt: *c.DeletedAt})
+	}
+
+	var incomes []Income
+	if err := s.db.NewSelect().Model(&incomes).WhereDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	for _, inc := range incomes {
+		amt := inc.Amount
+		out = append(out, TrashItem{Type: "income", ID: inc.ID, Description: inc.Description, Amount: &amt, Period: inc.Period, DeletedAt: *inc.DeletedAt})
+	}
+
+	var expenses []Expense
+	if err := s.db.NewSelect().Model(&expenses).WhereDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	for _, ex := range expenses {
+		amt := ex.InstallmentAmount
+		out = append(out, TrashItem{Type: "expense", ID: ex.ID, Description: ex.Description, Amount: &amt, DeletedAt: *ex.DeletedAt})
+	}
+
+	fixed, amountsByID, err := s.loadFixed(ctx, true)
+	if err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	now := currentPeriod()
+	for _, fe := range fixed {
+		at := now
+		if fe.StartPeriod > at {
+			at = fe.StartPeriod
+		}
+		amt := resolveFixedAmount(amountsByID[fe.ID], at)
+		out = append(out, TrashItem{Type: "fixedexpense", ID: fe.ID, Description: fe.Description, Amount: &amt, DeletedAt: *fe.DeletedAt})
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].DeletedAt.After(out[j].DeletedAt) })
+	return TrashResult{Data: out}
 }
 
 // ---------- small helpers ----------

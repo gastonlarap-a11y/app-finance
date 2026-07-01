@@ -27,6 +27,8 @@ export function MonthView() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
   const [confirmExpId, setConfirmExpId] = useState<number | null>(null)
+  const [filterCategory, setFilterCategory] = useState('')
+  const [filterCardId, setFilterCardId] = useState<number | ''>('')
 
   const reload = useCallback(() => bump((n) => n + 1), [bump])
 
@@ -63,6 +65,19 @@ export function MonthView() {
     if (!failed(res)) reload()
   }
 
+  async function markCardPaid(targets: Movimiento[]) {
+    const pending = targets.filter((m) => m.status !== STATUS_PAGADO)
+    if (pending.length === 0) return
+    await Promise.all(
+      pending.map((m) =>
+        m.source === SOURCE_FIJO && m.fixedId != null
+          ? FinanceService.SetFixedExpensePaid(m.fixedId, period, true)
+          : FinanceService.SetInstallmentPaid(m.installmentId, true)
+      )
+    )
+    reload()
+  }
+
   async function removeExpense(expenseId: number) {
     setConfirmExpId(null)
     const res = await FinanceService.DeleteExpense(expenseId)
@@ -81,6 +96,25 @@ export function MonthView() {
   if (!summary) return <Empty>No se pudo cargar el resumen.</Empty>
 
   const balanceTone = summary.alcanza ? 'success' : 'danger'
+
+  // Built from the movimientos themselves (not summary.porTarjeta) so a card that
+  // was since soft-deleted still shows up as a filter option for its past charges.
+  const movCategories = Array.from(new Set(summary.movimientos.map((m) => m.category))).sort()
+  const movCards = Array.from(
+    new Map(
+      summary.movimientos
+        .filter((m): m is Movimiento & { cardId: number } => m.cardId != null)
+        .map((m) => [m.cardId, m.cardName || '—'] as const)
+    )
+  )
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const filteredMovs = summary.movimientos.filter((m) => {
+    if (filterCategory && m.category !== filterCategory) return false
+    if (filterCardId !== '' && m.cardId !== filterCardId) return false
+    return true
+  })
 
   return (
     <div className="space-y-5">
@@ -114,72 +148,105 @@ export function MonthView() {
             {summary.movimientos.length === 0 ? (
               <Empty>No hay movimientos este mes. Agrega un gasto para empezar.</Empty>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-left text-xs uppercase text-slate-400">
-                    <tr>
-                      <th className="pb-2">Descripción</th>
-                      <th className="pb-2">Categoría</th>
-                      <th className="pb-2">Tarjeta</th>
-                      <th className="pb-2">Cuota</th>
-                      <th className="pb-2">Fecha</th>
-                      <th className="pb-2 text-right">Monto</th>
-                      <th className="pb-2 text-center">Estado</th>
-                      <th className="pb-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.movimientos.map((m) => {
-                      const paid = m.status === STATUS_PAGADO
-                      const isFijo = m.source === SOURCE_FIJO
-                      return (
-                        <tr key={isFijo ? `fijo-${m.fixedId}` : `cuota-${m.installmentId}`} className="border-t border-slate-800">
-                          <td className="py-2 font-medium">{m.description}</td>
-                          <td className="py-2 text-slate-400">{m.category}</td>
-                          <td className="py-2 text-slate-400">{m.cardName || '—'}</td>
-                          <td className="py-2 text-slate-400">{isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}</td>
-                          <td className="py-2 text-slate-400">{isFijo ? '—' : formatDate(m.date)}</td>
-                          <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
-                          <td className="py-2 text-center">
-                            <button
-                              onClick={() => togglePaid(m, paid)}
-                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${paid ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}
-                              title="Marcar pagado/pendiente"
-                            >
-                              {paid ? 'Pagado' : 'Pendiente'}
-                            </button>
-                          </td>
-                          <td className="py-2 text-right whitespace-nowrap">
-                            {isFijo ? (
-                              <span className="text-xs text-slate-500" title="Se administra en la pestaña Fijos">Fijo ⚙</span>
-                            ) : (
-                              <>
-                                <button onClick={() => editExpense(m.expenseId)} className="text-slate-400 hover:text-primary" title="Editar">
-                                  ✎
-                                </button>{' '}
-                                {confirmExpId === m.expenseId ? (
-                                  <>
-                                    <button onClick={() => removeExpense(m.expenseId)} className="text-xs text-danger hover:text-red-400" title="Confirmar eliminación">
-                                      ✓ Sí
-                                    </button>{' '}
-                                    <button onClick={() => setConfirmExpId(null)} className="text-xs text-slate-400 hover:text-slate-200" title="Cancelar">
-                                      ✕ No
-                                    </button>
-                                  </>
-                                ) : (
-                                  <button onClick={() => setConfirmExpId(m.expenseId)} className="text-slate-400 hover:text-danger" title="Eliminar">
-                                    🗑
-                                  </button>
-                                )}
-                              </>
-                            )}
-                          </td>
+              <>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <select
+                    className="rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary"
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
+                  >
+                    <option value="">Todas las categorías</option>
+                    {movCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary"
+                    value={filterCardId}
+                    onChange={(e) => setFilterCardId(e.target.value === '' ? '' : Number(e.target.value))}
+                  >
+                    <option value="">Todas las tarjetas</option>
+                    {movCards.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {filteredMovs.length === 0 ? (
+                  <Empty>No hay movimientos con ese filtro.</Empty>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-left text-xs uppercase text-slate-400">
+                        <tr>
+                          <th className="pb-2">Descripción</th>
+                          <th className="pb-2">Categoría</th>
+                          <th className="pb-2">Tarjeta</th>
+                          <th className="pb-2">Cuota</th>
+                          <th className="pb-2">Fecha</th>
+                          <th className="pb-2 text-right">Monto</th>
+                          <th className="pb-2 text-center">Estado</th>
+                          <th className="pb-2"></th>
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {filteredMovs.map((m) => {
+                          const paid = m.status === STATUS_PAGADO
+                          const isFijo = m.source === SOURCE_FIJO
+                          return (
+                            <tr key={isFijo ? `fijo-${m.fixedId}` : `cuota-${m.installmentId}`} className="border-t border-slate-800">
+                              <td className="py-2 font-medium">{m.description}</td>
+                              <td className="py-2 text-slate-400">{m.category}</td>
+                              <td className="py-2 text-slate-400">{m.cardName || '—'}</td>
+                              <td className="py-2 text-slate-400">{isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}</td>
+                              <td className="py-2 text-slate-400">{isFijo ? '—' : formatDate(m.date)}</td>
+                              <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
+                              <td className="py-2 text-center">
+                                <button
+                                  onClick={() => togglePaid(m, paid)}
+                                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${paid ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}
+                                  title="Marcar pagado/pendiente"
+                                >
+                                  {paid ? 'Pagado' : 'Pendiente'}
+                                </button>
+                              </td>
+                              <td className="py-2 text-right whitespace-nowrap">
+                                {isFijo ? (
+                                  <span className="text-xs text-slate-500" title="Se administra en la pestaña Fijos">Fijo ⚙</span>
+                                ) : (
+                                  <>
+                                    <button onClick={() => editExpense(m.expenseId)} className="text-slate-400 hover:text-primary" title="Editar">
+                                      ✎
+                                    </button>{' '}
+                                    {confirmExpId === m.expenseId ? (
+                                      <>
+                                        <button onClick={() => removeExpense(m.expenseId)} className="text-xs text-danger hover:text-red-400" title="Confirmar eliminación">
+                                          ✓ Sí
+                                        </button>{' '}
+                                        <button onClick={() => setConfirmExpId(null)} className="text-xs text-slate-400 hover:text-slate-200" title="Cancelar">
+                                          ✕ No
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button onClick={() => setConfirmExpId(m.expenseId)} className="text-slate-400 hover:text-danger" title="Eliminar">
+                                        🗑
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </Section>
 
@@ -214,6 +281,10 @@ export function MonthView() {
                   const limit = Number(t.card.creditLimit) || 0
                   const used = Number(t.cupoUsado) || 0
                   const over = used > limit && limit > 0
+                  // Independent of the table filters above — always every pending
+                  // cuota/fijo billed to this card this month, nothing more, nothing less.
+                  const cardMovs = summary.movimientos.filter((m) => m.cardId === t.card.id)
+                  const pendingCount = cardMovs.filter((m) => m.status !== STATUS_PAGADO).length
                   return (
                     <li key={t.card.id}>
                       <div className="mb-1 flex items-center justify-between text-sm">
@@ -227,6 +298,15 @@ export function MonthView() {
                           Disponible {formatCLP(t.cupoDisponible)}
                         </span>
                       </div>
+                      {pendingCount > 0 && (
+                        <button
+                          onClick={() => markCardPaid(cardMovs)}
+                          className="mt-2 text-xs text-primary hover:underline"
+                          title="Marcar pagado todo lo de esta tarjeta este mes"
+                        >
+                          ✓ Marcar pagado ({pendingCount})
+                        </button>
+                      )}
                     </li>
                   )
                 })}
