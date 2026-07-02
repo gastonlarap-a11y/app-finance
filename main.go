@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log/slog"
 	"os"
+	goruntime "runtime"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -101,11 +102,28 @@ func main() {
 		InitialPosition: application.WindowXY,
 	})
 
-	window.OnWindowEvent(events.Common.WindowClosing, func(e *application.WindowEvent) {
+	saveWindowState := func() {
 		w, h := window.Size()
 		x, y := window.Position()
 		_ = windowstate.Save(context.Background(), bdb, windowstate.State{X: x, Y: y, W: w, H: h})
-	})
+	}
+
+	if goruntime.GOOS == "darwin" {
+		// macOS: la X oculta la ventana en vez de destruirla; el handler nativo de
+		// Wails (ApplicationShouldHandleReopen) la vuelve a mostrar al hacer clic en
+		// el Dock. Cmd+Q sí cierra: Quit() no emite WindowClosing, así que el hook
+		// no lo bloquea. El hook corre antes que el listener interno que destruye
+		// la ventana, y cancelar el evento también omite los listeners.
+		window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			saveWindowState()
+			window.Hide()
+			e.Cancel()
+		})
+	} else {
+		window.OnWindowEvent(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			saveWindowState()
+		})
+	}
 
 	if err := app.Run(); err != nil {
 		slog.Error("app exited with error", "err", err)
