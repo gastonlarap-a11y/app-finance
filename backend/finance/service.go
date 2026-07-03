@@ -288,6 +288,95 @@ func (s *FinanceService) RestoreCategory(ctx context.Context, id int64) OpResult
 	return OpResult{}
 }
 
+// ---------- merchants (comercios) ----------
+
+func (s *FinanceService) ListMerchants(ctx context.Context) ([]Merchant, error) {
+	var mers []Merchant
+	err := s.db.NewSelect().Model(&mers).Where("user_id = ?", s.uid()).Order("name ASC").Scan(ctx)
+	return mers, err
+}
+
+func (s *FinanceService) CreateMerchant(ctx context.Context, name string) MerchantResult {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return MerchantResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+	}
+	mer := &Merchant{UserID: s.uid(), Name: name}
+	if _, err := s.db.NewInsert().Model(mer).Returning("*").Exec(ctx); err != nil {
+		if isUniqueViolation(err) {
+			return MerchantResult{Error: shared.NewError(shared.ErrValidation, "el comercio ya existe")}
+		}
+		return MerchantResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return MerchantResult{Data: mer}
+}
+
+// UpdateMerchant renames a merchant and cascades the new name to every expense
+// that used the old name (expenses store the merchant as plain text).
+func (s *FinanceService) UpdateMerchant(ctx context.Context, id int64, name string) MerchantResult {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return MerchantResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+	}
+	mer := new(Merchant)
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		old := new(Merchant)
+		if err := tx.NewSelect().Model(old).Where("id = ? AND user_id = ?", id, s.uid()).Scan(ctx); err != nil {
+			if err == sql.ErrNoRows {
+				return shared.NewError(shared.ErrNotFound, "comercio no encontrado")
+			}
+			return err
+		}
+		if _, err := tx.NewUpdate().Model((*Merchant)(nil)).
+			Set("name = ?", name).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
+			return err
+		}
+		if old.Name != name {
+			if _, err := tx.NewUpdate().Model((*Expense)(nil)).
+				Set("merchant = ?", name).Where("merchant = ? AND user_id = ?", old.Name, s.uid()).Exec(ctx); err != nil {
+				return err
+			}
+		}
+		return tx.NewSelect().Model(mer).Where("id = ? AND user_id = ?", id, s.uid()).Scan(ctx)
+	})
+	if err != nil {
+		if ae, ok := err.(*shared.AppError); ok {
+			return MerchantResult{Error: ae}
+		}
+		if isUniqueViolation(err) {
+			return MerchantResult{Error: shared.NewError(shared.ErrValidation, "el comercio ya existe")}
+		}
+		return MerchantResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return MerchantResult{Data: mer}
+}
+
+// DeleteMerchant removes the merchant from the managed list. Expenses keep their
+// merchant text (history is preserved); the name simply stops being offered.
+func (s *FinanceService) DeleteMerchant(ctx context.Context, id int64) OpResult {
+	if _, err := s.db.NewDelete().Model((*Merchant)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx); err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return OpResult{}
+}
+
+// RestoreMerchant undoes a soft delete. Fails with ErrConflict if an active
+// merchant now uses the same name (the unique index only allows one active row).
+func (s *FinanceService) RestoreMerchant(ctx context.Context, id int64) OpResult {
+	res, err := s.db.NewUpdate().Model((*Merchant)(nil)).WhereAllWithDeleted().
+		Set("deleted_at = NULL").Where("id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, s.uid()).Exec(ctx)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return OpResult{Error: shared.NewError(shared.ErrConflict, "ya existe un comercio activo con ese nombre")}
+		}
+		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "comercio no encontrado")}
+	}
+	return OpResult{}
+}
+
 // ---------- incomes (extras / bonos) ----------
 
 func (s *FinanceService) ListIncomes(ctx context.Context, period string) ([]Income, error) {
@@ -360,10 +449,10 @@ func (s *FinanceService) billingDayFor(ctx context.Context, cardID *int64) (int,
 }
 
 func (s *FinanceService) CreateExpense(
-	ctx context.Context, dateStr, description, category string,
+	ctx context.Context, dateStr, description, category, merchant string,
 	cardID *int64, kind, installmentAmount string, installmentsTotal int,
 ) ExpenseResult {
-	ex, aerr := s.validateExpense(ctx, dateStr, description, category, cardID, kind, installmentAmount, installmentsTotal)
+	ex, aerr := s.validateExpense(ctx, dateStr, description, category, merchant, cardID, kind, installmentAmount, installmentsTotal)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
@@ -384,10 +473,10 @@ func (s *FinanceService) CreateExpense(
 }
 
 func (s *FinanceService) UpdateExpense(
-	ctx context.Context, id int64, dateStr, description, category string,
+	ctx context.Context, id int64, dateStr, description, category, merchant string,
 	cardID *int64, kind, installmentAmount string, installmentsTotal int,
 ) ExpenseResult {
-	ex, aerr := s.validateExpense(ctx, dateStr, description, category, cardID, kind, installmentAmount, installmentsTotal)
+	ex, aerr := s.validateExpense(ctx, dateStr, description, category, merchant, cardID, kind, installmentAmount, installmentsTotal)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
@@ -404,7 +493,7 @@ func (s *FinanceService) UpdateExpense(
 			return err
 		}
 		res, err := tx.NewUpdate().Model(ex).
-			Column("date", "description", "category", "card_id", "kind", "installment_amount", "installments_total").
+			Column("date", "description", "category", "merchant", "card_id", "kind", "installment_amount", "installments_total").
 			WherePK().Where("user_id = ?", s.uid()).Exec(ctx)
 		if err != nil {
 			return err
@@ -451,7 +540,7 @@ func (s *FinanceService) RestoreExpense(ctx context.Context, id int64) OpResult 
 }
 
 func (s *FinanceService) validateExpense(
-	ctx context.Context, dateStr, description, category string,
+	ctx context.Context, dateStr, description, category, merchant string,
 	cardID *int64, kind, installmentAmount string, installmentsTotal int,
 ) (*Expense, *shared.AppError) {
 	if strings.TrimSpace(description) == "" {
@@ -483,6 +572,7 @@ func (s *FinanceService) validateExpense(
 		Date:              date,
 		Description:       strings.TrimSpace(description),
 		Category:          strings.TrimSpace(category),
+		Merchant:          strings.TrimSpace(merchant),
 		CardID:            cardID,
 		Kind:              kind,
 		InstallmentAmount: amt,
@@ -940,6 +1030,7 @@ func (s *FinanceService) MonthlySummary(ctx context.Context, period string) Mont
 			mv.ExpenseID = ex.ID
 			mv.Description = ex.Description
 			mv.Category = ex.Category
+			mv.Merchant = ex.Merchant
 			mv.CardID = ex.CardID
 			mv.Kind = ex.Kind
 			mv.Date = &ex.Date
@@ -1150,6 +1241,14 @@ func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {
 	}
 	for _, c := range cats {
 		out = append(out, TrashItem{Type: "category", ID: c.ID, Description: c.Name, DeletedAt: *c.DeletedAt})
+	}
+
+	var mers []Merchant
+	if err := s.db.NewSelect().Model(&mers).WhereDeleted().Where("user_id = ?", s.uid()).Scan(ctx); err != nil {
+		return TrashResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	for _, m := range mers {
+		out = append(out, TrashItem{Type: "merchant", ID: m.ID, Description: m.Name, DeletedAt: *m.DeletedAt})
 	}
 
 	var incomes []Income

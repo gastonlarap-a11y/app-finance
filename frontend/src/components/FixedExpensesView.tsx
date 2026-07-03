@@ -8,7 +8,7 @@ import {
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
 import { formatCLP, periodLabel } from '@/lib/format'
-import { Button, Empty, Field, Modal, Section, inputCls } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, Section, Select, inputCls } from './ui'
 
 export function FixedExpensesView() {
   const [period] = useAtom(periodAtom)
@@ -203,17 +203,7 @@ function FixedExpenseForm({
         {!editing && (
           <div className="grid grid-cols-2 gap-3">
             <Field label="Monto mensual">
-              <input
-                className={inputCls}
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="9990"
-                required
-              />
+              <MoneyInput value={amount} onChange={setAmount} placeholder="9990" required />
             </Field>
             <Field label="Desde el mes (YYYY-MM)">
               <input className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} placeholder="2026-06" required />
@@ -223,24 +213,24 @@ function FixedExpenseForm({
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Categoría">
-            <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">Sin categoría</option>
               {categoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Tarjeta">
-            <select className={inputCls} value={cardId} onChange={(e) => setCardId(e.target.value)}>
+            <Select value={cardId} onChange={(e) => setCardId(e.target.value)}>
               <option value="">Sin tarjeta</option>
               {cards.map((c) => (
                 <option key={c.id} value={String(c.id)}>
                   {c.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         </div>
 
@@ -298,18 +288,7 @@ function AmountModal({
           anteriores conservan su valor.
         </p>
         <Field label="Nuevo monto mensual">
-          <input
-            className={inputCls}
-            type="number"
-            min="1"
-            step="1"
-            inputMode="numeric"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="12000"
-            autoFocus
-            required
-          />
+          <MoneyInput value={amount} onChange={setAmount} placeholder="12000" autoFocus required />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>

@@ -55,7 +55,7 @@ func TestSoftDeleteRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("CreateIncome: %v", incRes.Error)
 	}
 
-	exRes := s.CreateExpense(ctx, "2026-06-15", "Super", "Comida", &card.ID, KindUnico, "10000", 1)
+	exRes := s.CreateExpense(ctx, "2026-06-15", "Super", "Comida", "", &card.ID, KindUnico, "10000", 1)
 	if exRes.Error != nil {
 		t.Fatalf("CreateExpense: %v", exRes.Error)
 	}
@@ -159,7 +159,7 @@ func TestDeleteCardKeepsHistoricalCardName(t *testing.T) {
 	card := cardRes.Data
 
 	period := currentPeriod()
-	exRes := s.CreateExpense(ctx, "2026-06-10", "Compra", "General", &card.ID, KindUnico, "20000", 1)
+	exRes := s.CreateExpense(ctx, "2026-06-10", "Compra", "General", "", &card.ID, KindUnico, "20000", 1)
 	if exRes.Error != nil {
 		t.Fatalf("CreateExpense: %v", exRes.Error)
 	}
@@ -205,7 +205,7 @@ func TestDeleteExpenseExcludedFromSummaryTotals(t *testing.T) {
 	s := newTestService(t)
 	period := currentPeriod()
 
-	exRes := s.CreateExpense(ctx, "2026-06-05", "Compra suelta", "General", nil, KindUnico, "15000", 1)
+	exRes := s.CreateExpense(ctx, "2026-06-05", "Compra suelta", "General", "", nil, KindUnico, "15000", 1)
 	if exRes.Error != nil {
 		t.Fatalf("CreateExpense: %v", exRes.Error)
 	}

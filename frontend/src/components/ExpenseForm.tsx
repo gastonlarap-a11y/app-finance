@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense } from '@/services/finance'
 import { failed } from '@/lib/result'
 import { periodLabel, todayISO } from '@/lib/format'
-import { Button, Field, Modal, inputCls } from './ui'
+import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
 
 function computeFirstPeriod(dateStr: string, billingDay: number): string {
   if (!dateStr) return ''
@@ -20,16 +20,18 @@ function computeFirstPeriod(dateStr: string, billingDay: number): string {
 type Props = {
   cards: Card[]
   categories: string[]
+  merchants: string[]
   expense?: Expense | null
   onClose: () => void
   onSaved: () => void
 }
 
-export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Props) {
+export function ExpenseForm({ cards, categories, merchants, expense, onClose, onSaved }: Props) {
   const editing = !!expense
   const [description, setDescription] = useState(expense?.description ?? '')
   const [amount, setAmount] = useState(expense ? String(expense.installmentAmount ?? '') : '')
   const [category, setCategory] = useState(expense?.category ?? '')
+  const [merchant, setMerchant] = useState(expense?.merchant ?? '')
   const [cardId, setCardId] = useState<string>(expense?.cardId != null ? String(expense.cardId) : '')
   const [kind, setKind] = useState(expense?.kind ?? KIND_CUOTAS)
   const [total, setTotal] = useState(expense ? String(expense.installmentsTotal ?? 1) : '12')
@@ -43,10 +45,12 @@ export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Pr
   const selectedCard = cards.find((c) => String(c.id) === cardId)
   const firstPeriod = isCuotas && selectedCard && date ? computeFirstPeriod(date, selectedCard.billingDay) : null
 
-  // Keep the expense's current category selectable even if it was removed from
-  // the managed list (e.g. editing an old expense).
+  // Keep the expense's current category/merchant selectable even if it was
+  // removed from the managed list (e.g. editing an old expense).
   const categoryOptions =
     category && !categories.includes(category) ? [...categories, category] : categories
+  const merchantOptions =
+    merchant && !merchants.includes(merchant) ? [...merchants, merchant] : merchants
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -55,8 +59,8 @@ export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Pr
       const card = cardId === '' ? null : Number(cardId)
       const cuotas = isCuotas ? Math.max(1, Number(total) || 1) : 1
       const res = editing
-        ? await FinanceService.UpdateExpense(expense!.id, date, description, category, card, kind, amount, cuotas)
-        : await FinanceService.CreateExpense(date, description, category, card, kind, amount, cuotas)
+        ? await FinanceService.UpdateExpense(expense!.id, date, description, category, merchant, card, kind, amount, cuotas)
+        : await FinanceService.CreateExpense(date, description, category, merchant, card, kind, amount, cuotas)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -74,64 +78,72 @@ export function ExpenseForm({ cards, categories, expense, onClose, onSaved }: Pr
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Tipo">
-            <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value)}>
+            <Select value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value={KIND_CUOTAS}>En cuotas</option>
               <option value={KIND_UNICO}>Pago único</option>
-            </select>
+            </Select>
           </Field>
-          <Field label={isCuotas ? 'Monto por cuota (mensual)' : 'Monto total'}>
-            <input
-              className={inputCls}
-              type="number"
-              min="1"
-              step="1"
-              inputMode="numeric"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="150000"
-              required
-            />
-          </Field>
+          {isCuotas ? (
+            <Field label="Cuotas totales">
+              <input
+                className={inputCls}
+                type="number"
+                min="1"
+                value={total}
+                onChange={(e) => setTotal(e.target.value)}
+              />
+            </Field>
+          ) : (
+            <Field label="Monto total">
+              <MoneyInput value={amount} onChange={setAmount} placeholder="150000" required />
+            </Field>
+          )}
         </div>
 
         {isCuotas && (
-          <Field label="Cuotas totales">
-            <input
-              className={inputCls}
-              type="number"
-              min="1"
-              value={total}
-              onChange={(e) => setTotal(e.target.value)}
-            />
+          <Field label="Monto por cuota (mensual)">
+            <MoneyInput value={amount} onChange={setAmount} placeholder="150000" required />
           </Field>
         )}
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Categoría">
-            <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="">Sin categoría</option>
               {categoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
+          <Field label="Comercio">
+            <Select value={merchant} onChange={(e) => setMerchant(e.target.value)}>
+              <option value="">Sin comercio</option>
+              {merchantOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Tarjeta">
-            <select className={inputCls} value={cardId} onChange={(e) => setCardId(e.target.value)}>
+            <Select value={cardId} onChange={(e) => setCardId(e.target.value)}>
               <option value="">Sin tarjeta</option>
               {cards.map((c) => (
                 <option key={c.id} value={String(c.id)}>
                   {c.name}
                 </option>
               ))}
-            </select>
+            </Select>
+          </Field>
+          <Field label="Fecha de compra">
+            <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
         </div>
-
-        <Field label="Fecha de compra">
-          <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
 
         {firstPeriod && (
           <p className="text-xs text-slate-400">

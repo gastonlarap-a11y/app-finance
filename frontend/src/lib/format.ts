@@ -12,6 +12,21 @@ export function formatCLP(v: string | number | null | undefined): string {
   return clp.format(Number.isFinite(n) ? n : 0)
 }
 
+// Live thousands-separator masking for money <input>s (es-CL: '.' as separator).
+// Keeps a clean digit-only string as the "real" value (what's sent to the
+// backend); the input's displayed value is the same digits reformatted.
+const groupFmt = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 })
+
+export function formatThousands(digits: string): string {
+  const clean = digits.replace(/\D/g, '')
+  if (clean === '') return ''
+  return groupFmt.format(Number(clean))
+}
+
+export function parseThousands(formatted: string): string {
+  return formatted.replace(/\D/g, '')
+}
+
 export function currentPeriod(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`

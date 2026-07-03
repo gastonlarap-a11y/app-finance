@@ -15,6 +15,8 @@ export {
   FixedExpenseView,
   Income,
   IncomeResult,
+  Merchant,
+  MerchantResult,
   MonthlySummary,
   MonthlySummaryResult,
   Movimiento,

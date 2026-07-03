@@ -4,7 +4,7 @@ import { FinanceService, type Card } from '@/services/finance'
 import { refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
 import { formatCLP } from '@/lib/format'
-import { Button, Empty, Field, Modal, Section, inputCls } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, Section, inputCls } from './ui'
 
 export function CardsView() {
   const [refresh] = useAtom(refreshAtom)
@@ -122,7 +122,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Visa, Mastercard…" autoFocus required />
         </Field>
         <Field label="Cupo total">
-          <input className={inputCls} type="number" min="0" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="1000000" />
+          <MoneyInput value={limit} onChange={setLimit} placeholder="1000000" />
         </Field>
         <Field label="Día de corte (factura)">
           <input className={inputCls} type="number" min="1" max="28" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
