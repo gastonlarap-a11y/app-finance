@@ -19,6 +19,7 @@
     ]
   },
   "enabledPlugins": {
-    "go@gaston-plugins": true
+    "go@gaston-plugins": true,
+    "ux@gaston-plugins": true
   }
 }

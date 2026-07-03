@@ -5,10 +5,25 @@
 set -uo pipefail
 
 input="$(cat)"
-cmd="$(printf '%s' "$input" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)"
+# JSON parsing: jq first, else any Python (python3 is not a given on Windows/Git Bash),
+# else tolerant no-op — same cross-platform pattern as the global hooks.
+PY="$(command -v python3 || command -v python || command -v py || true)"
+if command -v jq >/dev/null 2>&1; then
+  cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+elif [ -n "$PY" ]; then
+  cmd="$(printf '%s' "$input" | "$PY" -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)"
+else
+  cmd=""
+fi
 
 block() {
-  python3 -c "import json,sys; print(json.dumps({'decision':'block','reason':sys.argv[1]}))" "$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -cn --arg reason "$1" '{decision: "block", reason: $reason}'
+  elif [ -n "$PY" ]; then
+    "$PY" -c "import json,sys; print(json.dumps({'decision':'block','reason':sys.argv[1]}))" "$1"
+  else
+    printf '{"decision":"block","reason":"Blocked by git-safety hook (see CLAUDE.md Git & Pull Request Policy)."}\n'
+  fi
   exit 0
 }
 
