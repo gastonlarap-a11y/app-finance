@@ -115,7 +115,7 @@ export function FixedExpensesView() {
                 )}
                 {confirmDelete === fe.id ? (
                   <>
-                    <span className="text-sm text-danger">¿Eliminar todo?</span>
+                    <span className="text-sm text-danger">¿Eliminar?</span>
                     <Button variant="danger" onClick={() => remove(fe.id)}>Sí</Button>
                     <Button variant="ghost" onClick={() => setConfirmDelete(null)}>No</Button>
                   </>
