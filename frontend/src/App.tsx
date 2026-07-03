@@ -1,6 +1,6 @@
 import { useAtom } from 'jotai'
 import { periodAtom, tabAtom, type Tab } from '@/atoms/finance'
-import { periodLabel, shiftPeriod, yearOf } from '@/lib/format'
+import { currentPeriod, periodLabel, shiftPeriod, yearOf } from '@/lib/format'
 import { MonthView } from '@/components/MonthView'
 import { YearView } from '@/components/YearView'
 import { CardsView } from '@/components/CardsView'
@@ -73,6 +73,14 @@ function App() {
               >
                 →
               </button>
+              {period !== currentPeriod() && (
+                <button
+                  onClick={() => setPeriod(currentPeriod())}
+                  className="rounded bg-surface px-3 py-1.5 ring-1 ring-slate-700 hover:ring-slate-500"
+                >
+                  Mes actual
+                </button>
+              )}
             </div>
           )}
 
