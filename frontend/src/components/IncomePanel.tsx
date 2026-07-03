@@ -4,7 +4,7 @@ import { FinanceService, type Income } from '@/services/finance'
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
 import { formatCLP } from '@/lib/format'
-import { Button, Field, Section, inputCls } from './ui'
+import { Button, Field, MoneyInput, Section, inputCls } from './ui'
 
 export function IncomePanel() {
   const [period] = useAtom(periodAtom)
@@ -63,14 +63,7 @@ export function IncomePanel() {
         <div>
           <Field label="Sueldo de este mes">
             <div className="flex gap-2">
-              <input
-                className={inputCls}
-                type="number"
-                min="0"
-                value={salary}
-                onChange={(e) => setSalary(e.target.value)}
-                placeholder="0"
-              />
+              <MoneyInput value={salary} onChange={setSalary} placeholder="0" />
               <Button variant="ghost" onClick={saveSalary} disabled={salary === savedSalary}>
                 Guardar
               </Button>
@@ -99,12 +92,10 @@ export function IncomePanel() {
           <form onSubmit={addExtra} className="space-y-1">
             <div className="flex gap-2">
               <input className={inputCls} value={desc} onChange={(e) => { setDesc(e.target.value); setFormError('') }} placeholder="Bono, aguinaldo…" required />
-              <input
+              <MoneyInput
                 className={`${inputCls} w-28`}
-                type="number"
-                min="0.01"
                 value={amount}
-                onChange={(e) => { setAmount(e.target.value); setFormError('') }}
+                onChange={(v) => { setAmount(v); setFormError('') }}
                 placeholder="0"
                 required
               />

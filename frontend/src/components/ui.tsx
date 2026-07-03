@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import type { ChangeEvent, ReactNode, SelectHTMLAttributes } from 'react'
+import { formatThousands, parseThousands } from '@/lib/format'
 
 export const inputCls =
-  'w-full rounded bg-surface px-3 py-2 text-slate-100 outline-none ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
+  'h-10 w-full rounded bg-surface px-3 py-2 text-slate-100 outline-none ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
 
 export function Section({
   title,
@@ -85,14 +86,8 @@ export function Button({
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-base bg-surface-alt p-6 shadow-2xl ring-1 ring-slate-700"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-base bg-surface-alt p-6 shadow-2xl ring-1 ring-slate-700">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold">{title}</h3>
           <button onClick={onClose} className="text-xl leading-none text-slate-400 hover:text-slate-200">
@@ -111,6 +106,51 @@ export function Field({ label, children }: { label: string; children: ReactNode 
       <span className="mb-1 block text-sm text-slate-300">{label}</span>
       {children}
     </label>
+  )
+}
+
+// Select with the native dropdown chrome stripped (appearance-none) and a custom
+// arrow, so it shares the exact same box height as text inputs — the native
+// select/date chrome otherwise renders at a different intrinsic height per
+// engine (WKWebView vs. WebView2), making fields in the same form look uneven.
+export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className="relative">
+      <select className={`${className ?? inputCls} appearance-none pr-8`} {...rest}>
+        {children}
+      </select>
+      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">▾</span>
+    </div>
+  )
+}
+
+type MoneyInputProps = {
+  value: string
+  onChange: (digits: string) => void
+  placeholder?: string
+  required?: boolean
+  autoFocus?: boolean
+  className?: string
+}
+
+// Text input that displays its numeric value with es-CL thousands separators
+// (e.g. "1.500.000") while keeping a clean digit-only string as the real value,
+// so users can spot an extra zero before saving.
+export function MoneyInput({ value, onChange, placeholder, required, autoFocus, className }: MoneyInputProps) {
+  function handleChange(e: ChangeEvent<HTMLInputElement>) {
+    onChange(parseThousands(e.target.value))
+  }
+  return (
+    <input
+      className={className ?? inputCls}
+      type="text"
+      inputMode="numeric"
+      value={formatThousands(value)}
+      onChange={handleChange}
+      placeholder={placeholder}
+      required={required}
+      autoFocus={autoFocus}
+    />
   )
 }
 

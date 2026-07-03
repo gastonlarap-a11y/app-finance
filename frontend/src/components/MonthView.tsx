@@ -23,6 +23,7 @@ export function MonthView() {
   const [summary, setSummary] = useState<MonthlySummary | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [categories, setCategories] = useState<string[]>([])
+  const [merchants, setMerchants] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
@@ -39,8 +40,9 @@ export function MonthView() {
       FinanceService.MonthlySummary(period),
       FinanceService.ListExpenses(period),
       FinanceService.ListCategories(),
+      FinanceService.ListMerchants(),
     ])
-      .then(([res, exp, cats]) => {
+      .then(([res, exp, cats, mers]) => {
         if (!active) return
         if (res.error) {
           window.alert(res.error.message)
@@ -50,6 +52,7 @@ export function MonthView() {
         }
         setExpenses(exp ?? [])
         setCategories((cats ?? []).map((c) => c.name))
+        setMerchants((mers ?? []).map((m) => m.name))
       })
       .finally(() => active && setLoading(false))
     return () => {
@@ -130,8 +133,8 @@ export function MonthView() {
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className="grid gap-5 lg:grid-cols-4">
+        <div className="lg:col-span-3">
           <Section
             title="Movimientos del mes"
             action={
@@ -184,10 +187,11 @@ export function MonthView() {
                       <thead className="text-left text-xs uppercase text-slate-400">
                         <tr>
                           <th className="pb-2">Descripción</th>
-                          <th className="pb-2">Categoría</th>
-                          <th className="pb-2">Tarjeta</th>
-                          <th className="pb-2">Cuota</th>
-                          <th className="pb-2">Fecha</th>
+                          <th className="pb-2 hidden md:table-cell">Categoría</th>
+                          <th className="pb-2 hidden lg:table-cell">Comercio</th>
+                          <th className="pb-2 hidden lg:table-cell">Tarjeta</th>
+                          <th className="pb-2 hidden lg:table-cell">Cuota</th>
+                          <th className="pb-2 hidden md:table-cell">Fecha</th>
                           <th className="pb-2 text-right">Monto</th>
                           <th className="pb-2 text-center">Estado</th>
                           <th className="pb-2"></th>
@@ -199,11 +203,20 @@ export function MonthView() {
                           const isFijo = m.source === SOURCE_FIJO
                           return (
                             <tr key={isFijo ? `fijo-${m.fixedId}` : `cuota-${m.installmentId}`} className="border-t border-slate-800">
-                              <td className="py-2 font-medium">{m.description}</td>
-                              <td className="py-2 text-slate-400">{m.category}</td>
-                              <td className="py-2 text-slate-400">{m.cardName || '—'}</td>
-                              <td className="py-2 text-slate-400">{isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}</td>
-                              <td className="py-2 text-slate-400">{isFijo ? '—' : formatDate(m.date)}</td>
+                              <td className="py-2 font-medium">
+                                <span className="block max-w-[220px] truncate" title={m.description}>{m.description}</span>
+                              </td>
+                              <td className="py-2 hidden text-slate-400 md:table-cell">
+                                <span className="block max-w-[140px] truncate" title={m.category}>{m.category}</span>
+                              </td>
+                              <td className="py-2 hidden text-slate-400 lg:table-cell">
+                                <span className="block max-w-[140px] truncate" title={m.merchant || '—'}>{m.merchant || '—'}</span>
+                              </td>
+                              <td className="py-2 hidden text-slate-400 lg:table-cell">
+                                <span className="block max-w-[120px] truncate" title={m.cardName || '—'}>{m.cardName || '—'}</span>
+                              </td>
+                              <td className="py-2 hidden text-slate-400 lg:table-cell">{isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}</td>
+                              <td className="py-2 hidden text-slate-400 md:table-cell">{isFijo ? '—' : formatDate(m.date)}</td>
                               <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
                               <td className="py-2 text-center">
                                 <button
@@ -320,6 +333,7 @@ export function MonthView() {
         <ExpenseForm
           cards={summary.porTarjeta.map((t) => t.card)}
           categories={categories}
+          merchants={merchants}
           expense={editing}
           onClose={() => setShowForm(false)}
           onSaved={reload}

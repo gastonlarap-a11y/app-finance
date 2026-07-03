@@ -10,6 +10,7 @@ import { Button, Empty, Section } from './ui'
 const TYPE_LABELS: Record<string, string> = {
   card: 'Tarjeta',
   category: 'Categoría',
+  merchant: 'Comercio',
   income: 'Ingreso',
   expense: 'Gasto',
   fixedexpense: 'Gasto fijo',
@@ -18,6 +19,7 @@ const TYPE_LABELS: Record<string, string> = {
 const RESTORE_BY_TYPE: Record<string, (id: number) => Promise<{ error?: { code: string; message: string } | null }>> = {
   card: FinanceService.RestoreCard,
   category: FinanceService.RestoreCategory,
+  merchant: FinanceService.RestoreMerchant,
   income: FinanceService.RestoreIncome,
   expense: FinanceService.RestoreExpense,
   fixedexpense: FinanceService.RestoreFixedExpense,

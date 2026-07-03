@@ -45,6 +45,11 @@ type CategoryResult struct {
 	Error *shared.AppError `json:"error,omitempty"`
 }
 
+type MerchantResult struct {
+	Data  *Merchant        `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
 type FixedExpenseResult struct {
 	Data  *FixedExpense    `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
@@ -77,6 +82,7 @@ type Movimiento struct {
 	FixedID       *int64        `json:"fixedId"`       // set sólo para fijos
 	Description   string        `json:"description"`
 	Category      string        `json:"category"`
+	Merchant      string        `json:"merchant"`
 	CardID        *int64        `json:"cardId"`
 	CardName      string        `json:"cardName"`
 	Kind          string        `json:"kind"`
@@ -152,7 +158,7 @@ type YearSummaryResult struct {
 // TrashItem is one soft-deleted record of any entity type, shown in the trash
 // view with a Restore action.
 type TrashItem struct {
-	Type        string         `json:"type"` // card|category|income|expense|fixedexpense
+	Type        string         `json:"type"` // card|category|merchant|income|expense|fixedexpense
 	ID          int64          `json:"id"`
 	Description string         `json:"description"`
 	Amount      *types.Decimal `json:"amount,omitempty"`

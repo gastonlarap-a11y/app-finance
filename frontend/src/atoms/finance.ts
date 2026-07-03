@@ -2,7 +2,7 @@ import { atom } from 'jotai'
 import { currentPeriod } from '@/lib/format'
 import type { User } from '@/services/users'
 
-export type Tab = 'mes' | 'anio' | 'fijos' | 'tarjetas' | 'categorias' | 'papelera' | 'ajustes'
+export type Tab = 'mes' | 'anio' | 'fijos' | 'tarjetas' | 'categorias' | 'comercios' | 'papelera' | 'ajustes'
 
 export const tabAtom = atom<Tab>('mes')
 export const periodAtom = atom<string>(currentPeriod())
