@@ -2,7 +2,26 @@
   "permissions": {
     "allow": [
       "Bash(task build:*)",
-      "Bash(wails3 build:*)"
+      "Bash(wails3 build:*)",
+      "Bash(wails3 generate:*)",
+      "Bash(wails3 doctor)",
+      "Bash(go build:*)",
+      "Bash(go vet:*)",
+      "Bash(go test:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Read(./config.toml)",
+      "Read(**/.env)",
+      "Read(**/*.env)",
+      "Read(**/secrets.env)",
+      "Read(**/google-token.json)",
+      "Read(**/*.local.go)",
+      "Read(./frontend/bindings/**)",
+      "Read(./frontend/dist/**)",
+      "Read(./bin/**)"
     ]
   },
   "hooks": {
@@ -16,10 +35,30 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(*.go)",
+            "command": "gofmt -w \"$(cat | jq -r '.tool_input.file_path')\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "if": "Write(*.go)",
+            "command": "gofmt -w \"$(cat | jq -r '.tool_input.file_path')\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
-    "go@gaston-plugins": true,
-    "ux@gaston-plugins": true
+    "go@dev-plugins": true,
+    "ux@dev-plugins": true,
+    "gopls-lsp@claude-plugins-official": true
   }
 }

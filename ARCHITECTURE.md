@@ -19,14 +19,17 @@ Stack:
 ### Services (registered in `main.go`)
 
 - **`finance`** (`backend/finance/`) — the core domain. Bound methods cover settings, per-month salary,
-  cards, categories, incomes, expenses + installments, **fixed expenses**, and `MonthlySummary` /
-  `YearSummary`. One file per entity (`card.go`, `expense.go`, `fixedexpense.go`, …) plus `period.go`,
-  `result.go`, `service.go`.
+  cards, categories, incomes, expenses + installments, **fixed expenses**, **merchants**, and
+  `MonthlySummary` / `YearSummary`. One file per entity (`card.go`, `expense.go`, `fixedexpense.go`,
+  `merchant.go`, …) plus `period.go`, `result.go`, `service.go`.
+- **`users`** (`backend/users/`) — multi-user profiles with no login (see §14). Owns the profile CRUD,
+  the in-memory active-user `Session`, and soft-delete/restore of profiles.
 - **`settings`** (`backend/settings/`) — DB-folder selection, Google Drive connect/disconnect, OAuth
   client config, backup-on-close, and `BackupNow`. Drives the "Ajustes" tab.
 - **`diagnostics`** — error reporting. **`reports`** — Excel export (`backend/reports/excel.go`).
 
-`main.go` also wires `prefs` (user prefs overriding config), a `drive.Manager`, and a `backup.Runner`
+`main.go` also constructs the `users.Session` (seeded from `prefs.ActiveUserID`) before the finance
+service, wires `prefs` (user prefs overriding config), a `drive.Manager`, and a `backup.Runner`
 invoked from the `OnShutdown` hook when backup-on-close is enabled.
 
 ## 2. ⚠ Wails v3 Status
@@ -61,17 +64,22 @@ See `backend/finance/service.go` for the reference implementation.
 ## 4. Migration Strategy
 
 Migrations are SQL files embedded with `go:embed` and run by bun/migrate on
-startup (`backend/shared/db/migrator.go`, which registers `financemigrations` +
-`windowstatemigrations`). The numeric filename prefix sets global order. Current set:
+startup (`backend/shared/db/migrator.go`, which registers `financemigrations`, `usersmigrations` +
+`windowstatemigrations`). The numeric filename prefix sets global order across all domains. Current set:
 
 - `20260628003_create_app_settings.{up,down}.sql` (window state KV table)
 - `20260628004_create_finance.{up,down}.sql` (settings, cards, incomes, expenses, installments)
 - `20260628005_salary_categories.{up,down}.sql` (period_salaries, categories)
 - `20260628006_create_fixed_expenses.{up,down}.sql` (fixed_expenses, fixed_expense_amounts, fixed_expense_payments)
+- `20260630010_users_multitenant.{up,down}.sql` (users table + `user_id` on every finance table; rebuilds `period_salaries` with a composite PK)
+- `20260630011_finance_soft_delete.{up,down}.sql` (`deleted_at` on cards/categories/incomes/expenses/fixed_expenses; partial unique index on active category names)
+- `20260630012_soft_delete_users.{up,down}.sql` (`deleted_at` on users)
+- `20260702013_create_merchants.{up,down}.sql` (merchants table + `expenses.merchant` text column)
 
 Adding `.sql` files to an already-registered domain `embed.FS` needs no migrator change; only a brand
 new domain `embed.FS` must be added to the slice. SQLite note: `ALTER TABLE ... ADD COLUMN` is
-supported, but changing or dropping a column's type is not — write a new table + copy migration instead.
+supported, but changing or dropping a column's type is not — write a new table + copy migration instead
+(see the `period_salaries` composite-PK rebuild in migration 010).
 
 ### Per-month & effective-dated data
 
@@ -183,3 +191,63 @@ regenerate the platform assets with `wails3 task common:update:build-assets`.
 > Use `wails3` / `task` only — never `wails` (the v2 CLI), which can't read a v3
 > `go.mod` and aborts.
 
+## 14. Multi-user profiles (no login)
+
+The app supports several profiles over a **single** SQLite database — there is no auth. Every
+finance row carries a `user_id`; the currently active id lives in an in-memory `users.Session`
+(`backend/users/session.go`) and is persisted through `prefs.ActiveUserID` so it survives restarts.
+`main.go` builds the `Session`, resolves the active id, and injects it into both `users` and
+`finance` services.
+
+`FinanceService` reads the active id via `s.uid()` (= `session.Active()`) and scopes **every** query
+by it (`WHERE user_id = ?`). Switching profiles only mutates the in-memory id + triggers a frontend
+refetch (`UserSwitcher.tsx`) — the DB connection is never reopened, so the switch is instant. The
+per-user isolation guarantee is covered by `backend/users/isolation_test.go`; add a similar test
+whenever a new bound method reads user-owned data.
+
+## 15. Soft delete & trash
+
+Cards, categories, incomes, expenses, fixed expenses and users use bun's `soft_delete` (a nullable
+`deleted_at` column + the `bun:",soft_delete"` struct tag). Deleting sets the timestamp instead of
+removing the row; list queries exclude soft-deleted rows automatically, and the frontend "Papelera"
+(`TrashView.tsx`) lists and restores them. Category-name uniqueness is a **partial** unique index
+scoped to `deleted_at IS NULL`, so a deleted name can be reused and a restore never collides with an
+active row. See migrations `011` (finance) and `012` (users).
+
+## 16. Merchants
+
+`backend/finance/merchant.go` is a user-managed list of "comercios". Expenses store the merchant as
+plain text (`expenses.merchant`), not a foreign key — renaming or deleting a merchant does not cascade
+to historical expenses, which keep the text they were saved with. Surfaced in `MerchantsView.tsx`.
+
+
+## 17. Web/PWA target (iPad)
+
+Besides the Wails desktop app, the same frontend ships as an **installable PWA** with a
+**local TypeScript engine** replacing the Go backend — no server involved:
+
+- **Build selection**: `vite --mode web` (`npm run dev:web` / `build:web`). In web mode
+  `vite.config.ts` aliases `@/services/{finance,users,settings}` to `frontend/src/services/web/*`
+  and skips the Wails plugin; the default mode (what `wails3 dev/build` runs) is untouched.
+  `frontend/tsconfig.web.json` mirrors the alias for the web typecheck and excludes the three
+  bindings wrappers. `import.meta.env.VITE_TARGET` (`define`-inlined: 'web' | 'desktop') gates
+  web-only code so each bundle drops the other target's modules.
+- **Contract**: `frontend/src/services/contract.ts` hand-mirrors the Go models/result shapes and
+  the bound service surfaces. Both the Wails wrappers (structurally) and the web adapters
+  (explicitly) satisfy it. **Adding/changing a bound Go method requires updating contract.ts and
+  the engine port.**
+- **Engine**: `frontend/src/engine/` is a 1:1 TypeScript port of `backend/finance` +
+  `backend/users` over sqlite-wasm (`@sqlite.org/sqlite-wasm`, `opfs-sahpool` VFS — persistent
+  OPFS, no COOP/COEP headers, single connection) running in a dedicated Worker
+  (`engine/db/worker.ts`, Comlink RPC). Money uses `decimal.js` internally, strings at the edges.
+- **Shared migrations**: the engine raw-imports the same `backend/*/migrations/*.up.sql` files
+  (glob — new migrations are picked up automatically), replicates bun's `--bun:split` parsing and
+  its `bun_migrations` bookkeeping (name = numeric filename prefix). This makes an exported
+  `.sqlite` file **interchangeable between desktop and web** (the `windowstate` set and the web's
+  `web_prefs` table are each ignored by the other side).
+- **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
+  (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`).
+- **Tests**: `npm test` (vitest) runs the engine against the same sqlite-wasm build in Node
+  (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
+- **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
+  `base: /app-finance/`) to GitHub Pages on pushes to `main`.

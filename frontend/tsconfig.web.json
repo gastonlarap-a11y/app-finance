@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/services/finance": ["./src/services/web/finance.ts"],
+      "@/services/users": ["./src/services/web/users.ts"],
+      "@/services/settings": ["./src/services/web/settings.ts"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "exclude": ["src/services/finance.ts", "src/services/users.ts", "src/services/settings.ts"]
+}

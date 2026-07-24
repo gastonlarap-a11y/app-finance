@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: the workflow only needs to read the repo.
+permissions:
+  contents: read
+
+# Never waste minutes on stale commits: one run per ref, cancel the previous.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Secret scanning on every push/PR (deny rules on .env* are only advisory).
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # gitleaks needs full history to resolve the pushed range
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # required by the action to scan PRs
+
+  backend:
+    # macOS, not ubuntu: Wails v3 on Linux needs GTK4/WebKitGTK system libs and
+    # this app only ships for macOS/Windows. macOS runners are free on public repos.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: true
+      # main.go embeds all:frontend/dist; the dir must exist for any go command.
+      - name: Placeholder frontend/dist for go:embed
+        run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      # No native window on CI: compile-check the backend, don't run wails3 build.
+      - name: Build (compile check)
+        run: go build ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # The desktop build needs wails3-generated bindings (gitignored), so CI
+      # exercises the bindings-independent web target instead: engine tests +
+      # typecheck (tsconfig.web.json) + PWA bundle.
+      - name: Engine tests (vitest)
+        run: npm test
+      - name: Typecheck + build (web target)
+        run: npm run build:web

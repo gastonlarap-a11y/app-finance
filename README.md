@@ -1,7 +1,11 @@
 # App Finance
 
-Un **gestor de finanzas personales** de escritorio (UI en español) construido con [Wails v3](https://v3.wails.io) —
-Go backend enlazado a un frontend React, empaquetado como app nativa.
+Un **gestor de finanzas personales** (UI en español) construido con [Wails v3](https://v3.wails.io) —
+Go backend enlazado a un frontend React, empaquetado como app nativa para **macOS y Windows**.
+Además se distribuye como **PWA instalable para iPad/web**: el mismo frontend con un motor
+TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor); ver
+`ARCHITECTURE.md` §17. Para instalarla en un iPad: abrir la URL publicada (GitHub Pages) en Safari
+→ Compartir → **Añadir a pantalla de inicio**, y usar «Exportar datos» en Ajustes como respaldo.
 
 ## Funcionalidades
 
@@ -11,7 +15,12 @@ Go backend enlazado a un frontend React, empaquetado como app nativa.
   un mes aplica **desde ese mes en adelante** — los meses anteriores conservan su valor. Cada cargo puede
   marcarse pagado/pendiente por mes.
 - **Año**: resumen anual con balance acumulado, desglose por mes y por categoría.
-- **Tarjetas / Categorías**: administrar tarjetas de crédito (cupo, día de cierre) y categorías.
+- **Tarjetas / Categorías / Comercios**: administrar tarjetas de crédito (cupo, día de cierre),
+  categorías y comercios.
+- **Perfiles (multi-usuario, sin login)**: varios perfiles sobre una sola base de datos; cada uno ve
+  únicamente sus datos y el cambio de perfil es instantáneo.
+- **Papelera**: eliminar tarjetas, categorías, ingresos, gastos, gastos fijos o perfiles los manda a
+  la papelera (soft delete) con opción de restaurar; no se borran de inmediato.
 - **Ajustes**: elegir la carpeta de la base de datos, conectar Google Drive y hacer backup de la BD
   (bajo demanda o al cerrar).
 
@@ -92,6 +101,12 @@ la app y activa el hot-reload para cambios en Go y en el frontend.
 **Compilación rápida del backend** (sin levantar la ventana):
 ```bash
 go build . && go vet ./...
+```
+
+**Tests:**
+```bash
+go test ./...                  # tests del backend (dominios finance + users)
+cd frontend && npm run build   # typecheck del frontend (tsc --noEmit) + bundle
 ```
 
 ---
@@ -211,8 +226,9 @@ app-finance/
 ├── config.toml             # config de la app (gitignoreado)
 │
 ├── backend/
-│   ├── finance/            # dominio core: card/category/expense/income/installment/salary/settings/
-│   │                       #   fixedexpense.go, period.go, result.go, service.go, migrations/
+│   ├── finance/            # dominio core: card/category/expense/income/installment/merchant/salary/
+│   │                       #   settings/fixedexpense.go, period.go, result.go, service.go, migrations/
+│   ├── users/              # perfiles multi-usuario (sin login): user/session/service.go, migrations/
 │   ├── settings/           # carpeta BD, Google Drive, backup al cerrar
 │   ├── diagnostics/        # servicio de diagnóstico (error reporting)
 │   ├── reports/            # excel.go — exportación Excel
@@ -233,13 +249,20 @@ app-finance/
     └── src/
         ├── main.tsx · App.tsx · index.css
         ├── atoms/finance.ts              # estado Jotai (tab, period, refresh)
-        ├── services/{finance,settings}.ts   # wrappers sobre los bindings generados
+        ├── services/{finance,users,settings}.ts   # wrappers sobre los bindings generados
         ├── lib/{format,result}.ts
         └── components/                   # MonthView, YearView, FixedExpensesView, CardsView,
-                                          #   CategoriesView, SettingsView, IncomePanel, ExpenseForm, …
+                                          #   CategoriesView, MerchantsView, TrashView, UserSwitcher,
+                                          #   SettingsView, IncomePanel, ExpenseForm, …
 ```
 
 ---
+
+## Integración continua
+
+`.github/workflows/ci.yml` corre en cada `pull_request` y en `push` a `main`: `go vet` + `go test` +
+compilación del backend, typecheck y bundle del frontend (`npm run build`), y escaneo de secretos con
+gitleaks. No hay job de deploy — la distribución es manual (secciones 3 y 4).
 
 ## Más
 
