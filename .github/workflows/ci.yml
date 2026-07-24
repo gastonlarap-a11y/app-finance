@@ -23,6 +23,8 @@ jobs:
         with:
           fetch-depth: 0 # gitleaks needs full history to resolve the pushed range
       - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # required by the action to scan PRs
 
   backend:
     runs-on: ubuntu-latest
@@ -32,6 +34,9 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
+      # main.go embeds all:frontend/dist; the dir must exist for any go command.
+      - name: Placeholder frontend/dist for go:embed
+        run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -53,6 +58,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # `npm run build` = tsc --noEmit (typecheck) + vite build (bundle).
-      - name: Typecheck + build
-        run: npm run build
+      # The desktop build needs wails3-generated bindings (gitignored), so CI
+      # exercises the bindings-independent web target instead: engine tests +
+      # typecheck (tsconfig.web.json) + PWA bundle.
+      - name: Engine tests (vitest)
+        run: npm test
+      - name: Typecheck + build (web target)
+        run: npm run build:web
