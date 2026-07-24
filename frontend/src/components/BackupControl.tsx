@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { refreshAtom, tabAtom } from '@/atoms/finance'
+import { lazy, Suspense } from 'react'
 import { SettingsService, type SettingsState } from '@/services/settings'
 import { Button } from './ui'
+
+// import.meta.env.VITE_TARGET is inlined by `define` at transform time, so the
+// bundler sees a literal condition and never pulls the web engine (worker +
+// sqlite-wasm) into the desktop bundle.
+const WebExportControl =
+  import.meta.env.VITE_TARGET === 'web'
+    ? lazy(() => import('./WebBackup').then((m) => ({ default: m.WebExportControl })))
+    : null
 
 function lastBackupLabel(s: SettingsState | null): string {
   if (!s?.lastBackup) return 'sin respaldos aún'
@@ -10,7 +19,20 @@ function lastBackupLabel(s: SettingsState | null): string {
   return `último: ${d.toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })}`
 }
 
+// On the web build there is no Drive backup; the header control becomes a
+// plain export-to-file button.
 export function BackupControl() {
+  if (WebExportControl) {
+    return (
+      <Suspense fallback={null}>
+        <WebExportControl />
+      </Suspense>
+    )
+  }
+  return <DriveBackupControl />
+}
+
+function DriveBackupControl() {
   const [state, setState] = useState<SettingsState | null>(null)
   const [busy, setBusy] = useState(false)
   // Reload when something changes elsewhere (e.g. connecting Drive in Settings)

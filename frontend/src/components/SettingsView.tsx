@@ -1,11 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { refreshAtom } from '@/atoms/finance'
+import { lazy, Suspense } from 'react'
 import { SettingsService, type SettingsState } from '@/services/settings'
 import { failed } from '@/lib/result'
 import { Button, Field, Section, Spinner, inputCls } from './ui'
 
+// On the web build the whole desktop surface (DB folder, Google Drive) is
+// native-only; settings become the export/import backup view instead. Loaded
+// lazily behind the compile-time IS_WEB flag so the desktop bundle never pulls
+// in the web engine (worker + sqlite-wasm).
+// import.meta.env.VITE_TARGET is inlined by `define` at transform time, so the
+// bundler sees a literal condition and drops the import() on desktop.
+const WebSettingsView =
+  import.meta.env.VITE_TARGET === 'web'
+    ? lazy(() => import('./WebBackup').then((m) => ({ default: m.WebSettingsView })))
+    : null
+
 export function SettingsView() {
+  if (WebSettingsView) {
+    return (
+      <Suspense fallback={<Spinner />}>
+        <WebSettingsView />
+      </Suspense>
+    )
+  }
+  return <DesktopSettingsView />
+}
+
+function DesktopSettingsView() {
   const [state, setState] = useState<SettingsState | null>(null)
   const [folderName, setFolderName] = useState('')
   const [clientId, setClientId] = useState('')
