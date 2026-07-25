@@ -5,6 +5,9 @@
 // backup story is export/import of the SQLite file (see exportDb/importDb).
 import type { AppError } from '@/services/contract'
 import { exportDbBytes, importDbBytes } from '@/services/web/worker-client'
+import type { ImportSummary } from '@/engine/db/worker'
+
+export type { ImportSummary }
 
 export interface SettingsState {
   dbFolder: string
@@ -102,11 +105,15 @@ export async function exportDb(): Promise<Blob> {
   // Copy into a plain ArrayBuffer so the Blob constructor accepts it regardless
   // of the buffer's origin (worker transfer may yield a SharedArrayBuffer-typed view).
   const copy = new Uint8Array(bytes)
-  return new Blob([copy], { type: 'application/x-sqlite3' })
+  // octet-stream rather than application/x-sqlite3: iPadOS has no UTI for the
+  // latter, and navigator.canShare rejects what it cannot type — which would
+  // drop an installed PWA (no download UI) to a link that goes nowhere.
+  return new Blob([copy], { type: 'application/octet-stream' })
 }
 
-// importDb replaces the local database with the given file's contents. The
-// caller must reload the page right after so every view refetches clean state.
-export async function importDb(bytes: ArrayBuffer): Promise<void> {
-  await importDbBytes(bytes)
+// importDb replaces the local database with the given file's contents and
+// reports what the file held. The caller must reload the page right after so
+// every view refetches clean state.
+export async function importDb(bytes: Uint8Array): Promise<ImportSummary> {
+  return importDbBytes(bytes)
 }

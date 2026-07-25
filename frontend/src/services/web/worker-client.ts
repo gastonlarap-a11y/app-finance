@@ -1,7 +1,7 @@
 // Main-thread side of the web engine: one lazily-created worker shared by all
 // services (opfs-sahpool allows a single connection), wrapped with Comlink.
 import * as Comlink from 'comlink'
-import type { WorkerApi } from '@/engine/db/worker'
+import type { ImportSummary, WorkerApi } from '@/engine/db/worker'
 
 let remote: Comlink.Remote<WorkerApi> | null = null
 
@@ -30,6 +30,6 @@ export function exportDbBytes(): Promise<Uint8Array> {
   return workerApi().exportDb()
 }
 
-export async function importDbBytes(bytes: ArrayBuffer): Promise<void> {
-  await workerApi().importDb(bytes)
+export function importDbBytes(bytes: Uint8Array): Promise<ImportSummary> {
+  return workerApi().importDb(bytes)
 }
