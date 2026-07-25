@@ -24,5 +24,7 @@ export async function shareOrDownload(blob: Blob, filename: string): Promise<voi
 export function backupFilename(): string {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `app-finance-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.sqlite`
+  // .db, same extension the desktop app writes, so both sides' backups look
+  // alike in Files/Drive and neither needs explaining.
+  return `app-finance-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.db`
 }

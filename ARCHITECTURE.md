@@ -243,10 +243,15 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
 - **Shared migrations**: the engine raw-imports the same `backend/*/migrations/*.up.sql` files
   (glob — new migrations are picked up automatically), replicates bun's `--bun:split` parsing and
   its `bun_migrations` bookkeeping (name = numeric filename prefix). This makes an exported
-  `.sqlite` file **interchangeable between desktop and web** (the `windowstate` set and the web's
+  `.db` file **interchangeable between desktop and web** (the `windowstate` set and the web's
   `web_prefs` table are each ignored by the other side).
 - **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
-  (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`).
+  (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`). Import validates the file's
+  bytes first (`engine/db/dbfile.ts`), then reopens the imported database to report what it held
+  (`ImportSummary`) before the mandatory page reload. **No `window.confirm`/`alert` anywhere in this
+  flow** and **no `accept` on the file input**: Safari suppresses native dialogs without a live user
+  activation, and iPadOS greys out `.db`/`.sqlite` files when `accept` is set (no system UTI owns
+  those extensions). Both turned a failed restore into a screen that just looked empty.
 - **Tests**: `npm test` (vitest) runs the engine against the same sqlite-wasm build in Node
   (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
 - **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
