@@ -115,6 +115,14 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.CreateExpense(ctx, period+"-10", "Cine", "Servicios", "", nil, finance.KindCuotas, "10000", 3); r.Error != nil {
 		t.Fatalf("CreateExpense: %v", r.Error)
 	}
+	goal := fin.CreateSavingsGoal(ctx, "Viaje", "500000", "")
+	if goal.Error != nil {
+		t.Fatalf("CreateSavingsGoal: %v", goal.Error)
+	}
+	contrib := fin.AddSavingsContribution(ctx, goal.Data.ID, period, "50000")
+	if contrib.Error != nil {
+		t.Fatalf("AddSavingsContribution: %v", contrib.Error)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -154,6 +162,21 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if y := fin.YearSummary(ctx, 2030); y.Error != nil || len(y.Data.CategoriaMeses) != 0 {
 		t.Fatalf("Camila YearSummary.CategoriaMeses = %+v, want none", y)
+	}
+	if tr := fin.SpendingTrend(ctx, period, 3); tr.Error != nil || !tr.Data.Current.IsZero() || len(tr.Data.Categories) != 0 {
+		t.Fatalf("Camila SpendingTrend = %+v, want empty", tr)
+	}
+	if goals, err := fin.ListSavingsGoals(ctx); err != nil || len(goals) != 0 {
+		t.Fatalf("Camila ListSavingsGoals = %+v (err %v), want none", goals, err)
+	}
+	if r := fin.AddSavingsContribution(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("Camila AddSavingsContribution on Gastón's goal = %+v, want NOT_FOUND", r.Error)
+	}
+	if r := fin.DeleteSavingsContribution(ctx, contrib.Data.ID); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("Camila DeleteSavingsContribution on Gastón's row = %+v, want NOT_FOUND", r.Error)
+	}
+	if r := fin.DeleteSavingsGoal(ctx, goal.Data.ID); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("Camila DeleteSavingsGoal on Gastón's goal = %+v, want NOT_FOUND", r.Error)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

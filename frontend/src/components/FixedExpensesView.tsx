@@ -4,8 +4,9 @@ import { FinanceService, type Card, type FixedExpenseView } from '@/services/fin
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { formatCLP, periodLabel } from '@/lib/format'
+import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
+import { RecurringSuggestions } from './RecurringSuggestions'
 
 export function FixedExpensesView() {
   const period = useAtomValue(periodAtom)
@@ -44,6 +45,8 @@ export function FixedExpensesView() {
   }
 
   return (
+    <div className="space-y-5">
+    <RecurringSuggestions period={period} refresh={refresh} />
     <Section
       title="Gastos fijos mensuales"
       action={
@@ -72,7 +75,13 @@ export function FixedExpensesView() {
               <div>
                 <div className="font-medium">
                   {fe.description}
-                  {!fe.active && <span className="ml-2 text-xs text-slate-500">(cancelado)</span>}
+                  {/* active is false both before the start and after the end month. */}
+                  {!fe.active &&
+                    (fe.endPeriod !== '' && fe.endPeriod < currentPeriod() ? (
+                      <span className="ml-2 text-xs text-slate-500">(cancelado)</span>
+                    ) : (
+                      <span className="ml-2 text-xs text-primary">(programado desde {periodLabel(fe.startPeriod)})</span>
+                    ))}
                 </div>
                 <div className="text-xs text-slate-500">
                   {formatCLP(fe.currentAmount)} · {fe.category || 'Sin categoría'}
@@ -137,6 +146,7 @@ export function FixedExpensesView() {
         />
       )}
     </Section>
+    </div>
   )
 }
 

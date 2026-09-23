@@ -23,6 +23,14 @@ TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor)
   proyectado.
 - **Buscar**: busca gastos en todo el historial por texto (descripción/comercio), categoría, tarjeta
   y rango de meses.
+- **Ahorro**: metas con monto y fecha objetivo; cada aporte sale del disponible del mes (se muestra
+  aparte de los gastos) y la app calcula cuánto ahorrar al mes para llegar a tiempo.
+- **Tendencia**: en el mes, comparación con el mes anterior y el promedio de 6 meses (total y por
+  categoría) con un gráfico de línea.
+- **Recurrentes**: en «Fijos», detecta gastos únicos que se repiten con monto parecido y los convierte
+  en gasto fijo con un clic.
+- **Exportar**: mes, año y resultados de búsqueda a Excel (.xlsx con diálogo nativo) en desktop, o CSV
+  (Compartir/Archivos) en el iPad.
 - **Tarjetas / Categorías / Comercios**: administrar tarjetas de crédito (cupo, día de cierre),
   categorías y comercios.
 - **Atajos**: `←`/`→` cambian de mes (o de año en «Año»), `N` abre «Agregar gasto».
@@ -257,11 +265,12 @@ app-finance/
 ├── backend/
 │   ├── finance/            # dominio core: card/category/expense/income/installment/merchant/salary/
 │   │                       #   settings/fixedexpense.go, period.go, result.go, service.go, migrations/
-│   │                       #   + budget.go (presupuestos), forecast.go (proyección), search.go (búsqueda)
+│   │                       #   + budget.go (presupuestos), forecast.go (proyección), search.go (búsqueda),
+│   │                       #   savings.go (metas de ahorro), trend.go (tendencia), recurring.go
 │   ├── users/              # perfiles multi-usuario (sin login): user/session/service.go, migrations/
 │   ├── settings/           # carpeta BD, Google Drive, backup al cerrar
 │   ├── diagnostics/        # servicio de diagnóstico (error reporting)
-│   ├── reports/            # excel.go — exportación Excel
+│   ├── reports/            # excel.go — SaveTable: .xlsx + diálogo nativo «Guardar como»
 │   └── shared/
 │       ├── config/         # cargador de config
 │       ├── prefs/          # prefs de usuario que sobreescriben config

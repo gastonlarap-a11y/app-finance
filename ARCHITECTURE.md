@@ -107,6 +107,17 @@ fixed expenses vs. salary, reusing the last known salary for months without one)
 (`search.go` — LIKE with escaped wildcards, category/card/period-range filters, paginated with a count).
 `YearSummary.CategoriaMeses` is the category × month breakdown (same pass that builds `PorCategoria`).
 
+**Savings goals** (`savings.go`, migration `20260923015`): `savings_goals` (soft delete, Papelera) and
+`savings_contributions` (per month, hard delete, ride along with their goal). Contributions are an
+outflow of their month: `MonthlySummary.Ahorro`, `Balance = Disponible − Gastos − Ahorro`,
+`Alcanza = Disponible ≥ Gastos + Ahorro`, and they are subtracted in `cumulativeBalanceBefore`, the
+year view and the forecast. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
+average of the earlier months of a 2–24-month window, overall and per category (`spendingByMonth`).
+`DetectRecurring` (`recurring.go`) groups one-off expenses of the last 6 months by merchant (or
+description), keeps amounts within ±15 % of the group median and suggests those seen in ≥ 3 months
+that are not already a fixed expense; the UI converts one via `CreateFixedExpense` starting the month
+after its last charge, so nothing is counted twice.
+
 ## 4b. Backup & Google Drive
 
 `backend/shared/backup` snapshots the live SQLite DB and (when Drive is connected) uploads it via

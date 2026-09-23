@@ -18,6 +18,9 @@ import { formatCLP, formatDate } from '@/lib/format'
 import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
+import { ExportButton } from './ExportButton'
+import { TrendPanel } from './TrendPanel'
+import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
 
@@ -171,7 +174,16 @@ export function MonthView() {
           value={formatCLP(summary.gastos)}
           hint={`Pagado ${formatCLP(summary.pagado)} · Pendiente ${formatCLP(summary.pendiente)}`}
         />
-        <StatCard label="Balance" value={formatCLP(summary.balance)} tone={balanceTone} hint="Se arrastra al próximo mes" />
+        <StatCard
+          label="Balance"
+          value={formatCLP(summary.balance)}
+          tone={balanceTone}
+          hint={
+            isZero(summary.ahorro)
+              ? 'Se arrastra al próximo mes'
+              : `Tras ahorrar ${formatCLP(summary.ahorro)} · se arrastra al próximo mes`
+          }
+        />
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
 
@@ -180,9 +192,14 @@ export function MonthView() {
           <Section
             title="Movimientos del mes"
             action={
-              <Button onClick={openNewExpense}>
-                + Agregar gasto <kbd className="ml-1 hidden rounded bg-white/15 px-1 text-xs md:inline">N</kbd>
-              </Button>
+              <div className="flex items-center gap-2">
+                {summary.movimientos.length > 0 && (
+                  <ExportButton build={() => monthTable(summary)} basename={exportBasename('mes', period)} />
+                )}
+                <Button onClick={openNewExpense}>
+                  + Agregar gasto <kbd className="ml-1 hidden rounded bg-white/15 px-1 text-xs md:inline">N</kbd>
+                </Button>
+              </div>
             }
           >
             {summary.movimientos.length === 0 ? (
@@ -381,6 +398,10 @@ export function MonthView() {
               </Section>
             </div>
           )}
+
+          <div className="mt-5">
+            <TrendPanel period={period} refresh={refresh} />
+          </div>
         </div>
 
         <div className="space-y-5">

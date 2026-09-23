@@ -6,6 +6,7 @@
       "@/services/users": ["./src/services/web/users.ts"],
       "@/services/settings": ["./src/services/web/settings.ts"],
       "@/services/diagnostics": ["./src/services/web/diagnostics.ts"],
+      "@/services/reports": ["./src/services/web/reports.ts"],
       "@/*": ["./src/*"]
     }
   },
@@ -13,6 +14,7 @@
     "src/services/finance.ts",
     "src/services/users.ts",
     "src/services/settings.ts",
-    "src/services/diagnostics.ts"
+    "src/services/diagnostics.ts",
+    "src/services/reports.ts"
   ]
 }

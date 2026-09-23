@@ -47,6 +47,14 @@ export function maxAbs(values: readonly string[]): string {
   return values.reduce((acc, v) => Decimal.max(acc, dec(v).abs()), new Decimal(0)).toString()
 }
 
+// pctChange is the whole-number percent change from `base` to `current`
+// ("+18", "-5", "0"), or null when there is no base to compare with.
+export function pctChange(current: string, base: string): number | null {
+  const b = dec(base)
+  if (b.isZero()) return null
+  return dec(current).minus(b).div(b.abs()).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber()
+}
+
 // times returns a × n (e.g. cuota × número de cuotas), for previews.
 export function times(a: string, n: number): string {
   return dec(a).times(n).toString()

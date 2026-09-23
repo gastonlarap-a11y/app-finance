@@ -11,6 +11,7 @@ import type {
   CategoryBudgetsResult,
   CategoryResult,
   CategoryTotal,
+  CategoryTrend,
   CategoryYearRow,
   Expense,
   ExpenseFilter,
@@ -30,17 +31,34 @@ import type {
   Movimiento,
   OpResult,
   PeriodSalary,
+  RecurringResult,
+  RecurringSuggestion,
   SalaryResult,
+  SavingsContribution,
+  SavingsContributionResult,
+  SavingsGoalResult,
+  SavingsGoalView,
   SettingsResult,
+  SpendingTrend,
+  SpendingTrendResult,
   TrashItem,
   TrashResult,
+  TrendMonth,
   YearMonth,
   YearSummary,
   YearSummaryResult,
 } from '@/services/contract'
 import { ErrConflict, ErrNotFound, ErrValidation, isUniqueViolation, newError } from '@/engine/errors'
 import { Money } from '@/engine/decimal'
-import { addMonths, currentPeriod, monthOf, periodOf, validPeriod, type DateParts } from '@/engine/finance/period'
+import {
+  addMonths,
+  currentPeriod,
+  monthOf,
+  monthsBetween,
+  periodOf,
+  validPeriod,
+  type DateParts,
+} from '@/engine/finance/period'
 import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
 import {
   KindCuotas,
@@ -58,6 +76,8 @@ import {
   rowToInstallment,
   rowToMerchant,
   rowToPeriodSalary,
+  rowToSavingsContribution,
+  rowToSavingsGoal,
   rowToSettings,
   type FixedExpenseAmountRow,
 } from '@/engine/finance/models'
@@ -111,6 +131,52 @@ class CategoryMonths {
         total: r.total.toString(),
       })),
     }
+  }
+}
+
+const minTrendMonths = 2
+const maxTrendMonths = 24
+
+// Recurring detection (mirror of backend/finance/recurring.go).
+const recurringWindowMonths = 6
+const recurringMinMonths = 3
+const recurringTolerancePct = 15
+
+// normalizeKey makes "  Netflix  CL" and "netflix cl" the same grouping key.
+function normalizeKey(s: string): string {
+  return s.trim().split(/\s+/).filter(Boolean).join(' ').toLowerCase()
+}
+
+interface RecurringHit {
+  period: string
+  amount: Money
+  ex: Expense
+}
+
+// recurringFrom keeps hits within the tolerance of the group's median amount and
+// suggests them when they span enough distinct months.
+function recurringFrom(hits: RecurringHit[]): RecurringSuggestion | null {
+  const sorted = hits.map((h) => h.amount).sort((a, b) => a.cmp(b))
+  const median = sorted[Math.floor(sorted.length / 2)]
+  if (!median || median.isZero()) return null
+  const limit = median.mulInt(recurringTolerancePct)
+  const months = new Set<string>()
+  let latest: RecurringHit | undefined
+  for (const h of hits) {
+    // |amount − median| × 100 <= median × tolerance
+    if (h.amount.sub(median).abs().mulInt(100).gt(limit)) continue
+    months.add(h.period)
+    if (!latest || h.period > latest.period || (h.period === latest.period && h.ex.id > latest.ex.id)) latest = h
+  }
+  if (!latest || months.size < recurringMinMonths) return null
+  return {
+    description: latest.ex.description,
+    merchant: latest.ex.merchant,
+    category: latest.ex.category,
+    cardId: latest.ex.cardId,
+    amount: latest.amount.toString(),
+    periods: [...months].sort(compareStrings),
+    nextPeriod: addMonths(latest.period, 1),
   }
 }
 
@@ -412,7 +478,120 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     )) {
       total = total.sub(Money.fromString(rowToInstallment(r).amount))
     }
-    return total.sub(sumFixedBefore(period))
+    // Savings contributions left the account too.
+    return total.sub(sumFixedBefore(period)).sub(sumContributions('period < ?', [period]))
+  }
+
+  // ---------- savings helpers ----------
+
+  // Contributions of goals in the trash are excluded, like installments of a
+  // deleted expense.
+  const LIVE_GOAL = 'goal_id IN (SELECT id FROM savings_goals WHERE deleted_at IS NULL)'
+
+  function contributionRows(where: string, params: SqlValue[]): SavingsContribution[] {
+    return db
+      .query(`SELECT * FROM savings_contributions WHERE user_id = ? AND ${LIVE_GOAL} AND ${where}`, [uid(), ...params])
+      .map(rowToSavingsContribution)
+  }
+
+  function sumContributions(where: string, params: SqlValue[]): Money {
+    return contributionRows(where, params).reduce((acc, c) => acc.add(Money.fromString(c.amount)), Money.zero())
+  }
+
+  function savingsByMonth(from: string, to: string): Map<string, Money> {
+    const out = new Map<string, Money>()
+    for (const c of contributionRows('period >= ? AND period <= ?', [from, to])) {
+      out.set(c.period, (out.get(c.period) ?? Money.zero()).add(Money.fromString(c.amount)))
+    }
+    return out
+  }
+
+  // listSavingsGoals mirrors the Go helper; `now` is injected for testability.
+  function listSavingsGoals(now: string): SavingsGoalView[] {
+    const goals = db
+      .query('SELECT * FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC', [
+        uid(),
+      ])
+      .map(rowToSavingsGoal)
+    const byGoal = new Map<number, SavingsContribution[]>()
+    for (const c of db
+      .query(`SELECT * FROM savings_contributions WHERE user_id = ? AND ${LIVE_GOAL} ORDER BY period DESC, id DESC`, [
+        uid(),
+      ])
+      .map(rowToSavingsContribution)) {
+      const list = byGoal.get(c.goalId) ?? []
+      list.push(c)
+      byGoal.set(c.goalId, list)
+    }
+    return goals.map((g) => {
+      const contributions = byGoal.get(g.id) ?? []
+      const saved = contributions.reduce((acc, c) => acc.add(Money.fromString(c.amount)), Money.zero())
+      const target = Money.fromString(g.targetAmount)
+      const remaining = target.gt(saved) ? target.sub(saved) : Money.zero()
+      let monthsLeft = 0
+      let monthlyNeeded = Money.zero()
+      if (g.targetPeriod !== '' && g.targetPeriod >= now) {
+        monthsLeft = monthsBetween(now, g.targetPeriod) + 1 // the current month counts
+        monthlyNeeded = remaining.divCeil(monthsLeft)
+      }
+      return {
+        ...g,
+        saved: saved.toString(),
+        remaining: remaining.toString(),
+        monthsLeft,
+        monthlyNeeded: monthlyNeeded.toString(),
+        contributions,
+      }
+    })
+  }
+
+  function validateGoal(
+    name: string,
+    target: string,
+    targetPeriod: string,
+  ): { name?: string; amount?: Money; error?: ReturnType<typeof newError> } {
+    const n = name.trim()
+    if (n === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
+    const parsed = amountOrError(target)
+    if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(target) }
+    if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto objetivo debe ser mayor a 0') }
+    if (targetPeriod !== '' && !validPeriod(targetPeriod)) {
+      return { error: newError(ErrValidation, 'fecha objetivo inválida (use YYYY-MM)') }
+    }
+    return { name: n, amount: parsed.amount }
+  }
+
+  // spendingByMonth mirrors the Go helper: per-month totals and per-category
+  // totals of installments (live expenses) + active fixed expenses in [from, to].
+  function spendingByMonth(from: string, to: string): {
+    totals: Map<string, Money>
+    byCat: Map<string, Map<string, Money>>
+  } {
+    const totals = new Map<string, Money>()
+    const byCat = new Map<string, Map<string, Money>>()
+    const add = (period: string, category: string, amount: Money) => {
+      totals.set(period, (totals.get(period) ?? Money.zero()).add(amount))
+      const cats = byCat.get(period) ?? new Map<string, Money>()
+      const c = category !== '' ? category : uncategorized
+      cats.set(c, (cats.get(c) ?? Money.zero()).add(amount))
+      byCat.set(period, cats)
+    }
+    const insts = db
+      .query(
+        `SELECT * FROM installments WHERE user_id = ? AND period >= ? AND period <= ?
+         AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+        [uid(), from, to],
+      )
+      .map(rowToInstallment)
+    const exById = expenseMapActive(insts.map((i) => i.expenseId))
+    for (const inst of insts) add(inst.period, exById.get(inst.expenseId)?.category ?? '', Money.fromString(inst.amount))
+    const { fixed, amountsByID } = loadFixed(false)
+    for (let p = from; p <= to; p = addMonths(p, 1)) {
+      for (const fe of fixed) {
+        if (activeIn(fe, p)) add(p, fe.category, resolveAsOf(amountsByID.get(fe.id) ?? [], p))
+      }
+    }
+    return { totals, byCat }
   }
 
   // expenseMapActive returns the (non-deleted) expenses for the given ids,
@@ -1128,7 +1307,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amount))
       }
 
-      const balance = disponible.sub(gastos)
+      const ahorro = sumContributions('period = ?', [period])
+      const balance = disponible.sub(gastos).sub(ahorro)
       // Cupo usado per card = all PENDING installments across every period.
       const cupoUsado = pendingByCard()
       const porTarjeta: CardDebt[] = cards.map((c) => {
@@ -1151,8 +1331,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         gastos: gastos.toString(),
         pendiente: pendiente.toString(),
         pagado: pagado.toString(),
+        ahorro: ahorro.toString(),
         balance: balance.toString(),
-        alcanza: disponible.gte(gastos),
+        alcanza: disponible.gte(gastos.add(ahorro)),
         porCategoria: sortedCategoryTotals(catTotals),
         porTarjeta,
         movimientos,
@@ -1216,25 +1397,30 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       }
 
+      const ahorroByMonth = savingsByMonth(prefix + '01', prefix + '12')
       const months: YearMonth[] = []
       let totalIngresos = Money.zero()
       let totalGastos = Money.zero()
+      let totalAhorro = Money.zero()
       for (let m = 1; m <= 12; m++) {
         const period = prefix + String(m).padStart(2, '0')
         const ingresos = (salaryByMonth.get(period) ?? Money.zero()).add(extrasByMonth.get(period) ?? Money.zero())
         const gastos = gastosByMonth.get(period) ?? Money.zero()
-        const balance = ingresos.sub(gastos)
+        const ahorro = ahorroByMonth.get(period) ?? Money.zero()
+        const balance = ingresos.sub(gastos).sub(ahorro)
         saldo = saldo.add(balance) // running account balance at month close
         months.push({
           period,
           ingresos: ingresos.toString(),
           gastos: gastos.toString(),
+          ahorro: ahorro.toString(),
           balance: balance.toString(),
           saldo: saldo.toString(),
           alcanza: saldo.gte(Money.zero()),
         })
         totalIngresos = totalIngresos.add(ingresos)
         totalGastos = totalGastos.add(gastos)
+        totalAhorro = totalAhorro.add(ahorro)
       }
 
       const { totals, rows } = byCat.rows()
@@ -1245,7 +1431,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         categoriaMeses: rows,
         totalIngresos: totalIngresos.toString(),
         totalGastos: totalGastos.toString(),
-        totalBalance: totalIngresos.sub(totalGastos).toString(),
+        totalAhorro: totalAhorro.toString(),
+        totalBalance: totalIngresos.sub(totalGastos).sub(totalAhorro).toString(),
       }
       return { data }
     },
@@ -1293,6 +1480,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         extras.set(inc.period, (extras.get(inc.period) ?? Money.zero()).add(Money.fromString(inc.amount)))
       }
 
+      const ahorroByMonth = savingsByMonth(fromPeriod, to)
       let saldo = cumulativeBalanceBefore(fromPeriod)
       const data: ForecastMonth[] = []
       for (let i = 0; i < months; i++) {
@@ -1306,13 +1494,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const ingresos = lastKnown.add(extras.get(period) ?? Money.zero())
         const cuotasMes = cuotas.get(period) ?? Money.zero()
         const comprometido = cuotasMes.add(fijos)
-        const libre = ingresos.sub(comprometido)
+        const ahorro = ahorroByMonth.get(period) ?? Money.zero()
+        const libre = ingresos.sub(comprometido).sub(ahorro)
         saldo = saldo.add(libre)
         data.push({
           period,
           cuotas: cuotasMes.toString(),
           fijos: fijos.toString(),
           comprometido: comprometido.toString(),
+          ahorro: ahorro.toString(),
           ingresos: ingresos.toString(),
           ingresoEstimado: known === undefined,
           libre: libre.toString(),
@@ -1425,6 +1615,170 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return { data: { items, count } }
     },
 
+    // ---------- savings goals ----------
+
+    async ListSavingsGoals(): Promise<SavingsGoalView[]> {
+      return listSavingsGoals(currentPeriod())
+    },
+
+    async CreateSavingsGoal(name: string, targetAmount: string, targetPeriod: string): Promise<SavingsGoalResult> {
+      const v = validateGoal(name, targetAmount, targetPeriod)
+      if (v.error || !v.amount || v.name === undefined) return { error: v.error ?? newError(ErrValidation, 'meta inválida') }
+      const row = db.query(
+        `INSERT INTO savings_goals (user_id, name, target_amount, target_period, created_at)
+         VALUES (?, ?, ?, ?, ?) RETURNING *`,
+        [uid(), v.name, v.amount.toString(), targetPeriod, nowIso()],
+      )[0]
+      if (!row) return { error: newError(ErrNotFound, 'meta no encontrada') }
+      return { data: rowToSavingsGoal(row) }
+    },
+
+    async UpdateSavingsGoal(
+      id: number,
+      name: string,
+      targetAmount: string,
+      targetPeriod: string,
+    ): Promise<SavingsGoalResult> {
+      const v = validateGoal(name, targetAmount, targetPeriod)
+      if (v.error || !v.amount || v.name === undefined) return { error: v.error ?? newError(ErrValidation, 'meta inválida') }
+      db.exec(
+        `UPDATE savings_goals SET name = ?, target_amount = ?, target_period = ?
+         WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+        [v.name, v.amount.toString(), targetPeriod, id, uid()],
+      )
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+      const row = db.query('SELECT * FROM savings_goals WHERE id = ? AND user_id = ?', [id, uid()])[0]
+      if (!row) return { error: newError(ErrNotFound, 'meta no encontrada') }
+      return { data: rowToSavingsGoal(row) }
+    },
+
+    async DeleteSavingsGoal(id: number): Promise<OpResult> {
+      return softDeleteRow('savings_goals', id, 'meta no encontrada')
+    },
+
+    async RestoreSavingsGoal(id: number): Promise<OpResult> {
+      return restoreRow('savings_goals', id, 'meta no encontrada')
+    },
+
+    async AddSavingsContribution(goalID: number, period: string, amount: string): Promise<SavingsContributionResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el aporte debe ser mayor a 0') }
+      const value = parsed.amount.toString()
+      return db.transaction((): SavingsContributionResult => {
+        const owned = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+          goalID,
+          uid(),
+        ])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        const row = db.query(
+          `INSERT INTO savings_contributions (user_id, goal_id, period, amount, created_at)
+           VALUES (?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), goalID, period, value, nowIso()],
+        )[0]
+        if (!row) return { error: newError(ErrNotFound, 'aporte no encontrado') }
+        return { data: rowToSavingsContribution(row) }
+      })
+    },
+
+    async DeleteSavingsContribution(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM savings_contributions WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'aporte no encontrado') }
+      return {}
+    },
+
+    // ---------- spending trend ----------
+
+    async SpendingTrend(period: string, months: number): Promise<SpendingTrendResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      if (!Number.isInteger(months) || months < minTrendMonths || months > maxTrendMonths) {
+        return { error: newError(ErrValidation, 'la tendencia debe ser de 2 a 24 meses') }
+      }
+      const from = addMonths(period, -(months - 1))
+      const prev = addMonths(period, -1)
+      const { totals, byCat } = spendingByMonth(from, period)
+      const at = (m: Map<string, Money>, k: string) => m.get(k) ?? Money.zero()
+
+      const trendMonths: TrendMonth[] = []
+      let earlier = Money.zero()
+      for (let i = 0; i < months; i++) {
+        const p = addMonths(from, i)
+        trendMonths.push({ period: p, gastos: at(totals, p).toString() })
+        if (p !== period) earlier = earlier.add(at(totals, p))
+      }
+
+      const cats = new Set<string>()
+      for (const m of byCat.values()) for (const c of m.keys()) cats.add(c)
+      const empty = new Map<string, Money>()
+      const categories = [...cats].map((category) => {
+        let sumEarlier = Money.zero()
+        for (let i = 0; i < months - 1; i++) sumEarlier = sumEarlier.add(at(byCat.get(addMonths(from, i)) ?? empty, category))
+        return {
+          category,
+          current: at(byCat.get(period) ?? empty, category),
+          previous: at(byCat.get(prev) ?? empty, category),
+          average: sumEarlier.divRound(months - 1),
+        }
+      })
+      categories.sort(
+        (a, b) => b.current.cmp(a.current) || b.average.cmp(a.average) || compareStrings(a.category, b.category),
+      )
+      const data: SpendingTrend = {
+        months: trendMonths,
+        current: at(totals, period).toString(),
+        previous: at(totals, prev).toString(),
+        average: earlier.divRound(months - 1).toString(),
+        categories: categories.map(
+          (c): CategoryTrend => ({
+            category: c.category,
+            current: c.current.toString(),
+            previous: c.previous.toString(),
+            average: c.average.toString(),
+          }),
+        ),
+      }
+      return { data }
+    },
+
+    // ---------- recurring detection ----------
+
+    async DetectRecurring(period: string): Promise<RecurringResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const from = addMonths(period, -(recurringWindowMonths - 1))
+      const insts = db
+        .query(
+          `SELECT * FROM installments WHERE user_id = ? AND period >= ? AND period <= ?
+           AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL AND kind = ?)`,
+          [uid(), from, period, KindUnico],
+        )
+        .map(rowToInstallment)
+      const exById = expenseMapActive(insts.map((i) => i.expenseId))
+      const groups = new Map<string, RecurringHit[]>()
+      for (const inst of insts) {
+        const ex = exById.get(inst.expenseId)
+        if (!ex) continue
+        const key = normalizeKey(ex.merchant) || normalizeKey(ex.description)
+        const list = groups.get(key) ?? []
+        list.push({ period: inst.period, amount: Money.fromString(inst.amount), ex })
+        groups.set(key, list)
+      }
+
+      const alreadyFixed = new Set<string>()
+      for (const fe of loadFixed(false).fixed) {
+        if (fe.endPeriod === '' || fe.endPeriod >= period) alreadyFixed.add(normalizeKey(fe.description))
+      }
+
+      const out: RecurringSuggestion[] = []
+      for (const hits of groups.values()) {
+        const sug = recurringFrom(hits)
+        if (!sug || alreadyFixed.has(normalizeKey(sug.description)) || alreadyFixed.has(normalizeKey(sug.merchant))) continue
+        out.push(sug)
+      }
+      out.sort((a, b) => b.periods.length - a.periods.length || compareStrings(a.description, b.description))
+      return { data: out }
+    },
+
     // ---------- trash (papelera) ----------
 
     async ListTrash(): Promise<TrashResult> {
@@ -1462,6 +1816,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           amount: ex.installmentAmount,
           deletedAt: ex.deletedAt ?? '',
         })
+      }
+
+      for (const r of db.query('SELECT * FROM savings_goals WHERE user_id = ? AND deleted_at IS NOT NULL', [uid()])) {
+        const g = rowToSavingsGoal(r)
+        out.push({ type: 'savingsgoal', id: g.id, description: g.name, amount: g.targetAmount, deletedAt: g.deletedAt ?? '' })
       }
 
       const { fixed, amountsByID } = loadFixed(true)

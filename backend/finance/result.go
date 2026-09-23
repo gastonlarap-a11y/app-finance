@@ -117,7 +117,8 @@ type MonthlySummary struct {
 	Gastos       types.Decimal   `json:"gastos"`
 	Pendiente    types.Decimal   `json:"pendiente"`
 	Pagado       types.Decimal   `json:"pagado"`
-	Balance      types.Decimal   `json:"balance"`
+	Ahorro       types.Decimal   `json:"ahorro"`  // aportes a metas del mes (salen del disponible)
+	Balance      types.Decimal   `json:"balance"` // disponible − gastos − ahorro
 	Alcanza      bool            `json:"alcanza"`
 	PorCategoria []CategoryTotal `json:"porCategoria"`
 	PorTarjeta   []CardDebt      `json:"porTarjeta"`
@@ -159,7 +160,8 @@ type YearMonth struct {
 	Period   string        `json:"period"`
 	Ingresos types.Decimal `json:"ingresos"`
 	Gastos   types.Decimal `json:"gastos"`
-	Balance  types.Decimal `json:"balance"` // neto del mes (ingresos − gastos)
+	Ahorro   types.Decimal `json:"ahorro"`  // aportes a metas del mes
+	Balance  types.Decimal `json:"balance"` // neto del mes (ingresos − gastos − ahorro)
 	Saldo    types.Decimal `json:"saldo"`   // saldo acumulado al cierre del mes
 	Alcanza  bool          `json:"alcanza"`
 }
@@ -171,6 +173,7 @@ type YearSummary struct {
 	CategoriaMeses []CategoryYearRow `json:"categoriaMeses"`
 	TotalIngresos  types.Decimal     `json:"totalIngresos"`
 	TotalGastos    types.Decimal     `json:"totalGastos"`
+	TotalAhorro    types.Decimal     `json:"totalAhorro"`
 	TotalBalance   types.Decimal     `json:"totalBalance"`
 }
 
@@ -196,15 +199,89 @@ type ForecastMonth struct {
 	Cuotas          types.Decimal `json:"cuotas"`
 	Fijos           types.Decimal `json:"fijos"`
 	Comprometido    types.Decimal `json:"comprometido"` // cuotas + fijos
+	Ahorro          types.Decimal `json:"ahorro"`       // aportes a metas ya registrados para ese mes
 	Ingresos        types.Decimal `json:"ingresos"`
 	IngresoEstimado bool          `json:"ingresoEstimado"` // sin sueldo cargado: se usa el último conocido
-	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido
+	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido − ahorro
 	SaldoProyectado types.Decimal `json:"saldoProyectado"` // saldo acumulado al cierre si sólo ocurre lo comprometido
 }
 
 type ForecastResult struct {
 	Data  []ForecastMonth  `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// --- Savings goals ---
+
+type SavingsGoalResult struct {
+	Data  *SavingsGoal     `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+type SavingsContributionResult struct {
+	Data  *SavingsContribution `json:"data,omitempty"`
+	Error *shared.AppError     `json:"error,omitempty"`
+}
+
+// SavingsGoalView is a goal with its progress. MonthlyNeeded is what still has
+// to be saved per month (current month included) to reach the target by
+// TargetPeriod; zero without a target month, once reached, or when it passed.
+type SavingsGoalView struct {
+	SavingsGoal
+	Saved         types.Decimal         `json:"saved"`
+	Remaining     types.Decimal         `json:"remaining"`
+	MonthsLeft    int                   `json:"monthsLeft"`
+	MonthlyNeeded types.Decimal         `json:"monthlyNeeded"`
+	Contributions []SavingsContribution `json:"contributions"` // newest first
+}
+
+// --- Spending trend ---
+
+// TrendMonth is one month's totals in a trend window.
+type TrendMonth struct {
+	Period string        `json:"period"`
+	Gastos types.Decimal `json:"gastos"`
+}
+
+// CategoryTrend compares a category's spend in the selected month with the
+// previous month and with the average of the months before it in the window.
+type CategoryTrend struct {
+	Category string        `json:"category"`
+	Current  types.Decimal `json:"current"`
+	Previous types.Decimal `json:"previous"`
+	Average  types.Decimal `json:"average"` // promedio de los meses anteriores de la ventana (redondeado)
+}
+
+type SpendingTrend struct {
+	Months     []TrendMonth    `json:"months"` // oldest first, the selected month last
+	Current    types.Decimal   `json:"current"`
+	Previous   types.Decimal   `json:"previous"`
+	Average    types.Decimal   `json:"average"`
+	Categories []CategoryTrend `json:"categories"` // by current spend, descending
+}
+
+type SpendingTrendResult struct {
+	Data  *SpendingTrend   `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// --- Recurring detection ---
+
+// RecurringSuggestion is a one-off expense that keeps coming back every month
+// with a similar amount — a candidate to become a fixed expense.
+type RecurringSuggestion struct {
+	Description string        `json:"description"`
+	Merchant    string        `json:"merchant"`
+	Category    string        `json:"category"`
+	CardID      *int64        `json:"cardId"`
+	Amount      types.Decimal `json:"amount"`  // monto más reciente
+	Periods     []string      `json:"periods"` // meses en que apareció (ascendente)
+	NextPeriod  string        `json:"nextPeriod"`
+}
+
+type RecurringResult struct {
+	Data  []RecurringSuggestion `json:"data,omitempty"`
+	Error *shared.AppError      `json:"error,omitempty"`
 }
 
 // --- Expense search ---

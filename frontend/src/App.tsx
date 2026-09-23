@@ -6,6 +6,7 @@ import { MonthView } from '@/components/MonthView'
 import { YearView } from '@/components/YearView'
 import { ForecastView } from '@/components/ForecastView'
 import { SearchView } from '@/components/SearchView'
+import { SavingsView } from '@/components/SavingsView'
 import { CardsView } from '@/components/CardsView'
 import { CategoriesView } from '@/components/CategoriesView'
 import { MerchantsView } from '@/components/MerchantsView'
@@ -21,6 +22,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'anio', label: 'Año' },
   { id: 'proyeccion', label: 'Proyección' },
   { id: 'buscar', label: 'Buscar' },
+  { id: 'ahorro', label: 'Ahorro' },
   { id: 'fijos', label: 'Fijos' },
   { id: 'tarjetas', label: 'Tarjetas' },
   { id: 'categorias', label: 'Categorías' },
@@ -129,6 +131,7 @@ function App() {
         {tab === 'anio' && <YearView />}
         {tab === 'proyeccion' && <ForecastView />}
         {tab === 'buscar' && <SearchView />}
+        {tab === 'ahorro' && <SavingsView />}
         {tab === 'fijos' && <FixedExpensesView />}
         {tab === 'tarjetas' && <CardsView />}
         {tab === 'categorias' && <CategoriesView />}

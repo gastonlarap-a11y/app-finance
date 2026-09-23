@@ -33,6 +33,21 @@ func (d Decimal) Sub(o Decimal) Decimal { return Decimal{d.Decimal.Sub(o.Decimal
 // MulInt returns d × n (e.g. a monthly amount over n months).
 func (d Decimal) MulInt(n int64) Decimal { return Decimal{d.Decimal.Mul(decimal.NewFromInt(n))} }
 
+// DivCeil returns d / n rounded up to a whole unit (CLP has no cents): the
+// smallest per-month amount that still reaches d in n months. n must be > 0.
+func (d Decimal) DivCeil(n int64) Decimal {
+	return Decimal{d.Decimal.Div(decimal.NewFromInt(n)).Ceil()}
+}
+
+// DivRound returns d / n rounded half away from zero to a whole unit (averages
+// of CLP amounts). n must be > 0.
+func (d Decimal) DivRound(n int64) Decimal {
+	return Decimal{d.Decimal.Div(decimal.NewFromInt(n)).Round(0)}
+}
+
+// Abs returns |d|.
+func (d Decimal) Abs() Decimal { return Decimal{d.Decimal.Abs()} }
+
 // GTE reports whether d >= o. IsNegative/IsZero are promoted from decimal.Decimal.
 func (d Decimal) GTE(o Decimal) bool { return d.Decimal.Cmp(o.Decimal) >= 0 }
 
