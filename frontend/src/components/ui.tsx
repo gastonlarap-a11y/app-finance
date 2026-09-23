@@ -1,5 +1,7 @@
-import type { ChangeEvent, ReactNode, SelectHTMLAttributes } from 'react'
+import { useEffect, useId, useRef, type ChangeEvent, type ReactNode, type SelectHTMLAttributes } from 'react'
+import { useAtomValue } from 'jotai'
 import { formatThousands, parseThousands } from '@/lib/format'
+import { dismiss, noticesAtom } from '@/lib/notify'
 
 export const inputCls =
   'h-10 w-full rounded bg-surface px-3 py-2 text-slate-100 outline-none ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -84,18 +86,102 @@ export function Button({
   )
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+// Icon-only button: the visible glyph is decorative, so an accessible name is
+// mandatory (screen readers would otherwise read "wastebasket" or nothing).
+export function IconButton({
+  label,
+  onClick,
+  children,
+  className = 'text-slate-400 hover:text-slate-200',
+}: {
+  label: string
+  onClick: () => void
+  children: ReactNode
+  className?: string
+}) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-base bg-surface-alt p-6 shadow-2xl ring-1 ring-slate-700">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-xl leading-none text-slate-400 hover:text-slate-200">
-            ✕
-          </button>
-        </div>
-        {children}
+    <button type="button" onClick={onClick} aria-label={label} title={label} className={`rounded px-1 ${className}`}>
+      <span aria-hidden="true">{children}</span>
+    </button>
+  )
+}
+
+// Modal is a native <dialog> opened with showModal(): the browser provides the
+// focus trap, Escape to close (→ onClose via the cancel event), inert
+// background and ::backdrop. Mount it only while it should be open.
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    if (!dialog.open) dialog.showModal()
+    // React's autoFocus runs while the dialog is still closed (display: none),
+    // so it is a no-op and showModal() lands on the first focusable — the close
+    // button. Move focus to the first form field instead.
+    dialog.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')?.focus()
+    return () => dialog.close()
+  }, [])
+
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      onCancel={(e) => {
+        e.preventDefault() // let React unmount it, keeping state in charge
+        onClose()
+      }}
+      className="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-base bg-surface-alt p-6 text-slate-100 shadow-2xl ring-1 ring-slate-700 backdrop:bg-black/60"
+    >
+      <div className="mb-4 flex items-center justify-between">
+        <h3 id={titleId} className="text-lg font-semibold">
+          {title}
+        </h3>
+        <IconButton label="Cerrar" onClick={onClose} className="text-xl leading-none text-slate-400 hover:text-slate-200">
+          ✕
+        </IconButton>
       </div>
+      {children}
+    </dialog>
+  )
+}
+
+// Toaster renders the in-app notices raised by notify() (errors, confirmations).
+export function Toaster() {
+  const notices = useAtomValue(noticesAtom)
+  return (
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex flex-col items-center gap-2 px-4">
+      {notices.map((n) => (
+        <div
+          key={n.id}
+          role={n.tone === 'error' ? 'alert' : 'status'}
+          className={`pointer-events-auto flex max-w-lg items-start gap-3 rounded-base px-4 py-3 text-sm shadow-xl ring-1 ${
+            n.tone === 'error'
+              ? 'bg-danger/15 text-red-200 ring-danger/40'
+              : n.tone === 'success'
+                ? 'bg-success/15 text-emerald-200 ring-success/40'
+                : 'bg-surface-alt text-slate-200 ring-slate-700'
+          }`}
+        >
+          <span className="flex-1">{n.message}</span>
+          <IconButton label="Descartar aviso" onClick={() => dismiss(n.id)} className="text-current opacity-70 hover:opacity-100">
+            ✕
+          </IconButton>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// QueryError is the inline failure state for a view whose data could not load.
+export function QueryError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div role="alert" className="space-y-3 rounded-base bg-danger/10 p-6 text-center ring-1 ring-danger/30">
+      <p className="text-red-200">No se pudieron cargar los datos: {message}</p>
+      <Button variant="ghost" onClick={onRetry}>
+        Reintentar
+      </Button>
     </div>
   )
 }
@@ -131,12 +217,14 @@ type MoneyInputProps = {
   required?: boolean
   autoFocus?: boolean
   className?: string
+  // Only needed when the input is not wrapped in a <Field> label.
+  'aria-label'?: string
 }
 
 // Text input that displays its numeric value with es-CL thousands separators
 // (e.g. "1.500.000") while keeping a clean digit-only string as the real value,
 // so users can spot an extra zero before saving.
-export function MoneyInput({ value, onChange, placeholder, required, autoFocus, className }: MoneyInputProps) {
+export function MoneyInput({ value, onChange, placeholder, required, autoFocus, className, 'aria-label': ariaLabel }: MoneyInputProps) {
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     onChange(parseThousands(e.target.value))
   }
@@ -150,15 +238,18 @@ export function MoneyInput({ value, onChange, placeholder, required, autoFocus, 
       placeholder={placeholder}
       required={required}
       autoFocus={autoFocus}
+      aria-label={ariaLabel}
     />
   )
 }
 
-export function Bar({ value, max, tone = 'primary' }: { value: number; max: number; tone?: 'primary' | 'danger' | 'success' }) {
-  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
-  const bg = tone === 'danger' ? 'bg-danger' : tone === 'success' ? 'bg-success' : 'bg-primary'
+// Bar is a display-only progress bar; `fill` is a 0..1 proportion (see
+// lib/money ratio, which computes it from decimal strings).
+export function Bar({ fill, tone = 'primary' }: { fill: number; tone?: 'primary' | 'danger' | 'success' | 'warning' }) {
+  const pct = Math.min(100, Math.max(0, fill * 100))
+  const bg = { danger: 'bg-danger', success: 'bg-success', warning: 'bg-warning', primary: 'bg-primary' }[tone]
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-surface">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-surface" aria-hidden="true">
       <div className={`h-full ${bg}`} style={{ width: `${pct}%` }} />
     </div>
   )
@@ -169,5 +260,9 @@ export function Empty({ children }: { children: ReactNode }) {
 }
 
 export function Spinner() {
-  return <div className="p-6 text-center text-slate-500">Cargando…</div>
+  return (
+    <div role="status" className="p-6 text-center text-slate-500">
+      Cargando…
+    </div>
+  )
 }

@@ -45,3 +45,24 @@ func TestAddMonths(t *testing.T) {
 		t.Fatalf("addMonths cruce de año = %q, want 2027-01", got)
 	}
 }
+
+func TestMonthsBetween(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want int
+	}{
+		{"mismo mes", "2026-05", "2026-05", 0},
+		{"dentro del año", "2026-01", "2026-12", 11},
+		{"cruce de año", "2026-11", "2027-02", 3},
+		{"hacia atrás es negativo", "2027-02", "2026-11", -3},
+		{"período inválido cuenta 0", "2026-13", "2026-01", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := monthsBetween(tt.a, tt.b); got != tt.want {
+				t.Fatalf("monthsBetween(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}

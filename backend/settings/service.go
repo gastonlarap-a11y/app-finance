@@ -98,9 +98,8 @@ func (s *Service) ConnectDrive(ctx context.Context) OpResult {
 	if err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
-	p := prefs.Load(s.appName)
-	p.DriveEmail = s.drive.AccountEmail(ctx)
-	_ = prefs.Save(s.appName, p)
+	email := s.drive.AccountEmail(ctx)
+	prefs.Update(s.appName, func(p *prefs.Prefs) { p.DriveEmail = email })
 	return OpResult{}
 }
 
@@ -108,11 +107,11 @@ func (s *Service) DisconnectDrive(ctx context.Context) OpResult {
 	if err := s.drive.Disconnect(); err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
-	p := prefs.Load(s.appName)
-	p.DriveFolderID = ""
-	p.DriveFileID = ""
-	p.DriveEmail = ""
-	_ = prefs.Save(s.appName, p)
+	prefs.Update(s.appName, func(p *prefs.Prefs) {
+		p.DriveFolderID = ""
+		p.DriveFileID = ""
+		p.DriveEmail = ""
+	})
 	return OpResult{}
 }
 

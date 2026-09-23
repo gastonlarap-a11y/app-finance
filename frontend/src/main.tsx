@@ -31,7 +31,7 @@ function UnsupportedStorage() {
 // console to check, so surface whatever escaped.
 function reportEngineFailures(root: ReactDOM.Root) {
   window.addEventListener('unhandledrejection', (e) => {
-    const reason = e.reason
+    const reason: unknown = e.reason
     root.render(
       <React.StrictMode>
         <Fatal title="La app no pudo cargar tus datos">

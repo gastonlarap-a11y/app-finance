@@ -1,13 +1,19 @@
 // Wrapper around the generated SettingsService bindings (DB folder, Google Drive,
 // backups). The Go struct is `settings.Service`, so the binding namespace is `Service`.
-export {
-  Service as SettingsService,
-  State as SettingsState,
-  StateResult,
-  ApplyFolderResult,
-  ChooseFolderResult,
-  BackupResult,
-  OpResult,
-} from '@/../bindings/github.com/gastonlarap-a11y/app-finance/backend/settings'
+//
+// Typed as the hand-written contract (same scheme as services/finance.ts): the
+// generated models type time.Time as `any`, and tsc proves the bindings match.
+import { Service as Bound } from '@/../bindings/github.com/gastonlarap-a11y/app-finance/backend/settings'
+import type { SettingsServiceContract } from '@/services/contract'
 
-export { Info as BackupInfo } from '@/../bindings/github.com/gastonlarap-a11y/app-finance/backend/shared/backup'
+export const SettingsService: SettingsServiceContract = Bound
+
+export type {
+  ApplyFolderResult,
+  BackupInfo,
+  BackupResult,
+  ChooseFolderResult,
+  OpResult,
+  SettingsState,
+  StateResult,
+} from '@/services/contract'

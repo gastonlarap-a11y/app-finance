@@ -25,6 +25,17 @@ func addMonths(period string, n int) string {
 	return t.AddDate(0, n, 0).Format(periodLayout)
 }
 
+// monthsBetween returns how many months b is after a (negative when b < a).
+// Both must be valid periods; an unparseable one counts as 0 months apart.
+func monthsBetween(a, b string) int {
+	ta, errA := time.Parse(periodLayout, a)
+	tb, errB := time.Parse(periodLayout, b)
+	if errA != nil || errB != nil {
+		return 0
+	}
+	return (tb.Year()-ta.Year())*12 + int(tb.Month()-ta.Month())
+}
+
 // currentPeriod is today's YYYY-MM.
 func currentPeriod() string { return time.Now().Format(periodLayout) }
 

@@ -3,59 +3,35 @@
 // is native-only: those methods answer with a business error so any code path
 // that still reaches them fails visibly instead of silently. The web-only
 // backup story is export/import of the SQLite file (see exportDb/importDb).
-import type { AppError } from '@/services/contract'
+import type {
+  AppError,
+  ApplyFolderResult,
+  BackupResult,
+  ChooseFolderResult,
+  OpResult,
+  SettingsServiceContract,
+  StateResult,
+} from '@/services/contract'
 import { exportDbBytes, importDbBytes } from '@/services/web/worker-client'
 import type { ImportSummary } from '@/engine/db/worker'
 
 export type { ImportSummary }
-
-export interface SettingsState {
-  dbFolder: string
-  driveConnected: boolean
-  driveEmail: string
-  driveFolderName: string
-  clientIdConfigured: boolean
-  backupOnClose: boolean
-  lastBackup: string | null
-  backupLocalDir: string
-}
-
-export interface StateResult {
-  data?: SettingsState | null
-  error?: AppError | null
-}
-
-export interface ChooseFolderResult {
-  canceled?: boolean
-  path?: string
-  error?: AppError | null
-}
-
-export interface ApplyFolderResult {
-  needsRestart?: boolean
-  path?: string
-  error?: AppError | null
-}
-
-export interface BackupInfo {
-  uploaded: boolean
-}
-
-export interface BackupResult {
-  data?: BackupInfo | null
-  error?: AppError | null
-}
-
-export interface OpResult {
-  error?: AppError | null
-}
+export type {
+  ApplyFolderResult,
+  BackupInfo,
+  BackupResult,
+  ChooseFolderResult,
+  OpResult,
+  SettingsState,
+  StateResult,
+} from '@/services/contract'
 
 const WEB_ONLY: AppError = {
   code: 'VALIDATION_ERROR',
   message: 'No disponible en la versión web. Usa Exportar/Importar en Ajustes.',
 }
 
-export const SettingsService = {
+export const SettingsService: SettingsServiceContract = {
   async GetState(): Promise<StateResult> {
     return {
       data: {

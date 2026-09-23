@@ -30,8 +30,17 @@ func Zero() Decimal { return Decimal{decimal.Zero} }
 func (d Decimal) Add(o Decimal) Decimal { return Decimal{d.Decimal.Add(o.Decimal)} }
 func (d Decimal) Sub(o Decimal) Decimal { return Decimal{d.Decimal.Sub(o.Decimal)} }
 
+// MulInt returns d × n (e.g. a monthly amount over n months).
+func (d Decimal) MulInt(n int64) Decimal { return Decimal{d.Decimal.Mul(decimal.NewFromInt(n))} }
+
 // GTE reports whether d >= o. IsNegative/IsZero are promoted from decimal.Decimal.
 func (d Decimal) GTE(o Decimal) bool { return d.Decimal.Cmp(o.Decimal) >= 0 }
+
+// GT reports whether d > o.
+func (d Decimal) GT(o Decimal) bool { return d.Decimal.Cmp(o.Decimal) > 0 }
+
+// Cmp returns -1, 0 or +1 as d is less than, equal to or greater than o.
+func (d Decimal) Cmp(o Decimal) int { return d.Decimal.Cmp(o.Decimal) }
 
 // Value implements driver.Valuer — stored as a string.
 func (d Decimal) Value() (driver.Value, error) {

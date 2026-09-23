@@ -50,6 +50,9 @@ build/android/
 build/ios/
 build/docker/
 
+# Artefactos de verificación con Playwright MCP (snapshots, capturas)
+.playwright-mcp/
+
 # Binarios auto-generados durante el build
 build/darwin/Assets.car
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

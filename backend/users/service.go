@@ -7,6 +7,7 @@ package users
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/uptrace/bun"
@@ -38,7 +39,7 @@ func (s *UsersService) ListUsers(ctx context.Context) ([]User, error) {
 func (s *UsersService) ActiveUser(ctx context.Context) UserResult {
 	u := new(User)
 	if err := s.db.NewSelect().Model(u).Where("id = ?", s.session.Active()).Scan(ctx); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return UserResult{Error: shared.NewError(shared.ErrNotFound, "usuario activo no encontrado")}
 		}
 		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
@@ -64,7 +65,7 @@ func (s *UsersService) CreateUser(ctx context.Context, name string) UserResult {
 func (s *UsersService) SwitchUser(ctx context.Context, id int64) UserResult {
 	u := new(User)
 	if err := s.db.NewSelect().Model(u).Where("id = ?", id).Scan(ctx); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return UserResult{Error: shared.NewError(shared.ErrNotFound, "usuario no encontrado")}
 		}
 		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
@@ -81,63 +82,83 @@ func (s *UsersService) RenameUser(ctx context.Context, id int64, name string) Us
 	}
 	res, err := s.db.NewUpdate().Model((*User)(nil)).
 		Set("name = ?", name).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return UserResult{Error: shared.NewError(shared.ErrNotFound, "usuario no encontrado")}
+	if err := requireOne(res, err, "usuario no encontrado"); err != nil {
+		return UserResult{Error: err}
 	}
 	return UserResult{Data: &User{ID: id, Name: name}}
 }
 
-// setActive updates the in-memory session and persists the choice to prefs.
+// setActive updates the in-memory session and persists the choice to prefs
+// (best-effort: a failed save only means the next launch resumes elsewhere).
 func (s *UsersService) setActive(id int64) {
 	s.session.SetActive(id)
-	p := prefs.Load(s.appName)
-	p.ActiveUserID = id
-	_ = prefs.Save(s.appName, p)
+	prefs.Update(s.appName, func(p *prefs.Prefs) { p.ActiveUserID = id })
 }
 
 // DeleteUser soft-deletes a profile. At least one active user must always
 // remain. If the deleted user was active, the session switches to another
 // remaining user (instant, no manual step — mirrors SwitchUser's UX).
 func (s *UsersService) DeleteUser(ctx context.Context, id int64) UserResult {
-	count, err := s.db.NewSelect().Model((*User)(nil)).Count(ctx)
+	next := new(User)
+	// Count + delete + pick-next run in one transaction so two concurrent
+	// deletes can never remove the last remaining profile.
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		count, err := tx.NewSelect().Model((*User)(nil)).Count(ctx)
+		if err != nil {
+			return err
+		}
+		if count <= 1 {
+			return shared.NewError(shared.ErrConflict, "no podés eliminar el último usuario")
+		}
+		res, err := tx.NewDelete().Model((*User)(nil)).Where("id = ?", id).Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if aerr := requireOne(res, nil, "usuario no encontrado"); aerr != nil {
+			return aerr
+		}
+		return tx.NewSelect().Model(next).Order("id ASC").Limit(1).Scan(ctx)
+	})
 	if err != nil {
-		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
-	}
-	if count <= 1 {
-		return UserResult{Error: shared.NewError(shared.ErrConflict, "no podés eliminar el último usuario")}
-	}
-	res, err := s.db.NewDelete().Model((*User)(nil)).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return UserResult{Error: shared.NewError(shared.ErrNotFound, "usuario no encontrado")}
+		return UserResult{Error: toAppError(err)}
 	}
 	if id != s.session.Active() {
 		return UserResult{}
 	}
-	next := new(User)
-	if err := s.db.NewSelect().Model(next).Order("id ASC").Limit(1).Scan(ctx); err != nil {
-		return UserResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
-	}
 	s.setActive(next.ID)
 	return UserResult{Data: next}
+}
+
+// toAppError surfaces an *AppError raised inside a transaction as-is and wraps
+// any other error as internal.
+func toAppError(err error) *shared.AppError {
+	if ae, ok := errors.AsType[*shared.AppError](err); ok {
+		return ae
+	}
+	return shared.NewError(shared.ErrInternal, err.Error())
 }
 
 // RestoreUser undoes a soft delete.
 func (s *UsersService) RestoreUser(ctx context.Context, id int64) OpResult {
 	res, err := s.db.NewUpdate().Model((*User)(nil)).WhereAllWithDeleted().
 		Set("deleted_at = NULL").Where("id = ? AND deleted_at IS NOT NULL", id).Exec(ctx)
+	return OpResult{Error: requireOne(res, err, "usuario no encontrado o no estaba eliminado")}
+}
+
+// requireOne turns an Exec outcome into a Result error: a system error becomes
+// ErrInternal and zero affected rows becomes ErrNotFound with notFoundMsg.
+func requireOne(res sql.Result, err error, notFoundMsg string) *shared.AppError {
 	if err != nil {
-		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+		return shared.NewError(shared.ErrInternal, err.Error())
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return OpResult{Error: shared.NewError(shared.ErrNotFound, "usuario no encontrado o no estaba eliminado")}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return shared.NewError(shared.ErrInternal, err.Error())
 	}
-	return OpResult{}
+	if n == 0 {
+		return shared.NewError(shared.ErrNotFound, notFoundMsg)
+	}
+	return nil
 }
 
 // ListDeletedUsers returns every soft-deleted profile, oldest first.

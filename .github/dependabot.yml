@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ['*']
+        exclude-patterns:
+          # Wails v3 is a pinned pre-release: the Go lib, the wails3 CLI and
+          # @wailsio/runtime must move together (see AGENTS.md → Versions).
+          - github.com/wailsapp/wails/v3
+    ignore:
+      - dependency-name: github.com/wailsapp/wails/v3
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-dev:
+        dependency-type: development
+      npm-prod:
+        dependency-type: production
+        exclude-patterns:
+          - '@wailsio/runtime'
+    ignore:
+      - dependency-name: '@wailsio/runtime'
+      # typescript-eslint supports TypeScript < 6.1; TS 7 waits for its 7.1 API.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

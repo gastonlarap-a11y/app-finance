@@ -1,32 +1,30 @@
-import { useEffect, useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useState, type SubmitEvent } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, type Card } from '@/services/finance'
 import { refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
+import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
-import { Button, Empty, Field, Modal, MoneyInput, Section, inputCls } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
 
 export function CardsView() {
-  const [refresh] = useAtom(refreshAtom)
+  const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
-  const [cards, setCards] = useState<Card[]>([])
   const [editing, setEditing] = useState<Card | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [confirmId, setConfirmId] = useState<number | null>(null)
 
-  useEffect(() => {
-    let active = true
-    FinanceService.ListCards().then((cs) => active && setCards(cs ?? []))
-    return () => {
-      active = false
-    }
-  }, [refresh])
+  const query = useQuery(String(refresh), () => FinanceService.ListCards())
 
   async function remove(id: number) {
     setConfirmId(null)
     const res = await FinanceService.DeleteCard(id)
     if (!failed(res)) bump((n) => n + 1)
   }
+
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (!query.data) return <Spinner />
+  const cards = query.data
 
   return (
     <Section
@@ -95,17 +93,17 @@ export function CardsView() {
 function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () => void; onSaved: () => void }) {
   const editing = !!card
   const [name, setName] = useState(card?.name ?? '')
-  const [limit, setLimit] = useState(card ? String(card.creditLimit ?? '') : '')
+  const [limit, setLimit] = useState(card?.creditLimit ?? '')
   const [billingDay, setBillingDay] = useState(String(card?.billingDay ?? 24))
   const [busy, setBusy] = useState(false)
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
     try {
       const day = Math.min(28, Math.max(1, Number(billingDay) || 24))
-      const res = editing
-        ? await FinanceService.UpdateCard(card!.id, name, limit || '0', day)
+      const res = card
+        ? await FinanceService.UpdateCard(card.id, name, limit || '0', day)
         : await FinanceService.CreateCard(name, limit || '0', day)
       if (failed(res)) return
       onSaved()

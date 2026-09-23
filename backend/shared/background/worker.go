@@ -24,9 +24,8 @@ func New(bufferSize int) *Worker {
 
 func (w *Worker) Start(ctx context.Context, concurrency int) {
 	ctx, w.cancel = context.WithCancel(ctx)
-	for i := 0; i < concurrency; i++ {
-		w.wg.Add(1)
-		go w.run(ctx)
+	for range concurrency {
+		w.wg.Go(func() { w.run(ctx) })
 	}
 }
 
@@ -47,7 +46,6 @@ func (w *Worker) Stop() {
 }
 
 func (w *Worker) run(ctx context.Context) {
-	defer w.wg.Done()
 	for {
 		select {
 		case task := <-w.queue:

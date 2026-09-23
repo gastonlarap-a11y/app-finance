@@ -123,6 +123,31 @@ type MonthlySummary struct {
 	PorTarjeta   []CardDebt      `json:"porTarjeta"`
 	Movimientos  []Movimiento    `json:"movimientos"`
 	Incomes      []Income        `json:"incomes"`
+	Presupuestos []BudgetStatus  `json:"presupuestos"` // sólo categorías con tope vigente
+}
+
+// BudgetStatus compares a category's monthly cap with what the month charges to it
+// (installments + fixed expenses, paid or not — the same total as PorCategoria).
+type BudgetStatus struct {
+	CategoryID int64         `json:"categoryId"`
+	Category   string        `json:"category"`
+	Budget     types.Decimal `json:"budget"`
+	Spent      types.Decimal `json:"spent"`
+	Remaining  types.Decimal `json:"remaining"` // negativo cuando se excede
+	Over       bool          `json:"over"`
+}
+
+// CategoryBudgetView is the cap in effect for one category at a given month.
+type CategoryBudgetView struct {
+	CategoryID    int64         `json:"categoryId"`
+	Category      string        `json:"category"`
+	Amount        types.Decimal `json:"amount"`
+	EffectiveFrom string        `json:"effectiveFrom"` // YYYY-MM desde el que rige
+}
+
+type CategoryBudgetsResult struct {
+	Data  []CategoryBudgetView `json:"data,omitempty"`
+	Error *shared.AppError     `json:"error,omitempty"`
 }
 
 type MonthlySummaryResult struct {
@@ -140,16 +165,80 @@ type YearMonth struct {
 }
 
 type YearSummary struct {
-	Year          int             `json:"year"`
-	Months        []YearMonth     `json:"months"`
-	PorCategoria  []CategoryTotal `json:"porCategoria"`
-	TotalIngresos types.Decimal   `json:"totalIngresos"`
-	TotalGastos   types.Decimal   `json:"totalGastos"`
-	TotalBalance  types.Decimal   `json:"totalBalance"`
+	Year           int               `json:"year"`
+	Months         []YearMonth       `json:"months"`
+	PorCategoria   []CategoryTotal   `json:"porCategoria"`
+	CategoriaMeses []CategoryYearRow `json:"categoriaMeses"`
+	TotalIngresos  types.Decimal     `json:"totalIngresos"`
+	TotalGastos    types.Decimal     `json:"totalGastos"`
+	TotalBalance   types.Decimal     `json:"totalBalance"`
+}
+
+// CategoryYearRow is one category's spending per month of a year: Months always
+// has 12 entries (January first), Total is their sum.
+type CategoryYearRow struct {
+	Category string          `json:"category"`
+	Months   []types.Decimal `json:"months"`
+	Total    types.Decimal   `json:"total"`
 }
 
 type YearSummaryResult struct {
 	Data  *YearSummary     `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// --- Commitments forecast (proyección) ---
+
+// ForecastMonth is what a future month already has committed: remaining
+// installments plus active fixed expenses, against the income expected for it.
+type ForecastMonth struct {
+	Period          string        `json:"period"`
+	Cuotas          types.Decimal `json:"cuotas"`
+	Fijos           types.Decimal `json:"fijos"`
+	Comprometido    types.Decimal `json:"comprometido"` // cuotas + fijos
+	Ingresos        types.Decimal `json:"ingresos"`
+	IngresoEstimado bool          `json:"ingresoEstimado"` // sin sueldo cargado: se usa el último conocido
+	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido
+	SaldoProyectado types.Decimal `json:"saldoProyectado"` // saldo acumulado al cierre si sólo ocurre lo comprometido
+}
+
+type ForecastResult struct {
+	Data  []ForecastMonth  `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// --- Expense search ---
+
+// ExpenseFilter narrows SearchExpenses. Empty strings / nil mean "any". The period
+// range matches expenses with at least one installment inside it.
+type ExpenseFilter struct {
+	Text       string `json:"text"` // descripción o comercio (contiene)
+	Category   string `json:"category"`
+	CardID     *int64 `json:"cardId"`
+	FromPeriod string `json:"fromPeriod"` // YYYY-MM
+	ToPeriod   string `json:"toPeriod"`   // YYYY-MM
+	Limit      int    `json:"limit"`      // default 50, máximo 200
+	Offset     int    `json:"offset"`
+}
+
+// ExpenseHit is one search result: the expense with its card name and the span
+// and progress of its installments.
+type ExpenseHit struct {
+	Expense     Expense       `json:"expense"`
+	CardName    string        `json:"cardName"`
+	FirstPeriod string        `json:"firstPeriod"`
+	LastPeriod  string        `json:"lastPeriod"`
+	Total       types.Decimal `json:"total"` // monto cuota × cuotas
+	PaidCount   int           `json:"paidCount"`
+}
+
+type ExpenseSearch struct {
+	Items []ExpenseHit `json:"items"`
+	Count int          `json:"count"` // total de coincidencias (para paginar)
+}
+
+type ExpenseSearchResult struct {
+	Data  *ExpenseSearch   `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
 }
 

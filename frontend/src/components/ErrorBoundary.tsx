@@ -1,7 +1,5 @@
 import React from 'react'
-
-// After `wails3 generate bindings`, report errors to Go:
-//   import { DiagnosticsService } from '@/../bindings/github.com/gastonlarap-a11y/app-finance/backend/diagnostics'
+import { reportRenderError } from '@/services/diagnostics'
 
 interface Props {
   children: React.ReactNode
@@ -11,31 +9,31 @@ interface State {
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
-  constructor(props: Props) {
-    super(props)
-    this.state = { hasError: false }
-  }
+  override state: State = { hasError: false }
 
   static getDerivedStateFromError(): State {
     return { hasError: true }
   }
 
-  componentDidCatch(error: Error) {
-    // DiagnosticsService.ReportError(error.message, error.stack ?? '')
+  override componentDidCatch(error: Error) {
     console.error('ErrorBoundary caught a render error:', error)
+    reportRenderError(error.message, error.stack ?? '').catch((err: unknown) => {
+      console.error('could not report the render error:', err)
+    })
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-surface text-slate-100">
-          <h1 className="text-2xl font-bold text-red-400">Something went wrong</h1>
-          <p className="text-slate-400">The app hit an unexpected error.</p>
+        <div role="alert" className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface text-slate-100">
+          <h1 className="text-2xl font-bold text-danger">Algo salió mal</h1>
+          <p className="text-slate-400">La app encontró un error inesperado. Tus datos no se perdieron.</p>
           <button
+            type="button"
             onClick={() => this.setState({ hasError: false })}
             className="rounded bg-primary px-4 py-2 font-medium"
           >
-            Reload
+            Reintentar
           </button>
         </div>
       )

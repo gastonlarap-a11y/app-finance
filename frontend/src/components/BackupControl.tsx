@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { refreshAtom, tabAtom } from '@/atoms/finance'
-import { lazy, Suspense } from 'react'
+import { refreshAtom } from '@/atoms/finance'
 import { SettingsService, type SettingsState } from '@/services/settings'
+import { notify } from '@/lib/notify'
+import { useQuery } from '@/lib/useQuery'
 import { Button } from './ui'
 
 // import.meta.env.VITE_TARGET is inlined by `define` at transform time, so the
@@ -13,9 +14,9 @@ const WebExportControl =
     ? lazy(() => import('./WebBackup').then((m) => ({ default: m.WebExportControl })))
     : null
 
-function lastBackupLabel(s: SettingsState | null): string {
+function lastBackupLabel(s: SettingsState | undefined): string {
   if (!s?.lastBackup) return 'sin respaldos aún'
-  const d = new Date(String(s.lastBackup))
+  const d = new Date(s.lastBackup)
   return `último: ${d.toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })}`
 }
 
@@ -33,36 +34,32 @@ export function BackupControl() {
 }
 
 function DriveBackupControl() {
-  const [state, setState] = useState<SettingsState | null>(null)
   const [busy, setBusy] = useState(false)
-  // Reload when something changes elsewhere (e.g. connecting Drive in Settings)
-  // or when switching tabs — this header control never re-mounts on its own.
+  // Settings changes elsewhere (e.g. connecting Drive) bump refreshAtom, which
+  // refetches this header control — it never re-mounts on its own.
   const refresh = useAtomValue(refreshAtom)
-  const tab = useAtomValue(tabAtom)
   const bump = useSetAtom(refreshAtom)
 
-  const load = useCallback(() => {
-    SettingsService.GetState().then((r) => setState(r.data ?? null))
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load, refresh, tab])
+  const query = useQuery(String(refresh), async () => (await SettingsService.GetState()).data ?? undefined)
+  const state = query.data
 
   async function backupNow() {
     setBusy(true)
     try {
       const res = await SettingsService.BackupNow()
       if (res.error) {
-        window.alert('Respaldo: ' + res.error.message)
+        notify('Respaldo: ' + res.error.message)
       } else if (res.data) {
-        window.alert(
+        notify(
           res.data.uploaded
             ? '✓ Respaldo subido a Google Drive'
             : '✓ Respaldo local creado (conecta Google Drive en Ajustes para subirlo)',
+          'success',
         )
       }
       bump((n) => n + 1)
+    } catch (err) {
+      notify('Respaldo: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setBusy(false)
     }

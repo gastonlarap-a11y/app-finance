@@ -1,7 +1,6 @@
 package finance
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -23,7 +22,7 @@ func openTestDB(t *testing.T) *bun.DB {
 	}
 	sqldb.SetMaxOpenConns(1)
 	bdb := bun.NewDB(sqldb, sqlitedialect.New())
-	if err := db.RunMigrations(context.Background(), bdb); err != nil {
+	if err := db.RunMigrations(t.Context(), bdb); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 	t.Cleanup(func() { bdb.Close() })
@@ -35,7 +34,7 @@ func newTestService(t *testing.T) *FinanceService {
 }
 
 func TestSoftDeleteRestoreRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newTestService(t)
 
 	cardRes := s.CreateCard(ctx, "Itau", "1000000", 24)
@@ -149,7 +148,7 @@ func TestSoftDeleteRestoreRoundTrip(t *testing.T) {
 // A soft-deleted card must keep resolving its name on old movimientos (history),
 // while disappearing from the active card list/cupo summary.
 func TestDeleteCardKeepsHistoricalCardName(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newTestService(t)
 
 	cardRes := s.CreateCard(ctx, "Visa", "500000", 24)
@@ -201,7 +200,7 @@ func TestDeleteCardKeepsHistoricalCardName(t *testing.T) {
 // A soft-deleted expense's installment must not leak into MonthlySummary totals
 // (the Relation("Expense") join leaves Expense nil rather than dropping the row).
 func TestDeleteExpenseExcludedFromSummaryTotals(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newTestService(t)
 	period := currentPeriod()
 
@@ -248,7 +247,7 @@ func TestDeleteExpenseExcludedFromSummaryTotals(t *testing.T) {
 // Deleting and restoring a fixed expense must preserve its amount-override and
 // paid-status history, since those child tables are never touched.
 func TestFixedExpenseHistorySurvivesDeleteRestore(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newTestService(t)
 	period := currentPeriod()
 
@@ -304,7 +303,7 @@ func TestFixedExpenseHistorySurvivesDeleteRestore(t *testing.T) {
 // Restoring a category whose name was reused by a new active one must fail with
 // a conflict instead of violating the partial unique index silently.
 func TestRestoreCategoryNameConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newTestService(t)
 
 	catRes := s.CreateCategory(ctx, "Comida")

@@ -3,19 +3,27 @@
 // (sqlite-wasm) instead of the Go backend. Every query filters by the active
 // user id (session.active()), mirroring the desktop invariant.
 import type {
+  BudgetStatus,
   Card,
   CardDebt,
   CardResult,
+  CategoryBudgetView,
+  CategoryBudgetsResult,
   CategoryResult,
   CategoryTotal,
+  CategoryYearRow,
   Expense,
+  ExpenseFilter,
+  ExpenseHit,
   ExpenseResult,
+  ExpenseSearchResult,
   FinanceServiceContract,
   FixedExpense,
   FixedExpenseResult,
   FixedExpenseView,
+  ForecastMonth,
+  ForecastResult,
   Income,
-  Installment,
   MerchantResult,
   MonthlySummary,
   MonthlySummaryResult,
@@ -31,9 +39,9 @@ import type {
   YearSummaryResult,
 } from '@/services/contract'
 import { ErrConflict, ErrNotFound, ErrValidation, isUniqueViolation, newError } from '@/engine/errors'
-import { Money, parseAmount } from '@/engine/decimal'
-import { addMonths, currentPeriod, periodOf, validPeriod, type DateParts } from '@/engine/finance/period'
-import { activeIn, resolveFixedAmount } from '@/engine/finance/fixedexpense'
+import { Money } from '@/engine/decimal'
+import { addMonths, currentPeriod, monthOf, periodOf, validPeriod, type DateParts } from '@/engine/finance/period'
+import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
 import {
   KindCuotas,
   KindUnico,
@@ -53,7 +61,62 @@ import {
   rowToSettings,
   type FixedExpenseAmountRow,
 } from '@/engine/finance/models'
-import { asNumber, type SqlDb, type SqlValue } from '@/engine/db/types'
+import { asNumber, asString, type SqlDb, type SqlValue } from '@/engine/db/types'
+
+// compareStrings is Go's strings.Compare: byte-wise, locale-independent, so the
+// engine orders ties exactly like the desktop backend.
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+// uncategorized is the bucket for expenses without a category.
+const uncategorized = 'Sin categoría'
+
+// escapeLike escapes LIKE's wildcards so user text matches literally (used with
+// ESCAPE '\').
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => '\\' + c)
+}
+
+// CategoryMonths accumulates a year's spending per category and month (1..12).
+class CategoryMonths {
+  private readonly byCat = new Map<string, Money[]>()
+
+  add(category: string, period: string, amount: Money): void {
+    const cat = category !== '' ? category : uncategorized
+    const month = monthOf(period)
+    if (month < 1) return
+    let row = this.byCat.get(cat)
+    if (!row) {
+      row = Array.from({ length: 12 }, () => Money.zero())
+      this.byCat.set(cat, row)
+    }
+    row[month - 1] = (row[month - 1] ?? Money.zero()).add(amount)
+  }
+
+  // rows returns the per-category year totals and the per-month breakdown, both
+  // ordered by total descending (ties by name, for a stable order).
+  rows(): { totals: CategoryTotal[]; rows: CategoryYearRow[] } {
+    const withTotals = [...this.byCat.entries()].map(([category, months]) => ({
+      category,
+      months,
+      total: months.reduce((acc, v) => acc.add(v), Money.zero()),
+    }))
+    withTotals.sort((a, b) => b.total.cmp(a.total) || compareStrings(a.category, b.category))
+    return {
+      totals: withTotals.map((r) => ({ category: r.category, total: r.total.toString() })),
+      rows: withTotals.map((r) => ({
+        category: r.category,
+        months: r.months.map((m) => m.toString()),
+        total: r.total.toString(),
+      })),
+    }
+  }
+}
+
+const defaultSearchLimit = 50
+const maxSearchLimit = 200
+const maxForecastMonths = 36
 
 export interface ActiveSession {
   active(): number
@@ -266,9 +329,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   function fixedChargesFor(period: string): Movimiento[] {
     const { fixed, amountsByID } = loadFixed(false)
     const paid = new Set(
-      db.query('SELECT fixed_expense_id FROM fixed_expense_payments WHERE period = ?', [period]).map((r) =>
-        asNumber(r.fixed_expense_id),
-      ),
+      db
+        .query(
+          `SELECT fixed_expense_id FROM fixed_expense_payments WHERE period = ?
+           AND fixed_expense_id IN (SELECT id FROM fixed_expenses WHERE user_id = ?)`,
+          [period, uid()],
+        )
+        .map((r) => asNumber(r.fixed_expense_id)),
     )
     const out: Movimiento[] = []
     for (const fe of fixed) {
@@ -286,7 +353,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         kind: SourceFijo,
         number: 1,
         total: 1,
-        amount: resolveFixedAmount(amountsByID.get(fe.id) ?? [], period).toString(),
+        amount: resolveAsOf(amountsByID.get(fe.id) ?? [], period).toString(),
         status: paid.has(fe.id) ? StatusPagado : StatusPendiente,
         date: null,
       })
@@ -295,7 +362,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   }
 
   // sumFixedBefore totals fixed-expense charges for all months strictly before
-  // `period` (carry-forward of the running balance).
+  // `period` (carry-forward of the running balance). Each amount stretch is
+  // multiplied out (sumAsOf), so the cost does not grow with the months elapsed.
   function sumFixedBefore(period: string): Money {
     const { fixed, amountsByID } = loadFixed(false)
     let total = Money.zero()
@@ -304,11 +372,24 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(fe.startPeriod)) continue
       let end = last
       if (fe.endPeriod !== '' && fe.endPeriod < end) end = fe.endPeriod
-      for (let m = fe.startPeriod; m <= end; m = addMonths(m, 1)) {
-        total = total.add(resolveFixedAmount(amountsByID.get(fe.id) ?? [], m))
-      }
+      total = total.add(sumAsOf(amountsByID.get(fe.id) ?? [], fe.startPeriod, end))
     }
     return total
+  }
+
+  // fixedDisplayPeriod is the month whose amount represents a fixed expense
+  // "now": today, or its start when it is future-dated.
+  function fixedDisplayPeriod(fe: FixedExpense, now: string): string {
+    return fe.startPeriod > now ? fe.startPeriod : now
+  }
+
+  // ownsFixedExpense: the amount/payment tables carry no user_id of their own,
+  // so every write to them must first prove the parent belongs to the user.
+  function ownsFixedExpense(id: number): boolean {
+    return (
+      db.query('SELECT 1 FROM fixed_expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])
+        .length > 0
+    )
   }
 
   // cumulativeBalanceBefore: Σ salaries + Σ extras − Σ gastos for every period
@@ -369,8 +450,56 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   function sortedCategoryTotals(m: Map<string, Money>): CategoryTotal[] {
     return [...m.entries()]
-      .sort((a, b) => b[1].cmp(a[1]))
+      .sort((a, b) => b[1].cmp(a[1]) || compareStrings(a[0], b[0]))
       .map(([category, total]) => ({ category, total: total.toString() }))
+  }
+
+  interface CategoryBudgetRow extends EffectiveDated {
+    categoryId: number
+  }
+
+  // budgetsInEffect: the cap in effect at `period` for every active category
+  // that has one (amount > 0), ordered by category name.
+  function budgetsInEffect(period: string): CategoryBudgetView[] {
+    const cats = db
+      .query('SELECT * FROM categories WHERE user_id = ? AND deleted_at IS NULL', [uid()])
+      .map(rowToCategory)
+    const byCat = new Map<number, CategoryBudgetRow[]>()
+    for (const r of db.query('SELECT * FROM category_budgets WHERE user_id = ? AND effective_from <= ?', [
+      uid(),
+      period,
+    ])) {
+      const row: CategoryBudgetRow = {
+        categoryId: asNumber(r.category_id),
+        effectiveFrom: asString(r.effective_from),
+        amount: asString(r.amount),
+      }
+      const list = byCat.get(row.categoryId)
+      if (list) list.push(row)
+      else byCat.set(row.categoryId, [row])
+    }
+    const out: CategoryBudgetView[] = []
+    for (const c of cats) {
+      const b = latestAsOf(byCat.get(c.id) ?? [], period)
+      if (!b || Money.fromString(b.amount).isZero()) continue
+      out.push({ categoryId: c.id, category: c.name, amount: b.amount, effectiveFrom: b.effectiveFrom })
+    }
+    return out.sort((a, b) => compareStrings(a.category, b.category))
+  }
+
+  function budgetStatuses(period: string, catTotals: Map<string, Money>): BudgetStatus[] {
+    return budgetsInEffect(period).map((v) => {
+      const budget = Money.fromString(v.amount)
+      const spent = catTotals.get(v.category) ?? Money.zero()
+      return {
+        categoryId: v.categoryId,
+        category: v.category,
+        budget: budget.toString(),
+        spent: spent.toString(),
+        remaining: budget.sub(spent).toString(),
+        over: spent.gt(budget),
+      }
+    })
   }
 
   // restoreRow is the shared soft-delete undo: UPDATE ... SET deleted_at = NULL.
@@ -383,12 +512,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return {}
   }
 
-  function softDeleteRow(table: string, id: number): OpResult {
+  // softDeleteRow: deleting a missing or already-deleted row is NotFound.
+  function softDeleteRow(table: string, id: number, notFoundMsg: string): OpResult {
     db.exec(`UPDATE ${table} SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, [
       nowIso(),
       id,
       uid(),
     ])
+    if (db.changes() === 0) return { error: newError(ErrNotFound, notFoundMsg) }
     return {}
   }
 
@@ -460,7 +591,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteCard(id: number): Promise<OpResult> {
-      return softDeleteRow('cards', id)
+      return softDeleteRow('cards', id, 'tarjeta no encontrada')
     },
 
     async RestoreCard(id: number): Promise<OpResult> {
@@ -504,11 +635,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           const old = rowToCategory(oldRow)
           db.exec('UPDATE categories SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [n, id, uid()])
           if (old.name !== n) {
-            db.exec('UPDATE expenses SET category = ? WHERE category = ? AND user_id = ? AND deleted_at IS NULL', [
-              n,
-              old.name,
-              uid(),
-            ])
+            // Like bun's soft-delete scoped UPDATE on desktop: only live rows.
+            for (const table of ['expenses', 'fixed_expenses']) {
+              db.exec(`UPDATE ${table} SET category = ? WHERE category = ? AND user_id = ? AND deleted_at IS NULL`, [
+                n,
+                old.name,
+                uid(),
+              ])
+            }
           }
           const row = db.query('SELECT * FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
             id,
@@ -524,7 +658,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteCategory(id: number): Promise<OpResult> {
-      return softDeleteRow('categories', id)
+      return softDeleteRow('categories', id, 'categoría no encontrada')
     },
 
     async RestoreCategory(id: number): Promise<OpResult> {
@@ -595,7 +729,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteMerchant(id: number): Promise<OpResult> {
-      return softDeleteRow('merchants', id)
+      return softDeleteRow('merchants', id, 'comercio no encontrado')
     },
 
     async RestoreMerchant(id: number): Promise<OpResult> {
@@ -635,7 +769,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteIncome(id: number): Promise<OpResult> {
-      return softDeleteRow('incomes', id)
+      return softDeleteRow('incomes', id, 'ingreso no encontrado')
     },
 
     async RestoreIncome(id: number): Promise<OpResult> {
@@ -744,7 +878,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteExpense(id: number): Promise<OpResult> {
-      return softDeleteRow('expenses', id)
+      return softDeleteRow('expenses', id, 'gasto no encontrado')
     },
 
     async RestoreExpense(id: number): Promise<OpResult> {
@@ -766,6 +900,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           uid(),
         ])
       }
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuota no encontrada') }
       return {}
     },
 
@@ -776,17 +911,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const cardByID = cardMapAll()
       const now = currentPeriod()
       const out: FixedExpenseView[] = fixed.map((fe) => {
-        // Future-dated subscriptions resolve at their start so the configured
-        // amount shows.
-        const at = fe.startPeriod > now ? fe.startPeriod : now
         return {
           ...fe,
-          currentAmount: resolveFixedAmount(amountsByID.get(fe.id) ?? [], at).toString(),
+          currentAmount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
           cardName: fe.cardId != null ? (cardByID.get(fe.cardId)?.name ?? '') : '',
           active: activeIn(fe, now),
         }
       })
-      out.sort((a, b) => (a.description < b.description ? -1 : a.description > b.description ? 1 : 0))
+      out.sort((a, b) => compareStrings(a.description, b.description))
       return out
     },
 
@@ -854,12 +986,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
-      db.exec(
-        `INSERT INTO fixed_expense_amounts (fixed_expense_id, effective_from, amount) VALUES (?, ?, ?)
-         ON CONFLICT (fixed_expense_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
-        [id, fromPeriod, parsed.amount.toString()],
-      )
-      return {}
+      const value = parsed.amount.toString()
+      return db.transaction((): OpResult => {
+        if (!ownsFixedExpense(id)) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        db.exec(
+          `INSERT INTO fixed_expense_amounts (fixed_expense_id, effective_from, amount) VALUES (?, ?, ?)
+           ON CONFLICT (fixed_expense_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
+          [id, fromPeriod, value],
+        )
+        return {}
+      })
     },
 
     async EndFixedExpense(id: number, fromPeriod: string): Promise<OpResult> {
@@ -875,7 +1011,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async DeleteFixedExpense(id: number): Promise<OpResult> {
-      return softDeleteRow('fixed_expenses', id)
+      return softDeleteRow('fixed_expenses', id, 'gasto fijo no encontrado')
     },
 
     async RestoreFixedExpense(id: number): Promise<OpResult> {
@@ -884,16 +1020,19 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
     async SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult> {
       if (!validPeriod(period)) return { error: invalidPeriodError() }
-      if (paid) {
-        db.exec(
-          `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
-           ON CONFLICT (fixed_expense_id, period) DO UPDATE SET paid_at = EXCLUDED.paid_at`,
-          [id, period, nowIso()],
-        )
+      return db.transaction((): OpResult => {
+        if (!ownsFixedExpense(id)) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        if (paid) {
+          db.exec(
+            `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
+             ON CONFLICT (fixed_expense_id, period) DO UPDATE SET paid_at = EXCLUDED.paid_at`,
+            [id, period, nowIso()],
+          )
+        } else {
+          db.exec('DELETE FROM fixed_expense_payments WHERE fixed_expense_id = ? AND period = ?', [id, period])
+        }
         return {}
-      }
-      db.exec('DELETE FROM fixed_expense_payments WHERE fixed_expense_id = ? AND period = ?', [id, period])
-      return {}
+      })
     },
 
     // ---------- summaries ----------
@@ -951,7 +1090,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           status: inst.status,
           date: null,
         }
-        let cat = 'Sin categoría'
+        let cat = uncategorized
         if (ex) {
           mv.expenseId = ex.id
           mv.description = ex.description
@@ -975,7 +1114,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
       // Recurring fixed expenses billed this month fold into the same totals.
       for (const mv of fixedChargesFor(period)) {
-        const cat = mv.category !== '' ? mv.category : 'Sin categoría'
+        const cat = mv.category !== '' ? mv.category : uncategorized
         mv.category = cat
         const amount = Money.fromString(mv.amount)
         if (mv.cardId != null) {
@@ -1018,6 +1157,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         porTarjeta,
         movimientos,
         incomes,
+        presupuestos: budgetStatuses(period, catTotals),
       }
       return { data }
     },
@@ -1057,13 +1197,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const exById = expenseMapActive(insts.map((i) => i.expenseId))
 
       const gastosByMonth = new Map<string, Money>()
-      const catTotals = new Map<string, Money>()
+      const byCat = new CategoryMonths()
       for (const inst of insts) {
         const amount = Money.fromString(inst.amount)
         gastosByMonth.set(inst.period, (gastosByMonth.get(inst.period) ?? Money.zero()).add(amount))
-        const ex = exById.get(inst.expenseId)
-        const cat = ex && ex.category !== '' ? ex.category : 'Sin categoría'
-        catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amount))
+        byCat.add(exById.get(inst.expenseId)?.category ?? '', inst.period, amount)
       }
 
       // Fold recurring fixed expenses into each month's gastos and categories.
@@ -1072,10 +1210,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const period = prefix + String(m).padStart(2, '0')
         for (const fe of fixed) {
           if (!activeIn(fe, period)) continue
-          const amt = resolveFixedAmount(amountsByID.get(fe.id) ?? [], period)
+          const amt = resolveAsOf(amountsByID.get(fe.id) ?? [], period)
           gastosByMonth.set(period, (gastosByMonth.get(period) ?? Money.zero()).add(amt))
-          const cat = fe.category !== '' ? fe.category : 'Sin categoría'
-          catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amt))
+          byCat.add(fe.category, period, amt)
         }
       }
 
@@ -1100,15 +1237,192 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         totalGastos = totalGastos.add(gastos)
       }
 
+      const { totals, rows } = byCat.rows()
       const data: YearSummary = {
         year,
         months,
-        porCategoria: sortedCategoryTotals(catTotals),
+        porCategoria: totals,
+        categoriaMeses: rows,
         totalIngresos: totalIngresos.toString(),
         totalGastos: totalGastos.toString(),
         totalBalance: totalIngresos.sub(totalGastos).toString(),
       }
       return { data }
+    },
+
+    // ---------- commitments forecast (proyección) ----------
+
+    async CommitmentsForecast(fromPeriod: string, months: number): Promise<ForecastResult> {
+      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+      if (!Number.isInteger(months) || months < 1 || months > maxForecastMonths) {
+        return { error: newError(ErrValidation, 'la proyección debe ser de 1 a 36 meses') }
+      }
+      const to = addMonths(fromPeriod, months - 1)
+
+      const cuotas = new Map<string, Money>()
+      for (const r of db.query(
+        `SELECT * FROM installments WHERE user_id = ? AND period >= ? AND period <= ?
+         AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+        [uid(), fromPeriod, to],
+      )) {
+        const inst = rowToInstallment(r)
+        cuotas.set(inst.period, (cuotas.get(inst.period) ?? Money.zero()).add(Money.fromString(inst.amount)))
+      }
+
+      const { fixed, amountsByID } = loadFixed(false)
+
+      // Every salary up to the horizon: the ones before `fromPeriod` only seed
+      // the "last known salary" used to estimate months without one.
+      const salaryByMonth = new Map<string, Money>()
+      let lastKnown = Money.zero()
+      for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period <= ? ORDER BY period ASC', [
+        uid(),
+        to,
+      ])) {
+        const ps = rowToPeriodSalary(r)
+        if (ps.period < fromPeriod) lastKnown = Money.fromString(ps.amount)
+        else salaryByMonth.set(ps.period, Money.fromString(ps.amount))
+      }
+
+      const extras = new Map<string, Money>()
+      for (const r of db.query(
+        'SELECT * FROM incomes WHERE user_id = ? AND period >= ? AND period <= ? AND deleted_at IS NULL',
+        [uid(), fromPeriod, to],
+      )) {
+        const inc = rowToIncome(r)
+        extras.set(inc.period, (extras.get(inc.period) ?? Money.zero()).add(Money.fromString(inc.amount)))
+      }
+
+      let saldo = cumulativeBalanceBefore(fromPeriod)
+      const data: ForecastMonth[] = []
+      for (let i = 0; i < months; i++) {
+        const period = addMonths(fromPeriod, i)
+        let fijos = Money.zero()
+        for (const fe of fixed) {
+          if (activeIn(fe, period)) fijos = fijos.add(resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+        }
+        const known = salaryByMonth.get(period)
+        if (known) lastKnown = known
+        const ingresos = lastKnown.add(extras.get(period) ?? Money.zero())
+        const cuotasMes = cuotas.get(period) ?? Money.zero()
+        const comprometido = cuotasMes.add(fijos)
+        const libre = ingresos.sub(comprometido)
+        saldo = saldo.add(libre)
+        data.push({
+          period,
+          cuotas: cuotasMes.toString(),
+          fijos: fijos.toString(),
+          comprometido: comprometido.toString(),
+          ingresos: ingresos.toString(),
+          ingresoEstimado: known === undefined,
+          libre: libre.toString(),
+          saldoProyectado: saldo.toString(),
+        })
+      }
+      return { data }
+    },
+
+    // ---------- category budgets (presupuestos) ----------
+
+    async SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult> {
+      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      const value = parsed.amount.toString()
+      return db.transaction((): OpResult => {
+        const owned = db.query('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+          categoryID,
+          uid(),
+        ])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+        db.exec(
+          `INSERT INTO category_budgets (user_id, category_id, effective_from, amount) VALUES (?, ?, ?, ?)
+           ON CONFLICT (category_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
+          [uid(), categoryID, fromPeriod, value],
+        )
+        return {}
+      })
+    },
+
+    async ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      return { data: budgetsInEffect(period) }
+    },
+
+    // ---------- search ----------
+
+    async SearchExpenses(f: ExpenseFilter): Promise<ExpenseSearchResult> {
+      if ((f.fromPeriod !== '' && !validPeriod(f.fromPeriod)) || (f.toPeriod !== '' && !validPeriod(f.toPeriod))) {
+        return { error: invalidPeriodError() }
+      }
+      if (f.fromPeriod !== '' && f.toPeriod !== '' && f.fromPeriod > f.toPeriod) {
+        return { error: newError(ErrValidation, 'el período inicial es posterior al final') }
+      }
+      const limit = Math.min(f.limit > 0 ? f.limit : defaultSearchLimit, maxSearchLimit)
+      const offset = Math.max(f.offset, 0)
+
+      const where: string[] = ['user_id = ?', 'deleted_at IS NULL']
+      const params: SqlValue[] = [uid()]
+      const text = f.text.trim()
+      if (text !== '') {
+        const pattern = `%${escapeLike(text)}%`
+        where.push(`(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\')`)
+        params.push(pattern, pattern)
+      }
+      const category = f.category.trim()
+      if (category === uncategorized) {
+        where.push("category = ''")
+      } else if (category !== '') {
+        where.push('category = ?')
+        params.push(category)
+      }
+      if (f.cardId != null) {
+        where.push('card_id = ?')
+        params.push(f.cardId)
+      }
+      if (f.fromPeriod !== '' || f.toPeriod !== '') {
+        where.push('id IN (SELECT expense_id FROM installments WHERE user_id = ? AND period >= ? AND period <= ?)')
+        params.push(uid(), f.fromPeriod || '0000-01', f.toPeriod || '9999-12')
+      }
+      const clause = where.join(' AND ')
+      const count = asNumber(db.query(`SELECT COUNT(*) AS n FROM expenses WHERE ${clause}`, params)[0]?.n)
+      const expenses = db
+        .query(`SELECT * FROM expenses WHERE ${clause} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`, [
+          ...params,
+          limit,
+          offset,
+        ])
+        .map(rowToExpense)
+
+      // Installment span/progress for the page, plus card names (incl. deleted cards).
+      const spans = new Map<number, { first: string; last: string; paid: number }>()
+      if (expenses.length > 0) {
+        const ids = expenses.map((e) => e.id)
+        for (const r of db.query(
+          `SELECT * FROM installments WHERE user_id = ? AND expense_id IN (${ids.map(() => '?').join(', ')})`,
+          [uid(), ...ids],
+        )) {
+          const inst = rowToInstallment(r)
+          const sp = spans.get(inst.expenseId) ?? { first: inst.period, last: inst.period, paid: 0 }
+          if (inst.period < sp.first) sp.first = inst.period
+          if (inst.period > sp.last) sp.last = inst.period
+          if (inst.status === StatusPagado) sp.paid++
+          spans.set(inst.expenseId, sp)
+        }
+      }
+      const cardByID = cardMapAll()
+      const items: ExpenseHit[] = expenses.map((ex) => {
+        const sp = spans.get(ex.id)
+        return {
+          expense: ex,
+          cardName: ex.cardId != null ? (cardByID.get(ex.cardId)?.name ?? '') : '',
+          firstPeriod: sp?.first ?? '',
+          lastPeriod: sp?.last ?? '',
+          total: Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1)).toString(),
+          paidCount: sp?.paid ?? 0,
+        }
+      })
+      return { data: { items, count } }
     },
 
     // ---------- trash (papelera) ----------
@@ -1153,12 +1467,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const { fixed, amountsByID } = loadFixed(true)
       const now = currentPeriod()
       for (const fe of fixed) {
-        const at = fe.startPeriod > now ? fe.startPeriod : now
         out.push({
           type: 'fixedexpense',
           id: fe.id,
           description: fe.description,
-          amount: resolveFixedAmount(amountsByID.get(fe.id) ?? [], at).toString(),
+          amount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
           deletedAt: fe.deletedAt ?? '',
         })
       }

@@ -5,8 +5,14 @@
       "@/services/finance": ["./src/services/web/finance.ts"],
       "@/services/users": ["./src/services/web/users.ts"],
       "@/services/settings": ["./src/services/web/settings.ts"],
+      "@/services/diagnostics": ["./src/services/web/diagnostics.ts"],
       "@/*": ["./src/*"]
     }
   },
-  "exclude": ["src/services/finance.ts", "src/services/users.ts", "src/services/settings.ts"]
+  "exclude": [
+    "src/services/finance.ts",
+    "src/services/users.ts",
+    "src/services/settings.ts",
+    "src/services/diagnostics.ts"
+  ]
 }
