@@ -9,6 +9,11 @@ disable-model-invocation: true
 Side-effectful build packaging. Run only when the user explicitly asks. Verify first, then package
 for the target platform(s).
 
+Official releases are built by CI: bump `info.version` in `build/config.yml`, run
+`wails3 task common:update:build-assets`, merge to `main`, then push the tag `vX.Y.Z` →
+`.github/workflows/release.yml` publishes the `.dmg` + Windows setup as a GitHub Release. The steps
+below are the local equivalent (testing a build, or packaging without CI).
+
 1. **Pre-flight**: `task check` (vet + lint + typecheck + tests + web build) and
    `cd frontend && npm run build` must pass (under the Claude Code sandbox use
    `go build -ldflags=-w -o /dev/null .` for the compile check — see AGENTS.md). Confirm the
@@ -25,7 +30,7 @@ for the target platform(s).
 3. **Windows** (cross-compiled from macOS, no CGO — pure-Go `modernc.org/sqlite`):
    - One-time prerequisite: `brew install makensis`.
    - `task build:windows` → `bin/app-finance.exe` (amd64).
-   - `task package:windows` → `build/windows/nsis/app-finance-installer.exe` (Start-menu entry +
+   - `task package:windows` → `bin/app-finance-amd64-installer.exe` (Start-menu entry +
      uninstaller). Unsigned → SmartScreen warns on first run (Más información → Ejecutar de todos modos).
 
 4. If `build/config.yml` changed (product name, file associations, icons), regenerate platform assets

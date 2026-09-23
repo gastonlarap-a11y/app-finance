@@ -187,7 +187,7 @@ task build:windows
 ### Crear el instalador NSIS
 ```bash
 task package:windows
-# → build/windows/nsis/app-finance-installer.exe
+# → bin/app-finance-amd64-installer.exe
 ```
 El instalador:
 - Instala la app en `C:\Program Files\app-finance`
@@ -312,7 +312,24 @@ app-finance/
 `.github/workflows/deploy-web.yml` publica la PWA en GitHub Pages en cada push a `main` que toque el
 frontend o las migraciones. Dependabot (`.github/dependabot.yml`) propone actualizaciones semanales
 agrupadas de Go, npm y GitHub Actions (Wails y `@wailsio/runtime` quedan fuera: se suben juntos a mano).
-La distribución desktop es manual (secciones 3 y 4).
+`.github/workflows/release.yml` publica los instaladores: al subir un tag `vX.Y.Z` compila en macOS el
+`.dmg` universal (Apple Silicon + Intel) y el instalador NSIS de Windows, y los sube como **GitHub
+Release** con `SHA256SUMS.txt`. El tag debe coincidir con `info.version` de `build/config.yml` (el job
+falla si no). Para publicar una versión:
+
+```bash
+# 1. subir la versión en build/config.yml (info.version) y regenerar los assets
+wails3 task common:update:build-assets
+# 2. mergear a main (PR) y luego, desde main actualizado:
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+Ejecutarlo manualmente (*Run workflow*) genera los mismos instaladores como artifacts sin publicar
+(prueba en seco). Las secciones 3 y 4 describen el empaquetado local equivalente.
+
+**Actualizar la app instalada**: descarga el último Release; en macOS arrastra `app-finance` a
+Aplicaciones (reemplaza la anterior); en Windows ejecuta el instalador (se instala encima). Los datos
+no se tocan y las migraciones se aplican solas al abrir; conviene «☁ Respaldar» antes.
 
 ## Más
 

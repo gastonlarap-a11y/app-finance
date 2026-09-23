@@ -36,6 +36,8 @@ cd frontend && npm run build:web  # typecheck (tsconfig.web.json) + PWA bundle �
 cd frontend && npm test           # vitest: TS engine against sqlite-wasm in Node
 
 # Packaging/distribution (macOS .app/.dmg, Windows NSIS installer) → `release` skill (user-invoked)
+# Official releases: bump info.version in build/config.yml + `wails3 task common:update:build-assets`,
+# merge, then push tag vX.Y.Z on main → .github/workflows/release.yml publishes the GitHub Release
 
 # Bindings and toolchain
 wails3 generate bindings -ts   # regenerate TS bindings after changing exported Go signatures

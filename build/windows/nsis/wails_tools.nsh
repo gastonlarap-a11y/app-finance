@@ -5,7 +5,7 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "App Finance"
+    !define INFO_PROJECTNAME "app-finance"
 !endif
 !ifndef INFO_COMPANYNAME
     !define INFO_COMPANYNAME "App Finance"
@@ -14,10 +14,10 @@
     !define INFO_PRODUCTNAME "App Finance"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.1.0"
+    !define INFO_PRODUCTVERSION "0.2.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "© now, My Company"
+    !define INFO_COPYRIGHT "(c) 2026, App Finance"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"
