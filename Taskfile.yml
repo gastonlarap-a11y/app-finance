@@ -39,6 +39,45 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
+  package:dmg:
+    summary: Packages a macOS .dmg (alias of darwin:package:dmg)
+    cmds:
+      - task: darwin:package:dmg
+
+  # ---- quality gates (what CI runs; `task check` before declaring work done) ----
+
+  lint:
+    summary: Go (golangci-lint v2) + frontend (ESLint) lint
+    cmds:
+      - golangci-lint run ./...
+      - npm --prefix frontend run lint
+
+  test:
+    summary: Go tests with the race detector + vitest (engine parity + lib)
+    cmds:
+      - go test -race ./...
+      - npm --prefix frontend test
+
+  typecheck:
+    summary: Frontend typecheck, desktop (needs generated bindings) + web
+    cmds:
+      - npm --prefix frontend run typecheck
+
+  vuln:
+    summary: Known-vulnerability scan (Go reachability + npm production deps)
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - npm --prefix frontend audit --omit=dev --audit-level=high
+
+  check:
+    summary: Every quality gate — vet, lint, typecheck, tests, web build
+    cmds:
+      - go vet ./...
+      - task: lint
+      - task: typecheck
+      - task: test
+      - npm --prefix frontend run build:web
+
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:
