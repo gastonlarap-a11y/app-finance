@@ -46,7 +46,8 @@ TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor)
 | Reportes | Exportación Excel via [excelize](https://github.com/xuri/excelize) |
 | Backup | Google Drive via `golang.org/x/oauth2` + `google.golang.org/api` |
 
-> **Wails v3 está en alpha.** Este proyecto fija `github.com/wailsapp/wails/v3 v3.0.0-alpha2.108`.
+> **Wails v3 está en beta** (API estable, aún pre-release). Este proyecto fija
+> `github.com/wailsapp/wails/v3 v3.0.0-beta.25` y `@wailsio/runtime 3.0.0-beta.25`.
 > Mantener el CLI `wails3` en la **misma** versión que la librería Go. Ver `ARCHITECTURE.md` §2.
 
 ---
@@ -59,7 +60,7 @@ TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor)
 |---|---|---|
 | [Go](https://go.dev/dl/) | 1.27+ | Descargar del sitio oficial |
 | [Node.js](https://nodejs.org/) | 24 LTS (`frontend/.nvmrc`) | Descargar del sitio oficial |
-| Wails v3 CLI | v3.0.0-alpha2.108 | Ver abajo |
+| Wails v3 CLI | v3.0.0-beta.25 | Ver abajo |
 | [Task](https://taskfile.dev) | 3.x | `go install github.com/go-task/task/v3/cmd/task@latest` |
 | [golangci-lint](https://golangci-lint.run) | v2.13+ | `brew install golangci-lint` (sólo para `task lint`/`task check`) |
 
@@ -67,7 +68,7 @@ TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor)
 
 **1. Instalar el CLI de Wails v3:**
 ```bash
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.108
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.25
 ```
 
 **2. Asegurarse de que el bin de Go esté en PATH** (agregar a `.zshrc` / `.bashrc` si no está):
