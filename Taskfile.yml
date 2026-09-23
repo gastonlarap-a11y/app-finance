@@ -15,8 +15,13 @@ includes:
   windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
-  ios: ./build/ios/Taskfile.yml
-  android: ./build/android/Taskfile.yml
+  # Unused template platforms, gitignored (absent in CI checkouts) — optional.
+  ios:
+    taskfile: ./build/ios/Taskfile.yml
+    optional: true
+  android:
+    taskfile: ./build/android/Taskfile.yml
+    optional: true
 
 tasks:
   build:
