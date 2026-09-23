@@ -81,6 +81,13 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `user_id` (`fixed_expense_amounts`, `fixed_expense_payments`) are written only after proving the
   parent's ownership (`ownFixedExpense`). Guard new bound methods with a cross-user test in
   `backend/users/isolation_test.go` (+ its vitest mirror in `frontend/src/engine/finance/features.test.ts`).
+- **Savings contributions are a monthly outflow**: they lower `Disponible`/`Balance` and the carried
+  balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
+  count against category budgets. Contributions of a trashed goal are excluded everywhere
+  (`liveGoalContributions`), like installments of a deleted expense.
+- **Export**: views build an `ExportTable` (`frontend/src/lib/exportTables.ts`, money as decimal
+  strings); `@/services/reports` writes it — desktop via `ReportsService.SaveTable` (.xlsx + native
+  Save dialog; blob downloads are unreliable in the webview), web via CSV + Share Sheet.
 - **Effective-dated values** (fixed-expense amounts, category budgets): rows apply from
   `effective_from` onward; resolve with `latestAsOf`/`resolveAsOf`, sum ranges with `sumAsOf`
   (`backend/finance/fixedexpense.go`, mirrored in `frontend/src/engine/finance/fixedexpense.ts`).
