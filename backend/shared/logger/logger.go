@@ -2,14 +2,14 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/lmittmann/tint"
-	"path/filepath"
-
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -35,7 +35,10 @@ func Setup(level string) {
 		Level:      lvl,
 		TimeFormat: time.Kitchen,
 	}))
-	_ = os.MkdirAll("logs", 0o755)
+	if err := os.MkdirAll("logs", 0o755); err != nil {
+		// Console logging still works; lumberjack retries the dir on first write.
+		fmt.Fprintf(os.Stderr, "logger: no se pudo crear logs/: %v\n", err)
+	}
 	fileWriter := &lumberjack.Logger{
 		Filename:   filepath.Join("logs", "app.log"),
 		MaxSize:    10, // MB

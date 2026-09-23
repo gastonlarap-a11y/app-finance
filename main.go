@@ -105,7 +105,9 @@ func main() {
 	saveWindowState := func() {
 		w, h := window.Size()
 		x, y := window.Position()
-		_ = windowstate.Save(context.Background(), bdb, windowstate.State{X: x, Y: y, W: w, H: h})
+		if err := windowstate.Save(context.Background(), bdb, windowstate.State{X: x, Y: y, W: w, H: h}); err != nil {
+			slog.Warn("no se pudo guardar la posición de la ventana", "err", err)
+		}
 	}
 
 	if goruntime.GOOS == "darwin" {

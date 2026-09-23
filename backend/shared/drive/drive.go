@@ -10,10 +10,10 @@ package drive
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -155,14 +155,26 @@ func (m *Manager) Connect(ctx context.Context, openBrowser func(string) error) e
 		fmt.Fprint(w, successHTML)
 		codeCh <- q.Get("code")
 	})
-	srv := &http.Server{Handler: mux}
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Shutdown(context.Background())
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("servidor de callback OAuth: %w", err)
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("drive: cerrar servidor de callback OAuth", "err", err)
+		}
+	}()
 
 	if err := openBrowser(authURL); err != nil {
 		return fmt.Errorf("no se pudo abrir el navegador: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
 	select {
 	case code := <-codeCh:
 		tok, err := conf.Exchange(ctx, code, oauth2.VerifierOption(verifier))
@@ -172,9 +184,10 @@ func (m *Manager) Connect(ctx context.Context, openBrowser func(string) error) e
 		return m.saveToken(tok)
 	case err := <-errCh:
 		return err
-	case <-time.After(3 * time.Minute):
-		return errors.New("tiempo de espera agotado para el inicio de sesión")
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return errors.New("tiempo de espera agotado para el inicio de sesión")
+		}
 		return ctx.Err()
 	}
 }
@@ -200,7 +213,11 @@ func (m *Manager) service(ctx context.Context) (*gdrive.Service, error) {
 	}
 	ts := m.oauthConfig("").TokenSource(ctx, tok)
 	if refreshed, err := ts.Token(); err == nil && refreshed.AccessToken != tok.AccessToken {
-		_ = m.saveToken(refreshed)
+		// Non-fatal: the in-memory token source keeps working; only the next
+		// launch would refresh again.
+		if err := m.saveToken(refreshed); err != nil {
+			slog.Warn("drive: guardar token refrescado", "err", err)
+		}
 	}
 	return gdrive.NewService(ctx, option.WithTokenSource(ts))
 }
@@ -261,7 +278,7 @@ func (m *Manager) ensureFolder(ctx context.Context, svc *gdrive.Service, name, f
 		}
 	}
 	parentID := ""
-	for _, seg := range strings.Split(name, "/") {
+	for seg := range strings.SplitSeq(name, "/") {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue
@@ -305,11 +322,8 @@ func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `\'`) + "'"
 }
 
-func randomState() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
+// randomState is the OAuth CSRF state (crypto/rand.Text: 128+ bits of entropy).
+func randomState() string { return rand.Text() }
 
 const successHTML = `<!doctype html><html><head><meta charset="utf-8"><title>App Finance</title></head>
 <body style="font-family:system-ui,sans-serif;text-align:center;padding-top:4rem;background:#0f172a;color:#e2e8f0">

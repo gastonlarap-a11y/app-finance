@@ -2,7 +2,9 @@ package reports
 
 import (
 	"context"
-	"sort"
+	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -15,6 +17,8 @@ func NewReportsService() *ReportsService { return &ReportsService{} }
 
 func (s *ReportsService) ServiceName() string { return "ReportsService" }
 
+// ExportToExcel writes rows as a sheet: one header row (the first row's keys,
+// sorted) and one row per entry.
 func (s *ReportsService) ExportToExcel(ctx context.Context, rows []map[string]any, sheet string) ([]byte, error) {
 	if sheet == "" {
 		sheet = "Sheet1"
@@ -22,23 +26,26 @@ func (s *ReportsService) ExportToExcel(ctx context.Context, rows []map[string]an
 	f := excelize.NewFile()
 	defer f.Close()
 	if sheet != "Sheet1" {
-		_ = f.SetSheetName("Sheet1", sheet)
+		if err := f.SetSheetName("Sheet1", sheet); err != nil {
+			return nil, fmt.Errorf("renombrar hoja: %w", err)
+		}
 	}
 
 	if len(rows) > 0 {
-		headers := make([]string, 0, len(rows[0]))
-		for k := range rows[0] {
-			headers = append(headers, k)
-		}
-		sort.Strings(headers)
+		headers := slices.Sorted(maps.Keys(rows[0]))
 		for c, h := range headers {
-			cell, _ := excelize.CoordinatesToCellName(c+1, 1)
-			_ = f.SetCellValue(sheet, cell, h)
+			if err := setCell(f, sheet, c+1, 1, h); err != nil {
+				return nil, err
+			}
 		}
 		for r, row := range rows {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			for c, h := range headers {
-				cell, _ := excelize.CoordinatesToCellName(c+1, r+2)
-				_ = f.SetCellValue(sheet, cell, row[h])
+				if err := setCell(f, sheet, c+1, r+2, row[h]); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -48,4 +55,15 @@ func (s *ReportsService) ExportToExcel(ctx context.Context, rows []map[string]an
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func setCell(f *excelize.File, sheet string, col, row int, value any) error {
+	cell, err := excelize.CoordinatesToCellName(col, row)
+	if err != nil {
+		return fmt.Errorf("celda (%d,%d): %w", col, row, err)
+	}
+	if err := f.SetCellValue(sheet, cell, value); err != nil {
+		return fmt.Errorf("celda %s: %w", cell, err)
+	}
+	return nil
 }

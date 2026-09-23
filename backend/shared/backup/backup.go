@@ -77,9 +77,11 @@ func (r *Runner) Run(ctx context.Context) (Info, error) {
 	if err != nil {
 		return info, err
 	}
-	p.DriveFolderID = folderID
-	p.DriveFileID = fileID
-	_ = prefs.Save(r.appName, p)
+	// Caching the ids only saves a lookup next time; the upload already succeeded.
+	prefs.Update(r.appName, func(p *prefs.Prefs) {
+		p.DriveFolderID = folderID
+		p.DriveFileID = fileID
+	})
 
 	info.Uploaded = true
 	info.RemoteFolder = p.DriveFolderName

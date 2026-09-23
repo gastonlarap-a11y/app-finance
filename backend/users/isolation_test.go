@@ -1,7 +1,6 @@
 package users_test
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -25,7 +24,7 @@ func openMigrated(t *testing.T) *bun.DB {
 	}
 	sqldb.SetMaxOpenConns(1)
 	bdb := bun.NewDB(sqldb, sqlitedialect.New())
-	if err := db.RunMigrations(context.Background(), bdb); err != nil {
+	if err := db.RunMigrations(t.Context(), bdb); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 	t.Cleanup(func() { bdb.Close() })
@@ -35,7 +34,7 @@ func openMigrated(t *testing.T) *bun.DB {
 // TestUserIsolation verifies that each profile only sees its own finance data and
 // that the seeded "Gastón" (id 1) owns everything created before switching.
 func TestUserIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bdb := openMigrated(t)
 
 	session := users.NewSession() // starts on user 1 (Gastón)
@@ -91,11 +90,92 @@ func TestUserIsolation(t *testing.T) {
 	}
 }
 
+// TestCrossUserWritesAndReads verifies that a profile can neither modify nor see
+// another profile's rows through id-based methods (fixed-expense amount/payment,
+// category budgets) or the aggregate reads (search, forecast, budgets).
+func TestCrossUserWritesAndReads(t *testing.T) {
+	ctx := t.Context()
+	bdb := openMigrated(t)
+	session := users.NewSession() // starts on user 1 (Gastón)
+	fin := finance.NewFinanceService(bdb, session)
+	usr := users.NewService(bdb, session, "test-app-finance-crossuser")
+
+	const period = "2030-01"
+	fe := fin.CreateFixedExpense(ctx, "Netflix", "Servicios", nil, period, "8000")
+	if fe.Error != nil {
+		t.Fatalf("CreateFixedExpense: %v", fe.Error)
+	}
+	cat := fin.CreateCategory(ctx, "Servicios")
+	if cat.Error != nil {
+		t.Fatalf("CreateCategory: %v", cat.Error)
+	}
+	if r := fin.SetCategoryBudget(ctx, cat.Data.ID, period, "50000"); r.Error != nil {
+		t.Fatalf("SetCategoryBudget: %v", r.Error)
+	}
+	if r := fin.CreateExpense(ctx, period+"-10", "Cine", "Servicios", "", nil, finance.KindCuotas, "10000", 3); r.Error != nil {
+		t.Fatalf("CreateExpense: %v", r.Error)
+	}
+
+	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
+		t.Fatalf("CreateUser: %v", cam.Error)
+	}
+
+	writes := []struct {
+		name string
+		run  func() finance.OpResult
+	}{
+		{"SetFixedExpenseAmount", func() finance.OpResult { return fin.SetFixedExpenseAmount(ctx, fe.Data.ID, period, "1") }},
+		{"SetFixedExpensePaid", func() finance.OpResult { return fin.SetFixedExpensePaid(ctx, fe.Data.ID, period, true) }},
+		{"SetCategoryBudget", func() finance.OpResult { return fin.SetCategoryBudget(ctx, cat.Data.ID, period, "1") }},
+		{"DeleteFixedExpense", func() finance.OpResult { return fin.DeleteFixedExpense(ctx, fe.Data.ID) }},
+	}
+	for _, w := range writes {
+		t.Run("Camila "+w.name, func(t *testing.T) {
+			if r := w.run(); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+				t.Fatalf("%s on Gastón's row = %+v, want NOT_FOUND", w.name, r.Error)
+			}
+		})
+	}
+
+	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{}); r.Error != nil || r.Data.Count != 0 {
+		t.Fatalf("Camila SearchExpenses = %+v, want 0 hits", r)
+	}
+	if r := fin.ListCategoryBudgets(ctx, period); r.Error != nil || len(r.Data) != 0 {
+		t.Fatalf("Camila ListCategoryBudgets = %+v, want none", r)
+	}
+	forecast := fin.CommitmentsForecast(ctx, period, 3)
+	if forecast.Error != nil {
+		t.Fatalf("Camila CommitmentsForecast: %v", forecast.Error)
+	}
+	for _, m := range forecast.Data {
+		if !m.Comprometido.IsZero() {
+			t.Fatalf("Camila forecast %s comprometido = %s, want 0", m.Period, m.Comprometido)
+		}
+	}
+	if y := fin.YearSummary(ctx, 2030); y.Error != nil || len(y.Data.CategoriaMeses) != 0 {
+		t.Fatalf("Camila YearSummary.CategoriaMeses = %+v, want none", y)
+	}
+
+	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.
+	if r := usr.SwitchUser(ctx, 1); r.Error != nil {
+		t.Fatalf("SwitchUser(1): %v", r.Error)
+	}
+	sum := fin.MonthlySummary(ctx, period)
+	if sum.Error != nil {
+		t.Fatalf("MonthlySummary: %v", sum.Error)
+	}
+	for _, mv := range sum.Data.Movimientos {
+		if mv.FixedID != nil && *mv.FixedID == fe.Data.ID && (mv.Amount.String() != "8000" || mv.Status != finance.StatusPendiente) {
+			t.Fatalf("Gastón's fixed expense was modified by Camila: %+v", mv)
+		}
+	}
+}
+
 // TestDeleteUserSoftDeleteAndRestore covers: blocking the last-user delete,
 // auto-switching when the active user is deleted, leaving the session alone
 // when a non-active user is deleted, and restoring a deleted profile.
 func TestDeleteUserSoftDeleteAndRestore(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bdb := openMigrated(t)
 	session := users.NewSession() // starts on user 1 (Gastón)
 	usr := users.NewService(bdb, session, "test-app-finance-delete")
