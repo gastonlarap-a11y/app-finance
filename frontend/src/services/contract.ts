@@ -161,6 +161,24 @@ export interface MonthlySummary {
   porTarjeta: CardDebt[]
   movimientos: Movimiento[]
   incomes: Income[]
+  // Only categories with a cap in effect this month.
+  presupuestos: BudgetStatus[]
+}
+
+export interface BudgetStatus {
+  categoryId: number
+  category: string
+  budget: string
+  spent: string
+  remaining: string // negative when over budget
+  over: boolean
+}
+
+export interface CategoryBudgetView {
+  categoryId: number
+  category: string
+  amount: string
+  effectiveFrom: string // YYYY-MM
 }
 
 export interface YearMonth {
@@ -176,9 +194,54 @@ export interface YearSummary {
   year: number
   months: YearMonth[]
   porCategoria: CategoryTotal[]
+  categoriaMeses: CategoryYearRow[]
   totalIngresos: string
   totalGastos: string
   totalBalance: string
+}
+
+// One category's spending per month of a year: months has 12 entries (Jan first).
+export interface CategoryYearRow {
+  category: string
+  months: string[]
+  total: string
+}
+
+export interface ForecastMonth {
+  period: string
+  cuotas: string
+  fijos: string
+  comprometido: string
+  ingresos: string
+  ingresoEstimado: boolean // no salary saved: the last known one is reused
+  libre: string
+  saldoProyectado: string
+}
+
+// Empty strings / null mean "any"; the period range matches expenses with at
+// least one installment inside it.
+export interface ExpenseFilter {
+  text: string
+  category: string
+  cardId: number | null
+  fromPeriod: string
+  toPeriod: string
+  limit: number // 0 = default (50), max 200
+  offset: number
+}
+
+export interface ExpenseHit {
+  expense: Expense
+  cardName: string
+  firstPeriod: string
+  lastPeriod: string
+  total: string
+  paidCount: number
+}
+
+export interface ExpenseSearch {
+  items: ExpenseHit[]
+  count: number
 }
 
 export interface TrashItem {
@@ -203,6 +266,9 @@ export type FixedExpenseResult = Result<FixedExpense>
 export type MonthlySummaryResult = Result<MonthlySummary>
 export type YearSummaryResult = Result<YearSummary>
 export type TrashResult = Result<TrashItem[]>
+export type CategoryBudgetsResult = Result<CategoryBudgetView[]>
+export type ForecastResult = Result<ForecastMonth[]>
+export type ExpenseSearchResult = Result<ExpenseSearch>
 
 // ---------- users ----------
 
@@ -273,8 +339,59 @@ export interface FinanceServiceContract {
 
   MonthlySummary(period: string): Promise<MonthlySummaryResult>
   YearSummary(year: number): Promise<YearSummaryResult>
+  CommitmentsForecast(fromPeriod: string, months: number): Promise<ForecastResult>
+
+  SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult>
+  ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
+
+  SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
 
   ListTrash(): Promise<TrashResult>
+}
+
+// ---------- settings (desktop-native; the web build answers with WEB_ONLY errors) ----------
+
+export interface SettingsState {
+  dbFolder: string
+  driveConnected: boolean
+  driveEmail: string
+  driveFolderName: string
+  clientIdConfigured: boolean
+  backupOnClose: boolean
+  lastBackup: string | null // RFC3339
+  backupLocalDir: string
+}
+
+export type StateResult = Result<SettingsState>
+
+export interface ChooseFolderResult {
+  canceled?: boolean
+  path?: string
+  error?: AppError | null
+}
+
+export interface ApplyFolderResult {
+  needsRestart?: boolean
+  path?: string
+  error?: AppError | null
+}
+
+export interface BackupInfo {
+  uploaded: boolean
+}
+
+export type BackupResult = Result<BackupInfo>
+
+export interface SettingsServiceContract {
+  GetState(): Promise<StateResult>
+  ChooseDBFolder(): Promise<ChooseFolderResult>
+  ApplyDBFolder(path: string): Promise<ApplyFolderResult>
+  ConnectDrive(): Promise<OpResult>
+  DisconnectDrive(): Promise<OpResult>
+  SetDriveFolderName(name: string): Promise<OpResult>
+  SetOAuthClient(clientID: string, clientSecret: string): Promise<OpResult>
+  SetBackupOnClose(enabled: boolean): Promise<OpResult>
+  BackupNow(): Promise<BackupResult>
 }
 
 export interface UsersServiceContract {

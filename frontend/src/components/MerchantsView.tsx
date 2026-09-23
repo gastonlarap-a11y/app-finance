@@ -1,26 +1,20 @@
-import { useEffect, useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useState, type SubmitEvent } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, type Merchant } from '@/services/finance'
 import { refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
-import { Button, Empty, Field, Modal, Section, inputCls } from './ui'
+import { useQuery } from '@/lib/useQuery'
+import { Button, Empty, Field, Modal, QueryError, Section, Spinner, inputCls } from './ui'
 
 export function MerchantsView() {
-  const [refresh] = useAtom(refreshAtom)
+  const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
-  const [merchants, setMerchants] = useState<Merchant[]>([])
   const [editing, setEditing] = useState<Merchant | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [confirmId, setConfirmId] = useState<number | null>(null)
   const [query, setQuery] = useState('')
 
-  useEffect(() => {
-    let active = true
-    FinanceService.ListMerchants().then((ms) => active && setMerchants(ms ?? []))
-    return () => {
-      active = false
-    }
-  }, [refresh])
+  const merchantsQuery = useQuery(String(refresh), () => FinanceService.ListMerchants())
 
   async function remove(id: number) {
     setConfirmId(null)
@@ -28,6 +22,11 @@ export function MerchantsView() {
     if (!failed(res)) bump((n) => n + 1)
   }
 
+  if (merchantsQuery.status === 'error') {
+    return <QueryError message={merchantsQuery.error} onRetry={() => bump((n) => n + 1)} />
+  }
+  if (!merchantsQuery.data) return <Spinner />
+  const merchants = merchantsQuery.data
   const filtered = merchants.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()))
 
   return (
@@ -119,12 +118,12 @@ function MerchantForm({
   const [name, setName] = useState(merchant?.name ?? '')
   const [busy, setBusy] = useState(false)
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
     try {
-      const res = editing
-        ? await FinanceService.UpdateMerchant(merchant!.id, name)
+      const res = merchant
+        ? await FinanceService.UpdateMerchant(merchant.id, name)
         : await FinanceService.CreateMerchant(name)
       if (failed(res)) return
       onSaved()

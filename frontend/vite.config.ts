@@ -1,5 +1,6 @@
 import { defineConfig, type PluginOption } from 'vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
 import wails from '@wailsio/runtime/plugins/vite'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -25,6 +26,9 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      // React Compiler (auto-memoization): plugin-react v6 dropped its inline
+      // Babel, so the compiler runs through rolldown's Babel plugin, after react().
+      babel({ presets: [reactCompilerPreset()] }),
       tailwindcss(),
       ...(isWeb
         ? [
@@ -35,6 +39,8 @@ export default defineConfig(({ mode }) => {
                 return [
                   { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/app-finance/apple-touch-icon.png' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-capable', content: 'yes' }, injectTo: 'head' as const },
+                  // Standard name (Chromium deprecates the apple- one); iOS still reads the above.
+                  { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: 'App Finance' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'theme-color', content: '#0f172a' }, injectTo: 'head' as const },
@@ -75,6 +81,7 @@ export default defineConfig(({ mode }) => {
               { find: '@/services/finance', replacement: path.resolve(__dirname, './src/services/web/finance.ts') },
               { find: '@/services/users', replacement: path.resolve(__dirname, './src/services/web/users.ts') },
               { find: '@/services/settings', replacement: path.resolve(__dirname, './src/services/web/settings.ts') },
+              { find: '@/services/diagnostics', replacement: path.resolve(__dirname, './src/services/web/diagnostics.ts') },
             ]
           : []),
         { find: '@', replacement: path.resolve(__dirname, './src') },

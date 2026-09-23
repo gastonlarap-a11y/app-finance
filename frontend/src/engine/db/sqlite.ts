@@ -23,7 +23,7 @@ export function wrapOo1Db(db: Oo1Db): SqlDb {
           if (v == null) out[k] = null
           else if (typeof v === 'number' || typeof v === 'string') out[k] = v
           else if (typeof v === 'bigint') out[k] = Number(v)
-          else out[k] = String(v)
+          else throw new Error(`columna ${k}: tipo SQLite no soportado (${Object.prototype.toString.call(v)})`)
         }
         return out satisfies SqlRow
       })

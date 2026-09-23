@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { refreshAtom } from '@/atoms/finance'
-import { lazy, Suspense } from 'react'
-import { SettingsService, type SettingsState } from '@/services/settings'
+import { SettingsService } from '@/services/settings'
 import { failed } from '@/lib/result'
-import { Button, Field, Section, Spinner, inputCls } from './ui'
+import { notify } from '@/lib/notify'
+import { useQuery } from '@/lib/useQuery'
+import { Button, Field, QueryError, Section, Spinner, inputCls } from './ui'
 
 // On the web build the whole desktop surface (DB folder, Google Drive) is
 // native-only; settings become the export/import backup view instead. Loaded
@@ -29,40 +30,28 @@ export function SettingsView() {
 }
 
 function DesktopSettingsView() {
-  const [state, setState] = useState<SettingsState | null>(null)
-  const [folderName, setFolderName] = useState('')
+  const [folderDraft, setFolderDraft] = useState<string | null>(null)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [backingUp, setBackingUp] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
-  const [notice, setNotice] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
-  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
-  const reload = useCallback(() => bump((n) => n + 1), [bump])
+  const reload = () => bump((n) => n + 1)
 
-  function showNotice(type: 'success' | 'error', msg: string) {
-    setNotice({ type, msg })
-    if (noticeTimer.current) clearTimeout(noticeTimer.current)
-    noticeTimer.current = setTimeout(() => setNotice(null), 4000)
-  }
+  const query = useQuery(String(refresh), async () => {
+    const res = await SettingsService.GetState()
+    if (res.error || !res.data) throw new Error(res.error?.message ?? 'configuración no disponible')
+    return res.data
+  })
 
-  const load = useCallback(() => {
-    SettingsService.GetState().then((r) => {
-      setState(r.data ?? null)
-      if (r.data) setFolderName(r.data.driveFolderName)
-    })
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load, refresh])
-
-  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
-
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
+  const state = query.data
   if (!state) return <Spinner />
+  const folderName = folderDraft ?? state.driveFolderName
+  const showNotice = (type: 'success' | 'error', msg: string) => notify(msg, type)
 
   async function changeDBFolder() {
     const chosen = await SettingsService.ChooseDBFolder()
@@ -100,7 +89,10 @@ function DesktopSettingsView() {
 
   async function saveFolderName() {
     const res = await SettingsService.SetDriveFolderName(folderName)
-    if (!failed(res)) reload()
+    if (!failed(res)) {
+      setFolderDraft(null)
+      reload()
+    }
   }
 
   async function saveClient() {
@@ -112,8 +104,8 @@ function DesktopSettingsView() {
     }
   }
 
-  async function toggleOnClose() {
-    const res = await SettingsService.SetBackupOnClose(!state!.backupOnClose)
+  async function toggleOnClose(enabled: boolean) {
+    const res = await SettingsService.SetBackupOnClose(enabled)
     if (!failed(res)) reload()
   }
 
@@ -133,7 +125,7 @@ function DesktopSettingsView() {
   }
 
   const lastBackup = state.lastBackup
-    ? new Date(String(state.lastBackup)).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })
+    ? new Date(state.lastBackup).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })
     : 'nunca'
 
   return (
@@ -190,7 +182,7 @@ function DesktopSettingsView() {
           <div className="mt-4">
             <Field label="Carpeta en Drive para los respaldos">
               <div className="flex gap-2">
-                <input className={inputCls} value={folderName} onChange={(e) => setFolderName(e.target.value)} />
+                <input className={inputCls} value={folderName} onChange={(e) => setFolderDraft(e.target.value)} />
                 <Button variant="ghost" onClick={saveFolderName} disabled={folderName === state.driveFolderName}>
                   Guardar
                 </Button>
@@ -207,8 +199,16 @@ function DesktopSettingsView() {
               Google (tipo "app de escritorio") una vez:
             </p>
             <div className="space-y-2">
-              <input className={inputCls} value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" />
-              <input className={inputCls} value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="Client Secret" />
+              <input className={inputCls} aria-label="Client ID" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" />
+              <input
+                className={inputCls}
+                type="password"
+                autoComplete="off"
+                aria-label="Client Secret"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="Client Secret"
+              />
               <Button onClick={saveClient} disabled={!clientId}>
                 Guardar credencial
               </Button>
@@ -220,7 +220,7 @@ function DesktopSettingsView() {
       <Section title="Respaldo">
         <div className="space-y-3">
           <label className="flex items-center gap-3 text-sm">
-            <input type="checkbox" checked={state.backupOnClose} onChange={toggleOnClose} className="h-4 w-4" />
+            <input type="checkbox" checked={state.backupOnClose} onChange={(e) => toggleOnClose(e.target.checked)} className="h-4 w-4" />
             Respaldar automáticamente al cerrar la app
           </label>
           <div className="text-xs text-slate-500">
@@ -230,11 +230,6 @@ function DesktopSettingsView() {
             <Button onClick={backupNow} disabled={backingUp}>
               {backingUp ? 'Respaldando…' : '☁ Respaldar ahora'}
             </Button>
-            {notice && (
-              <p className={`text-sm ${notice.type === 'success' ? 'text-success' : 'text-danger'}`}>
-                {notice.msg}
-              </p>
-            )}
           </div>
         </div>
       </Section>

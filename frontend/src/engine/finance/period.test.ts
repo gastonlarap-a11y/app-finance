@@ -1,8 +1,20 @@
 // Ports the exact cases from backend/finance/period_test.go.
 import { describe, expect, it } from 'vitest'
-import { addMonths, periodOf, validPeriod } from '@/engine/finance/period'
+import { addMonths, monthsBetween, periodOf, validPeriod } from '@/engine/finance/period'
 
 const d = (year: number, month: number, day: number) => ({ year, month, day })
+
+describe('monthsBetween', () => {
+  it.each([
+    ['mismo mes', '2026-05', '2026-05', 0],
+    ['dentro del año', '2026-01', '2026-12', 11],
+    ['cruce de año', '2026-11', '2027-02', 3],
+    ['hacia atrás es negativo', '2027-02', '2026-11', -3],
+    ['período inválido cuenta 0', '2026-13', '2026-01', 0],
+  ])('%s', (_name, a, b, want) => {
+    expect(monthsBetween(a, b)).toBe(want)
+  })
+})
 
 describe('periodOf', () => {
   it('compra después del corte rueda al mes siguiente', () => {

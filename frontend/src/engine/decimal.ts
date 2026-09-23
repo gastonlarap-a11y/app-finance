@@ -27,8 +27,17 @@ export class Money {
     return new Money(this.v.minus(o.v))
   }
 
+  // mulInt returns this × n (e.g. a monthly amount over n months).
+  mulInt(n: number): Money {
+    return new Money(this.v.times(n))
+  }
+
   gte(o: Money): boolean {
     return this.v.gte(o.v)
+  }
+
+  gt(o: Money): boolean {
+    return this.v.gt(o.v)
   }
 
   cmp(o: Money): number {

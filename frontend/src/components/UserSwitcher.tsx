@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { activeUserAtom, periodAtom, refreshAtom } from '@/atoms/finance'
+import { useEffect, useRef, useState, type SubmitEvent } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { UsersService, type User } from '@/services/users'
 import { currentPeriod } from '@/lib/format'
 import { failed } from '@/lib/result'
-import { Button, Field, Modal, inputCls } from './ui'
+import { useQuery } from '@/lib/useQuery'
+import { Button, Field, IconButton, Modal, inputCls } from './ui'
 
 export function UserSwitcher() {
-  const [active, setActive] = useAtom(activeUserAtom)
-  const [users, setUsers] = useState<User[]>([])
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -19,31 +18,38 @@ export function UserSwitcher() {
   const setPeriod = useSetAtom(periodAtom)
   const boxRef = useRef<HTMLDivElement>(null)
 
-  const load = useCallback(() => {
-    UsersService.ActiveUser().then((r) => setActive(r.data ?? null))
-    UsersService.ListUsers().then((list) => setUsers(list ?? []))
-  }, [setActive])
+  // Server state stays in the query (not copied into an atom): every switch
+  // bumps refreshAtom, which refetches this and every view.
+  const query = useQuery(String(refresh), async () => {
+    const [activeRes, users] = await Promise.all([UsersService.ActiveUser(), UsersService.ListUsers()])
+    return { active: activeRes.data ?? null, users }
+  })
+  const active = query.data?.active ?? null
+  const users = query.data?.users ?? []
 
-  useEffect(() => {
-    load()
-  }, [load, refresh])
-
-  // Close the dropdown when clicking outside it.
+  // Close the dropdown on outside click or Escape.
   useEffect(() => {
     if (!open) return
+    function close() {
+      setOpen(false)
+      setConfirmDeleteId(null)
+    }
     function onClick(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
-        setOpen(false)
-        setConfirmDeleteId(null)
-      }
+      if (boxRef.current && e.target instanceof Node && !boxRef.current.contains(e.target)) close()
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') close()
     }
     document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [open])
 
   // Reload every view for the freshly-selected profile.
-  function applySwitch(user: User) {
-    setActive(user)
+  function applySwitch() {
     setPeriod(currentPeriod())
     bump((n) => n + 1)
     setOpen(false)
@@ -56,24 +62,20 @@ export function UserSwitcher() {
     }
     setBusy(true)
     try {
-      const res = await UsersService.SwitchUser(id)
-      if (failed(res) || !res.data) return
-      applySwitch(res.data)
+      if (!failed(await UsersService.SwitchUser(id))) applySwitch()
     } finally {
       setBusy(false)
     }
   }
 
-  async function createUser(e: React.FormEvent) {
+  async function createUser(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
     try {
-      const res = await UsersService.CreateUser(newName)
-      if (failed(res) || !res.data) return
-      setUsers((prev) => [...prev, res.data!])
+      if (failed(await UsersService.CreateUser(newName))) return
       setNewName('')
       setCreating(false)
-      applySwitch(res.data)
+      applySwitch()
     } finally {
       setBusy(false)
     }
@@ -87,59 +89,62 @@ export function UserSwitcher() {
     try {
       const res = await UsersService.DeleteUser(id)
       if (failed(res)) return
-      if (res.data) {
-        applySwitch(res.data)
-      } else {
-        setUsers((prev) => prev.filter((u) => u.id !== id))
-        bump((n) => n + 1)
-      }
+      if (res.data) applySwitch()
+      else bump((n) => n + 1)
     } finally {
       setBusy(false)
     }
   }
 
-  const others = users.filter((u) => u.id !== active?.id)
+  const others = users.filter((u: User) => u.id !== active?.id)
   const canDelete = users.length > 1
+
+  function confirmButtons(id: number, name: string) {
+    return (
+      <span className="flex shrink-0 items-center gap-2 pr-2 text-xs">
+        <button type="button" onClick={() => removeUser(id)} className="text-danger hover:text-red-400">
+          Eliminar a {name}
+        </button>
+        <button type="button" onClick={() => setConfirmDeleteId(null)} className="text-slate-400 hover:text-slate-200">
+          Cancelar
+        </button>
+      </span>
+    )
+  }
 
   return (
     <div className="relative" ref={boxRef}>
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={busy}
+        aria-haspopup="true"
+        aria-expanded={open}
         className="flex items-center gap-2 rounded-full bg-surface-alt px-3 py-1.5 text-sm ring-1 ring-slate-700 hover:ring-slate-500 disabled:opacity-60"
         title="Cambiar de usuario"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
+        <span aria-hidden="true" className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
           {(active?.name ?? '?').charAt(0).toUpperCase()}
         </span>
         <span className="max-w-[10rem] truncate font-medium">{active?.name ?? '…'}</span>
-        <span className="text-xs text-slate-400">▾</span>
+        <span aria-hidden="true" className="text-xs text-slate-400">
+          ▾
+        </span>
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-64 rounded-base bg-surface-alt p-1.5 shadow-2xl ring-1 ring-slate-700">
+        <div className="absolute right-0 z-50 mt-2 w-72 rounded-base bg-surface-alt p-1.5 shadow-2xl ring-1 ring-slate-700">
           {active && canDelete && (
             <div className="mb-1 flex items-center justify-between rounded px-2 py-1.5 text-sm">
               <span className="truncate text-slate-300">
                 Perfil activo: <span className="font-medium text-slate-100">{active.name}</span>
               </span>
               {confirmDeleteId === active.id ? (
-                <span className="flex shrink-0 items-center gap-2 text-xs">
-                  <button onClick={() => removeUser(active.id)} className="text-danger hover:text-red-400" title="Confirmar eliminación">
-                    ✓ Sí
-                  </button>
-                  <button onClick={() => setConfirmDeleteId(null)} className="text-slate-400 hover:text-slate-200" title="Cancelar">
-                    ✕ No
-                  </button>
-                </span>
+                confirmButtons(active.id, active.name)
               ) : (
-                <button
-                  onClick={() => setConfirmDeleteId(active.id)}
-                  className="shrink-0 px-1 text-slate-500 hover:text-danger"
-                  title="Eliminar este usuario"
-                >
+                <IconButton label={`Eliminar el perfil ${active.name}`} onClick={() => setConfirmDeleteId(active.id)} className="shrink-0 text-slate-500 hover:text-danger">
                   🗑
-                </button>
+                </IconButton>
               )}
             </div>
           )}
@@ -149,38 +154,25 @@ export function UserSwitcher() {
           ) : (
             others.map((u) => (
               <div key={u.id} className="flex items-center gap-1 rounded hover:bg-slate-700/50">
-                <button
-                  onClick={() => switchTo(u.id)}
-                  className="flex flex-1 items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
-                >
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-600 text-[10px] font-bold">
+                <button type="button" onClick={() => switchTo(u.id)} className="flex flex-1 items-center gap-2 rounded px-2 py-1.5 text-left text-sm">
+                  <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-600 text-[10px] font-bold">
                     {u.name.charAt(0).toUpperCase()}
                   </span>
                   <span className="truncate">{u.name}</span>
                 </button>
                 {confirmDeleteId === u.id ? (
-                  <span className="flex shrink-0 items-center gap-1 pr-2 text-xs">
-                    <button onClick={() => removeUser(u.id)} className="text-danger hover:text-red-400" title="Confirmar eliminación">
-                      ✓
-                    </button>
-                    <button onClick={() => setConfirmDeleteId(null)} className="text-slate-400 hover:text-slate-200" title="Cancelar">
-                      ✕
-                    </button>
-                  </span>
+                  confirmButtons(u.id, u.name)
                 ) : (
-                  <button
-                    onClick={() => setConfirmDeleteId(u.id)}
-                    className="shrink-0 px-2 text-slate-500 hover:text-danger"
-                    title="Eliminar usuario"
-                  >
+                  <IconButton label={`Eliminar el perfil ${u.name}`} onClick={() => setConfirmDeleteId(u.id)} className="shrink-0 px-2 text-slate-500 hover:text-danger">
                     🗑
-                  </button>
+                  </IconButton>
                 )}
               </div>
             ))
           )}
           <div className="my-1 border-t border-slate-700" />
           <button
+            type="button"
             onClick={() => {
               setOpen(false)
               setCreating(true)
@@ -196,18 +188,9 @@ export function UserSwitcher() {
         <Modal title="Crear usuario" onClose={() => setCreating(false)}>
           <form onSubmit={createUser} className="space-y-4">
             <Field label="Nombre del usuario">
-              <input
-                className={inputCls}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Camila"
-                autoFocus
-                required
-              />
+              <input className={inputCls} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Camila" autoFocus required />
             </Field>
-            <p className="text-xs text-slate-500">
-              Se crea un perfil con sus propias finanzas (vacío) y se cambia a él al instante.
-            </p>
+            <p className="text-xs text-slate-500">Se crea un perfil con sus propias finanzas (vacío) y se cambia a él al instante.</p>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setCreating(false)}>
                 Cancelar

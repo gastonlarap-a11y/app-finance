@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import { FinanceService, type TrashItem } from '@/services/finance'
-import { UsersService, type User } from '@/services/users'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { FinanceService, type OpResult, type TrashItem } from '@/services/finance'
+import { UsersService } from '@/services/users'
 import { refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
+import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate } from '@/lib/format'
-import { Button, Empty, Section } from './ui'
+import { Button, Empty, QueryError, Section, Spinner } from './ui'
 
 const TYPE_LABELS: Record<string, string> = {
   card: 'Tarjeta',
@@ -16,41 +16,39 @@ const TYPE_LABELS: Record<string, string> = {
   fixedexpense: 'Gasto fijo',
 }
 
-const RESTORE_BY_TYPE: Record<string, (id: number) => Promise<{ error?: { code: string; message: string } | null }>> = {
-  card: FinanceService.RestoreCard,
-  category: FinanceService.RestoreCategory,
-  merchant: FinanceService.RestoreMerchant,
-  income: FinanceService.RestoreIncome,
-  expense: FinanceService.RestoreExpense,
-  fixedexpense: FinanceService.RestoreFixedExpense,
+// Arrow wrappers (not bare method references) so the service keeps its `this`.
+const RESTORE_BY_TYPE: Record<string, (id: number) => Promise<OpResult>> = {
+  card: (id) => FinanceService.RestoreCard(id),
+  category: (id) => FinanceService.RestoreCategory(id),
+  merchant: (id) => FinanceService.RestoreMerchant(id),
+  income: (id) => FinanceService.RestoreIncome(id),
+  expense: (id) => FinanceService.RestoreExpense(id),
+  fixedexpense: (id) => FinanceService.RestoreFixedExpense(id),
 }
 
 export function TrashView() {
-  const [refresh] = useAtom(refreshAtom)
+  const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
-  const [items, setItems] = useState<TrashItem[]>([])
-  const [deletedUsers, setDeletedUsers] = useState<User[]>([])
+  const reload = () => bump((n) => n + 1)
 
-  useEffect(() => {
-    let active = true
-    FinanceService.ListTrash().then((r) => active && setItems(r.data ?? []))
-    UsersService.ListDeletedUsers().then((list) => active && setDeletedUsers(list ?? []))
-    return () => {
-      active = false
-    }
-  }, [refresh])
+  const query = useQuery(String(refresh), async () => {
+    const [trash, deletedUsers] = await Promise.all([FinanceService.ListTrash(), UsersService.ListDeletedUsers()])
+    if (trash.error) throw new Error(trash.error.message)
+    return { items: trash.data ?? [], deletedUsers }
+  })
 
   async function restoreItem(item: TrashItem) {
     const restore = RESTORE_BY_TYPE[item.type]
-    if (!restore) return
-    const res = await restore(item.id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (restore && !failed(await restore(item.id))) reload()
   }
 
   async function restoreUser(id: number) {
-    const res = await UsersService.RestoreUser(id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(await UsersService.RestoreUser(id))) reload()
   }
+
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
+  if (!query.data) return <Spinner />
+  const { items, deletedUsers } = query.data
 
   return (
     <div className="space-y-6">
@@ -60,10 +58,7 @@ export function TrashView() {
         ) : (
           <ul className="space-y-2">
             {items.map((it) => (
-              <li
-                key={`${it.type}-${it.id}`}
-                className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800"
-              >
+              <li key={`${it.type}-${it.id}`} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
                 <div>
                   <span className="mr-2 rounded bg-slate-700 px-2 py-0.5 text-xs uppercase text-slate-300">
                     {TYPE_LABELS[it.type] ?? it.type}
@@ -90,10 +85,7 @@ export function TrashView() {
         ) : (
           <ul className="space-y-2">
             {deletedUsers.map((u) => (
-              <li
-                key={u.id}
-                className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800"
-              >
+              <li key={u.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
                 <div>
                   <span className="font-medium">{u.name}</span>
                   <div className="text-xs text-slate-500">Eliminado el {formatDate(u.deletedAt)}</div>

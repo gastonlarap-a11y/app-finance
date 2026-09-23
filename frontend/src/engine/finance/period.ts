@@ -34,6 +34,19 @@ export function addMonths(period: string, n: number): string {
   return fmtPeriod(Math.floor(total / 12), (((total % 12) + 12) % 12) + 1)
 }
 
+// monthsBetween returns how many months b is after a (negative when b < a).
+// Mirrors Go: an unparseable period counts as 0 months apart.
+export function monthsBetween(a: string, b: string): number {
+  if (!validPeriod(a) || !validPeriod(b)) return 0
+  const idx = (p: string) => Number(p.slice(0, 4)) * 12 + Number(p.slice(5, 7))
+  return idx(b) - idx(a)
+}
+
+// monthOf returns the month number (1..12) of a period, or 0 if invalid.
+export function monthOf(period: string): number {
+  return validPeriod(period) ? Number(period.slice(5, 7)) : 0
+}
+
 // currentPeriod is today's YYYY-MM (local time, matching time.Now() on desktop).
 export function currentPeriod(): string {
   const d = new Date()

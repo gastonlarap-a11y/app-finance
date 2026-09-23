@@ -7,9 +7,15 @@ const clp = new Intl.NumberFormat('es-CL', {
   maximumFractionDigits: 0,
 })
 
+const DECIMAL_RE = /^-?\d+(\.\d+)?$/
+
+// formatCLP formats the backend's decimal string directly (Intl.NumberFormat
+// accepts numeric strings exactly, with no float round-trip); anything that is
+// not a plain decimal renders as $0.
 export function formatCLP(v: string | number | null | undefined): string {
-  const n = typeof v === 'number' ? v : Number(v ?? 0)
-  return clp.format(Number.isFinite(n) ? n : 0)
+  if (typeof v === 'number') return clp.format(Number.isFinite(v) ? v : 0)
+  const s = (v ?? '').trim()
+  return clp.format(DECIMAL_RE.test(s) ? (s as Intl.StringNumericLiteral) : 0)
 }
 
 // Live thousands-separator masking for money <input>s (es-CL: '.' as separator).
@@ -63,9 +69,9 @@ export function todayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-export function formatDate(d: unknown): string {
+export function formatDate(d: string | null | undefined): string {
   if (!d) return '—'
-  const iso = String(d).slice(0, 10)
+  const iso = d.slice(0, 10)
   const [y, mo, day] = iso.split('-')
   const dt = new Date(Number(y), Number(mo) - 1, Number(day))
   return dt.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })

@@ -1,71 +1,87 @@
-import { useEffect, useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import { FinanceService, type Income } from '@/services/finance'
+import { useState, type SubmitEvent } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { FinanceService } from '@/services/finance'
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
+import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
-import { Button, Field, MoneyInput, Section, inputCls } from './ui'
+import { Button, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
 
 export function IncomePanel() {
-  const [period] = useAtom(periodAtom)
-  const [refresh] = useAtom(refreshAtom)
+  const period = useAtomValue(periodAtom)
+  const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
+  const reload = () => bump((n) => n + 1)
 
-  const [salary, setSalary] = useState('')
-  const [savedSalary, setSavedSalary] = useState('')
-  const [extras, setExtras] = useState<Income[]>([])
+  const key = `${period}:${refresh}`
+  const query = useQuery(key, async () => {
+    const [sal, extras] = await Promise.all([FinanceService.GetSalary(period), FinanceService.ListIncomes(period)])
+    // A failed salary read must surface as an error, never as "0": saving that
+    // zero would overwrite the real salary.
+    if (sal.error || !sal.data) throw new Error(sal.error?.message ?? 'sueldo no disponible')
+    return { salary: sal.data.amount, extras }
+  })
+
+  // The salary input's unsaved edit, tied to the load it was typed over so a
+  // month change or refetch discards it instead of leaking into another month.
+  const [draft, setDraft] = useState<{ key: string; value: string } | null>(null)
   const [desc, setDesc] = useState('')
   const [amount, setAmount] = useState('')
   const [formError, setFormError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    let active = true
-    Promise.all([FinanceService.GetSalary(period), FinanceService.ListIncomes(period)]).then(([sal, inc]) => {
-      if (!active) return
-      const value = sal.data ? String(sal.data.amount ?? '0') : '0'
-      setSalary(value)
-      setSavedSalary(value)
-      setExtras(inc ?? [])
-    })
-    return () => {
-      active = false
-    }
-  }, [period, refresh])
+  const loaded = query.status === 'success' ? query.data : undefined
+  const savedSalary = loaded?.salary ?? ''
+  const salary = draft?.key === key ? draft.value : savedSalary
 
   async function saveSalary() {
-    const res = await FinanceService.SetSalary(period, salary || '0')
-    if (!failed(res)) bump((n) => n + 1)
+    if (!loaded) return
+    setBusy(true)
+    try {
+      if (!failed(await FinanceService.SetSalary(period, salary || '0'))) {
+        setDraft(null)
+        reload()
+      }
+    } finally {
+      setBusy(false)
+    }
   }
 
-  async function addExtra(e: React.FormEvent) {
+  async function addExtra(e: SubmitEvent) {
     e.preventDefault()
     if (!desc.trim() || !amount) {
       setFormError('Completa la descripción y el monto.')
       return
     }
     setFormError('')
-    const res = await FinanceService.CreateIncome(period, desc, amount)
-    if (!failed(res)) {
+    if (!failed(await FinanceService.CreateIncome(period, desc, amount))) {
       setDesc('')
       setAmount('')
-      bump((n) => n + 1)
+      reload()
     }
   }
 
   async function removeExtra(id: number) {
-    const res = await FinanceService.DeleteIncome(id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(await FinanceService.DeleteIncome(id))) reload()
   }
 
   return (
     <Section title="Ingresos">
+      {query.status === 'error' && (
+        <p role="alert" className="mb-3 rounded bg-danger/10 px-3 py-2 text-sm text-red-200">
+          No se pudo cargar el sueldo: {query.error}.{' '}
+          <button type="button" className="underline" onClick={reload}>
+            Reintentar
+          </button>
+        </p>
+      )}
       <div className="space-y-4">
         <div>
           <Field label="Sueldo de este mes">
             <div className="flex gap-2">
-              <MoneyInput value={salary} onChange={setSalary} placeholder="0" />
-              <Button variant="ghost" onClick={saveSalary} disabled={salary === savedSalary}>
-                Guardar
+              <MoneyInput value={salary} onChange={(v) => setDraft({ key, value: v })} placeholder="0" />
+              <Button variant="ghost" onClick={saveSalary} disabled={!loaded || busy || salary === savedSalary}>
+                {busy ? 'Guardando…' : 'Guardar'}
               </Button>
             </div>
           </Field>
@@ -74,16 +90,16 @@ export function IncomePanel() {
 
         <div>
           <div className="mb-2 text-sm text-slate-300">Extras / bonos de este mes</div>
-          {extras.length > 0 && (
+          {loaded && loaded.extras.length > 0 && (
             <ul className="mb-3 space-y-1">
-              {extras.map((x) => (
+              {loaded.extras.map((x) => (
                 <li key={x.id} className="flex items-center justify-between text-sm">
                   <span className="truncate text-slate-300">{x.description}</span>
                   <span className="flex items-center gap-2">
                     <span className="tabular-nums text-success">{formatCLP(x.amount)}</span>
-                    <button onClick={() => removeExtra(x.id)} className="text-slate-500 hover:text-danger" title="Eliminar">
+                    <IconButton label={`Eliminar ${x.description}`} onClick={() => removeExtra(x.id)} className="text-slate-500 hover:text-danger">
                       ✕
-                    </button>
+                    </IconButton>
                   </span>
                 </li>
               ))}
@@ -91,17 +107,38 @@ export function IncomePanel() {
           )}
           <form onSubmit={addExtra} className="space-y-1">
             <div className="flex gap-2">
-              <input className={inputCls} value={desc} onChange={(e) => { setDesc(e.target.value); setFormError('') }} placeholder="Bono, aguinaldo…" required />
+              <input
+                className={inputCls}
+                aria-label="Descripción del ingreso extra"
+                value={desc}
+                onChange={(e) => {
+                  setDesc(e.target.value)
+                  setFormError('')
+                }}
+                placeholder="Bono, aguinaldo…"
+                required
+              />
               <MoneyInput
                 className={`${inputCls} w-28`}
+                aria-label="Monto del ingreso extra"
                 value={amount}
-                onChange={(v) => { setAmount(v); setFormError('') }}
+                onChange={(v) => {
+                  setAmount(v)
+                  setFormError('')
+                }}
                 placeholder="0"
                 required
               />
-              <Button type="submit">+</Button>
+              <Button type="submit">
+                <span aria-hidden="true">+</span>
+                <span className="sr-only">Agregar ingreso extra</span>
+              </Button>
             </div>
-            {formError && <p className="text-xs text-danger">{formError}</p>}
+            {formError && (
+              <p role="alert" className="text-xs text-danger">
+                {formError}
+              </p>
+            )}
           </form>
         </div>
       </div>

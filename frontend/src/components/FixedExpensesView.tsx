@@ -1,23 +1,16 @@
-import { useEffect, useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import {
-  FinanceService,
-  type Card,
-  type FixedExpenseView,
-} from '@/services/finance'
+import { useState, type SubmitEvent } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { FinanceService, type Card, type FixedExpenseView } from '@/services/finance'
 import { periodAtom, refreshAtom } from '@/atoms/finance'
 import { failed } from '@/lib/result'
+import { useQuery } from '@/lib/useQuery'
 import { formatCLP, periodLabel } from '@/lib/format'
-import { Button, Empty, Field, Modal, MoneyInput, Section, Select, inputCls } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
 
 export function FixedExpensesView() {
-  const [period] = useAtom(periodAtom)
-  const [refresh] = useAtom(refreshAtom)
+  const period = useAtomValue(periodAtom)
+  const refresh = useAtomValue(refreshAtom)
   const bump = useSetAtom(refreshAtom)
-
-  const [items, setItems] = useState<FixedExpenseView[]>([])
-  const [cards, setCards] = useState<Card[]>([])
-  const [categories, setCategories] = useState<string[]>([])
 
   const [editing, setEditing] = useState<FixedExpenseView | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -25,22 +18,18 @@ export function FixedExpensesView() {
   const [confirmCancel, setConfirmCancel] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
-  useEffect(() => {
-    let active = true
-    Promise.all([
+  const query = useQuery(String(refresh), async () => {
+    const [items, cards, cats] = await Promise.all([
       FinanceService.ListFixedExpenses(),
       FinanceService.ListCards(),
       FinanceService.ListCategories(),
-    ]).then(([fx, cs, cats]) => {
-      if (!active) return
-      setItems(fx ?? [])
-      setCards(cs ?? [])
-      setCategories((cats ?? []).map((c) => c.name))
-    })
-    return () => {
-      active = false
-    }
-  }, [refresh])
+    ])
+    return { items, cards, categories: cats.map((c) => c.name) }
+  })
+
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (!query.data) return <Spinner />
+  const { items, cards, categories } = query.data
 
   async function cancelFrom(id: number) {
     setConfirmCancel(null)
@@ -168,7 +157,7 @@ function FixedExpenseForm({
 }) {
   const editing = !!fixed
   const [description, setDescription] = useState(fixed?.description ?? '')
-  const [amount, setAmount] = useState(fixed ? String(fixed.currentAmount ?? '') : '')
+  const [amount, setAmount] = useState(fixed?.currentAmount ?? '')
   const [category, setCategory] = useState(fixed?.category ?? '')
   const [cardId, setCardId] = useState<string>(fixed?.cardId != null ? String(fixed.cardId) : '')
   const [startPeriod, setStartPeriod] = useState(fixed?.startPeriod ?? defaultPeriod)
@@ -177,13 +166,13 @@ function FixedExpenseForm({
   const categoryOptions =
     category && !categories.includes(category) ? [...categories, category] : categories
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
     try {
       const card = cardId === '' ? null : Number(cardId)
-      const res = editing
-        ? await FinanceService.UpdateFixedExpense(fixed!.id, description, category, card)
+      const res = fixed
+        ? await FinanceService.UpdateFixedExpense(fixed.id, description, category, card)
         : await FinanceService.CreateFixedExpense(description, category, card, startPeriod, amount)
       if (failed(res)) return
       onSaved()
@@ -205,8 +194,8 @@ function FixedExpenseForm({
             <Field label="Monto mensual">
               <MoneyInput value={amount} onChange={setAmount} placeholder="9990" required />
             </Field>
-            <Field label="Desde el mes (YYYY-MM)">
-              <input className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} placeholder="2026-06" required />
+            <Field label="Desde el mes">
+              <input type="month" className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} required />
             </Field>
           </div>
         )}
@@ -264,10 +253,10 @@ function AmountModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [amount, setAmount] = useState(String(fixed.currentAmount ?? ''))
+  const [amount, setAmount] = useState(fixed.currentAmount)
   const [busy, setBusy] = useState(false)
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
     try {
