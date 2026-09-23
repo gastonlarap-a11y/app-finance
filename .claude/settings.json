@@ -7,7 +7,10 @@
       "Bash(wails3 doctor)",
       "Bash(go build:*)",
       "Bash(go vet:*)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx tsc:*)"
     ],
     "ask": [
       "Bash(git push:*)"
@@ -17,11 +20,7 @@
       "Read(**/.env)",
       "Read(**/*.env)",
       "Read(**/secrets.env)",
-      "Read(**/google-token.json)",
-      "Read(**/*.local.go)",
-      "Read(./frontend/bindings/**)",
-      "Read(./frontend/dist/**)",
-      "Read(./bin/**)"
+      "Read(**/google-token.json)"
     ]
   },
   "hooks": {
@@ -59,6 +58,8 @@
   "enabledPlugins": {
     "go@dev-plugins": true,
     "ux@dev-plugins": true,
-    "gopls-lsp@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true
   }
 }
