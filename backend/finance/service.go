@@ -986,7 +986,12 @@ func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64,
 	if err != nil {
 		return types.Zero(), err
 	}
-	return total.Sub(fixedTotal), nil
+	// Savings contributions left the account too.
+	saved, err := s.savingsBefore(ctx, uid, period)
+	if err != nil {
+		return types.Zero(), err
+	}
+	return total.Sub(fixedTotal).Sub(saved), nil
 }
 
 func (s *FinanceService) MonthlySummary(ctx context.Context, period string) MonthlySummaryResult {
@@ -1107,8 +1112,13 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 		add(mv)
 	}
 
-	sum.Balance = sum.Disponible.Sub(sum.Gastos)
-	sum.Alcanza = sum.Disponible.GTE(sum.Gastos)
+	ahorro, err := s.savingsIn(ctx, uid, period)
+	if err != nil {
+		return nil, err
+	}
+	sum.Ahorro = ahorro
+	sum.Balance = sum.Disponible.Sub(sum.Gastos).Sub(ahorro)
+	sum.Alcanza = sum.Disponible.GTE(sum.Gastos.Add(ahorro))
 	sum.PorCategoria = sortedCategoryTotals(catTotals)
 
 	budgets, err := s.budgetStatuses(ctx, uid, period, catTotals)
@@ -1226,31 +1236,40 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 		}
 	}
 
+	ahorroByMonth, err := s.savingsByMonth(ctx, uid, prefix+"01", prefix+"12")
+	if err != nil {
+		return nil, err
+	}
+
 	out := &YearSummary{
 		Year:          year,
 		Months:        make([]YearMonth, 0, 12),
 		TotalIngresos: types.Zero(),
 		TotalGastos:   types.Zero(),
+		TotalAhorro:   types.Zero(),
 		TotalBalance:  types.Zero(),
 	}
 	for m := 1; m <= 12; m++ {
 		period := prefix + pad2(m)
 		ingresos := salaryByMonth[period].Add(extrasByMonth[period])
 		gastos := gastosByMonth[period]
-		balance := ingresos.Sub(gastos)
+		ahorro := ahorroByMonth[period]
+		balance := ingresos.Sub(gastos).Sub(ahorro)
 		saldo = saldo.Add(balance) // running account balance at month close
 		out.Months = append(out.Months, YearMonth{
 			Period:   period,
 			Ingresos: ingresos,
 			Gastos:   gastos,
+			Ahorro:   ahorro,
 			Balance:  balance,
 			Saldo:    saldo,
 			Alcanza:  saldo.GTE(types.Zero()),
 		})
 		out.TotalIngresos = out.TotalIngresos.Add(ingresos)
 		out.TotalGastos = out.TotalGastos.Add(gastos)
+		out.TotalAhorro = out.TotalAhorro.Add(ahorro)
 	}
-	out.TotalBalance = out.TotalIngresos.Sub(out.TotalGastos)
+	out.TotalBalance = out.TotalIngresos.Sub(out.TotalGastos).Sub(out.TotalAhorro)
 	out.PorCategoria, out.CategoriaMeses = byCat.rows()
 	return out, nil
 }
@@ -1352,6 +1371,15 @@ func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {
 	for _, ex := range expenses {
 		amt := ex.InstallmentAmount
 		out = append(out, TrashItem{Type: "expense", ID: ex.ID, Description: ex.Description, Amount: &amt, DeletedAt: *ex.DeletedAt})
+	}
+
+	var goals []SavingsGoal
+	if err := s.db.NewSelect().Model(&goals).WhereDeleted().Where("user_id = ?", uid).Scan(ctx); err != nil {
+		return TrashResult{Error: internalErr(err)}
+	}
+	for _, g := range goals {
+		amt := g.TargetAmount
+		out = append(out, TrashItem{Type: "savingsgoal", ID: g.ID, Description: g.Name, Amount: &amt, DeletedAt: *g.DeletedAt})
 	}
 
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, true)

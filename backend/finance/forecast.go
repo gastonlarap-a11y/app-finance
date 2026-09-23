@@ -75,6 +75,11 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		extras[inc.Period] = extras[inc.Period].Add(inc.Amount)
 	}
 
+	ahorro, err := s.savingsByMonth(ctx, uid, from, to)
+	if err != nil {
+		return nil, err
+	}
+
 	saldo, err := s.cumulativeBalanceBefore(ctx, uid, from)
 	if err != nil {
 		return nil, err
@@ -97,13 +102,14 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		}
 		ingresos := salary.Add(extras[period])
 		comprometido := cuotas[period].Add(fijos)
-		libre := ingresos.Sub(comprometido)
+		libre := ingresos.Sub(comprometido).Sub(ahorro[period])
 		saldo = saldo.Add(libre)
 		out = append(out, ForecastMonth{
 			Period:          period,
 			Cuotas:          cuotas[period],
 			Fijos:           fijos,
 			Comprometido:    comprometido,
+			Ahorro:          ahorro[period],
 			Ingresos:        ingresos,
 			IngresoEstimado: !known,
 			Libre:           libre,
