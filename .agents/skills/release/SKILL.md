@@ -9,8 +9,10 @@ disable-model-invocation: true
 Side-effectful build packaging. Run only when the user explicitly asks. Verify first, then package
 for the target platform(s).
 
-1. **Pre-flight**: `go build . && go vet ./... && go test ./...` and `cd frontend && npm run build`
-   must pass. Confirm the toolchain with `wails3 doctor` (the `wails3` CLI version must match the
+1. **Pre-flight**: `task check` (vet + lint + typecheck + tests + web build) and
+   `cd frontend && npm run build` must pass (under the Claude Code sandbox use
+   `go build -ldflags=-w -o /dev/null .` for the compile check — see AGENTS.md). Confirm the
+   toolchain with `wails3 doctor` (the `wails3` CLI version must match the
    `github.com/wailsapp/wails/v3` pin in `go.mod`).
 
 2. **macOS**:
