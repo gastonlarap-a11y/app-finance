@@ -1,4 +1,7 @@
 version: 2
+# Groups batch only minor/patch updates (low risk, one PR per ecosystem per week).
+# Major versions arrive as individual PRs so each breaking change is reviewed on
+# its own instead of sinking a whole group (as ESLint 10 + Babel 8 + vitest 5 did).
 updates:
   - package-ecosystem: gomod
     directory: /
@@ -6,6 +9,7 @@ updates:
       interval: weekly
     groups:
       go-deps:
+        update-types: ['minor', 'patch']
         patterns: ['*']
         exclude-patterns:
           # Wails v3 is a pinned pre-release: the Go lib, the wails3 CLI and
@@ -21,14 +25,24 @@ updates:
     groups:
       npm-dev:
         dependency-type: development
+        update-types: ['minor', 'patch']
       npm-prod:
         dependency-type: production
+        update-types: ['minor', 'patch']
         exclude-patterns:
           - '@wailsio/runtime'
     ignore:
       - dependency-name: '@wailsio/runtime'
       # typescript-eslint supports TypeScript < 6.1; TS 7 waits for its 7.1 API.
       - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      # eslint-plugin-jsx-a11y peers on ESLint <= 9; ESLint 10 waits for it.
+      - dependency-name: eslint
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@eslint/js'
+        update-types: ['version-update:semver-major']
+      # babel-plugin-react-compiler 1.x is built on Babel 7 (@babel/types ^7).
+      - dependency-name: '@babel/core'
         update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
@@ -37,4 +51,5 @@ updates:
       interval: weekly
     groups:
       actions:
+        update-types: ['minor', 'patch']
         patterns: ['*']
