@@ -31,7 +31,7 @@ func levelFromString(s string) slog.Level {
 func Setup(level string) {
 	lvl := levelFromString(level)
 	var handlers []slog.Handler
-	handlers = append(handlers, tint.NewHandler(os.Stderr, &tint.Options{
+	handlers = append(handlers, tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:      lvl,
 		TimeFormat: time.Kitchen,
 	}))
