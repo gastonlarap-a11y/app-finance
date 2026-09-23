@@ -11,8 +11,9 @@ description: >
 # Wails Desktop Skill (v3 default · v2 legacy)
 
 > **Sources**: Wails v3 docs — <https://v3.wails.io> · Wails v2 docs — <https://wails.io>
-> **Status (2026-06)**: **v3 is alpha** (`v3.0.0-alpha.x`, no stable release yet) but
-> API-stable and production-used. **v2.x** is the current stable line.
+> **Status (2026-09)**: **v3 is beta** (`v3.0.0-beta.x` since 2026-08, no stable release yet):
+> the desktop API is stable. **v2.x** is the current stable line. This repo pins `v3.0.0-beta.25`
+> (lib, `wails3` CLI and `@wailsio/runtime` share the version).
 > **This repo's generator (`generador.go`) emits v3 only** — treat v3 as the default;
 > reach for v2 syntax only when explicitly working on a v2 codebase.
 > For the Go *language* layer (1.26 idioms, slog, context), see the **`go-modern`** skill.
@@ -194,7 +195,7 @@ GitHub Actions workflow are in [REFERENCE.md](./REFERENCE.md).
 
 **Rules**
 
-- PIN the Wails version (v3 is alpha; nightly releases can break) — edit `go.mod` and run
+- PIN the Wails version (v3 beta ships nightlies that can still break) — edit `go.mod` and run
   `go mod tidy`, then `wails3 doctor` to verify the toolchain.
 - RUN `wails3 doctor` after any toolchain/dependency change before reporting a build as working.
 

@@ -48,16 +48,17 @@ cache is not sandbox-writable); `go build .`'s dsymutil step also fails — use
 over `npx tsc` and pass `--cache $TMPDIR/npm-cache` to npm (the npm cache is not sandbox-writable);
 `npm install` (lockfile) and dev servers (port bind) need to run outside the sandbox.
 
-## Versions (alpha — keep aligned)
+## Versions (beta — keep aligned)
 
 - Go toolchain: `go 1.27` in `go.mod` (CI reads it via `go-version-file`). Node 24 LTS
   (`frontend/.nvmrc`). TypeScript stays on 5.9 until typescript-eslint supports TS 7 (7.1 API).
-- Go library: `github.com/wailsapp/wails/v3 v3.0.0-alpha2.108` (pinned in `go.mod`; excluded from
+- Go library: `github.com/wailsapp/wails/v3 v3.0.0-beta.25` (pinned in `go.mod`; excluded from
   Dependabot — bump lib, CLI and `@wailsio/runtime` together by hand).
 - `wails3` CLI **must match** the Go library version; reinstall with
-  `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.108` when you change the pin.
-- npm `@wailsio/runtime` tracks its own `latest` (`3.0.0-alpha.94`, the series pairing with
-  alpha2.108). Run `wails3 doctor` after any toolchain change.
+  `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.25` when you change the pin
+  (CI derives it from `go.mod`). Different CLI versions emit different binding models.
+- npm `@wailsio/runtime` shares the version since the beta line: `3.0.0-beta.25`. Run
+  `wails3 doctor` after any toolchain change.
 
 ## Architecture
 

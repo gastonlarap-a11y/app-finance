@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
-    "@wailsio/runtime": "^3.0.0-alpha.94",
+    "@wailsio/runtime": "^3.0.0-beta.25",
     "comlink": "^4.4.2",
     "decimal.js": "^10.6.0",
     "jotai": "^2.10.0",

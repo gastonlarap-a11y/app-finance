@@ -34,17 +34,19 @@ invoked from the `OnShutdown` hook when backup-on-close is enabled.
 
 ## 2. ⚠ Wails v3 Status
 
-This project targets **Wails v3** (alpha as of 2026). The API is stable and
-applications run in production, but alpha releases may introduce breaking changes.
+This project targets **Wails v3** (beta since 2026-08: the desktop API is
+stable, releases are still pre-release nightlies).
 
-**This project pins Wails to:** `v3.0.0-alpha2.108`
+**This project pins Wails to:** `v3.0.0-beta.25`
 The `wails3` CLI **must match** this version (install with
-`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.108`). The npm
-`@wailsio/runtime` tracks its own `latest` (`3.0.0-alpha.94`), the series that pairs
-with the Go alpha2.108 line. To change the pin: edit go.mod, run `go mod tidy`,
-reinstall the matching CLI, then verify with `wails3 doctor`.
+`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.25`) — different
+CLI versions generate different binding models. The npm `@wailsio/runtime` uses
+the same version (`3.0.0-beta.25`). To change the pin: `go get
+github.com/wailsapp/wails/v3@<ver>`, `go mod tidy`, `npm i @wailsio/runtime@<ver>`,
+reinstall the matching CLI, regenerate bindings, then verify with `wails3 doctor`
+and `task check`.
 
-Requirements: Go 1.25+, Node.js 20+. Run `wails3 doctor` to verify.
+Requirements: Go 1.27+, Node.js 24 LTS. Run `wails3 doctor` to verify.
 
 - v2 docs: https://wails.io
 - v3 docs: https://v3.wails.io
