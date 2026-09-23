@@ -1,0 +1,115 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds the desktop installers and publishes them as a
+# GitHub Release. The tag must match info.version in build/config.yml (bump it,
+# run `wails3 task common:update:build-assets`, merge, then tag main).
+# workflow_dispatch builds the same artifacts without publishing (dry run).
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release and upload its assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installers:
+    # One macOS runner builds both: the universal .app/.dmg natively and the
+    # Windows NSIS installer cross-compiled (pure-Go SQLite, no CGO for Windows).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read and check the version
+        id: version
+        run: |
+          version=$(sed -n 's/^  version: "\([0-9][^"]*\)".*/\1/p' build/config.yml | head -1)
+          if [ -z "$version" ]; then echo "::error::info.version not found in build/config.yml"; exit 1; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match build/config.yml version ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install toolchain (wails3 matching go.mod, makensis)
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
+          brew install makensis
+
+      - name: Frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      # CI already gates main; this re-checks the exact tagged commit quickly.
+      - name: Backend tests
+        run: |
+          mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+          go test ./...
+
+      - name: macOS — universal .app (arm64 + amd64) → .dmg
+        run: |
+          wails3 task darwin:package:universal
+          dmg="bin/App-Finance-${{ steps.version.outputs.version }}-macos.dmg"
+          hdiutil create -volname "App Finance" -srcfolder bin/app-finance.app -ov -format UDZO "$dmg"
+
+      - name: Windows — NSIS installer (amd64)
+        run: |
+          wails3 task package:windows
+          mv bin/app-finance-amd64-installer.exe "bin/App-Finance-${{ steps.version.outputs.version }}-windows-setup.exe"
+
+      - name: Checksums
+        working-directory: bin
+        run: shasum -a 256 App-Finance-*.dmg App-Finance-*-setup.exe | tee SHA256SUMS.txt
+
+      - name: Upload artifacts (dry run)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ steps.version.outputs.version }}
+          path: |
+            bin/App-Finance-*.dmg
+            bin/App-Finance-*-setup.exe
+            bin/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Instalación
+
+          **macOS** (Apple Silicon e Intel): abre el `.dmg` y arrastra **app-finance** a *Aplicaciones*
+          (reemplaza la versión anterior). La app no está notarizada: la primera vez, clic derecho →
+          **Abrir** → **Abrir igualmente**.
+
+          **Windows**: ejecuta `…-windows-setup.exe`. SmartScreen avisará porque no tiene firma
+          comercial: **Más información → Ejecutar de todos modos**. Se instala sobre la versión anterior.
+
+          Tus datos no se tocan: la base de datos vive fuera de la app y las migraciones nuevas se
+          aplican solas al abrirla. Recomendado: «☁ Respaldar» antes de actualizar.
+
+          **iPad**: la versión web (PWA) se actualiza sola al abrirla.
+
+          Verifica la descarga con `SHA256SUMS.txt` (`shasum -a 256 -c SHA256SUMS.txt`).
+          EOF
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "App Finance ${VERSION}" \
+            --notes-file notes.md \
+            --generate-notes \
+            bin/App-Finance-*.dmg bin/App-Finance-*-setup.exe bin/SHA256SUMS.txt
