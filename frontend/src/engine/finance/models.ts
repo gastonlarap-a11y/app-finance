@@ -9,6 +9,8 @@ import type {
   Installment,
   Merchant,
   PeriodSalary,
+  SavingsContribution,
+  SavingsGoal,
   Settings,
 } from '@/services/contract'
 import {
@@ -56,6 +58,29 @@ export function rowToMerchant(r: SqlRow): Merchant {
     name: asString(r.name),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
+  }
+}
+
+export function rowToSavingsGoal(r: SqlRow): SavingsGoal {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    name: asString(r.name),
+    targetAmount: asString(r.target_amount),
+    targetPeriod: asString(r.target_period),
+    createdAt: asString(r.created_at),
+    deletedAt: asNullableString(r.deleted_at),
+  }
+}
+
+export function rowToSavingsContribution(r: SqlRow): SavingsContribution {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    goalId: asNumber(r.goal_id),
+    period: asString(r.period),
+    amount: asString(r.amount),
+    createdAt: asString(r.created_at),
   }
 }
 

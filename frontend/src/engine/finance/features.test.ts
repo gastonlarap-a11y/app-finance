@@ -114,15 +114,15 @@ describe('proyección de compromisos', () => {
     const f = ok(await finance.CommitmentsForecast('2030-01', 3)).data!
     expect(f).toEqual([
       {
-        period: '2030-01', cuotas: '100000', fijos: '0', comprometido: '100000', ingresos: '1000000',
+        period: '2030-01', cuotas: '100000', fijos: '0', comprometido: '100000', ahorro: '0', ingresos: '1000000',
         ingresoEstimado: true, libre: '900000', saldoProyectado: '1900000',
       },
       {
-        period: '2030-02', cuotas: '100000', fijos: '20000', comprometido: '120000', ingresos: '1200000',
+        period: '2030-02', cuotas: '100000', fijos: '20000', comprometido: '120000', ahorro: '0', ingresos: '1200000',
         ingresoEstimado: false, libre: '1080000', saldoProyectado: '2980000',
       },
       {
-        period: '2030-03', cuotas: '0', fijos: '20000', comprometido: '20000', ingresos: '1250000',
+        period: '2030-03', cuotas: '0', fijos: '20000', comprometido: '20000', ahorro: '0', ingresos: '1250000',
         ingresoEstimado: true, libre: '1230000', saldoProyectado: '4210000',
       },
     ])

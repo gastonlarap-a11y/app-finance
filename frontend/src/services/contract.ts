@@ -155,7 +155,8 @@ export interface MonthlySummary {
   gastos: string
   pendiente: string
   pagado: string
-  balance: string
+  ahorro: string // savings contributions of the month (leave disponible, not gastos)
+  balance: string // disponible − gastos − ahorro
   alcanza: boolean
   porCategoria: CategoryTotal[]
   porTarjeta: CardDebt[]
@@ -185,7 +186,8 @@ export interface YearMonth {
   period: string
   ingresos: string
   gastos: string
-  balance: string
+  ahorro: string
+  balance: string // ingresos − gastos − ahorro
   saldo: string
   alcanza: boolean
 }
@@ -197,6 +199,7 @@ export interface YearSummary {
   categoriaMeses: CategoryYearRow[]
   totalIngresos: string
   totalGastos: string
+  totalAhorro: string
   totalBalance: string
 }
 
@@ -212,10 +215,90 @@ export interface ForecastMonth {
   cuotas: string
   fijos: string
   comprometido: string
+  ahorro: string // savings contributions already registered for the month
   ingresos: string
   ingresoEstimado: boolean // no salary saved: the last known one is reused
-  libre: string
+  libre: string // ingresos − comprometido − ahorro
   saldoProyectado: string
+}
+
+// ---------- savings goals ----------
+
+export interface SavingsGoal {
+  id: number
+  userId: number
+  name: string
+  targetAmount: string
+  targetPeriod: string // YYYY-MM, '' = no target month
+  createdAt: string
+  deletedAt?: string | null
+}
+
+export interface SavingsContribution {
+  id: number
+  userId: number
+  goalId: number
+  period: string
+  amount: string
+  createdAt: string
+}
+
+export interface SavingsGoalView extends SavingsGoal {
+  saved: string
+  remaining: string
+  monthsLeft: number
+  monthlyNeeded: string // 0 without target month, once reached, or when it passed
+  contributions: SavingsContribution[] // newest first
+}
+
+// ---------- spending trend ----------
+
+export interface TrendMonth {
+  period: string
+  gastos: string
+}
+
+export interface CategoryTrend {
+  category: string
+  current: string
+  previous: string
+  average: string // average of the window's earlier months (rounded)
+}
+
+export interface SpendingTrend {
+  months: TrendMonth[] // oldest first, the selected month last
+  current: string
+  previous: string
+  average: string
+  categories: CategoryTrend[] // by current spend, descending
+}
+
+// ---------- recurring detection ----------
+
+export interface RecurringSuggestion {
+  description: string
+  merchant: string
+  category: string
+  cardId: number | null
+  amount: string // most recent amount
+  periods: string[] // months it appeared in (ascending)
+  nextPeriod: string
+}
+
+// ---------- export (reports) ----------
+
+export type ExportColumnKind = 'text' | 'money' | 'int'
+
+export interface ExportColumn {
+  title: string
+  kind: ExportColumnKind
+}
+
+// Cells are strings; money cells hold decimal strings.
+export interface ExportTable {
+  sheet: string
+  columns: ExportColumn[]
+  rows: string[][]
 }
 
 // Empty strings / null mean "any"; the period range matches expenses with at
@@ -269,6 +352,10 @@ export type TrashResult = Result<TrashItem[]>
 export type CategoryBudgetsResult = Result<CategoryBudgetView[]>
 export type ForecastResult = Result<ForecastMonth[]>
 export type ExpenseSearchResult = Result<ExpenseSearch>
+export type SavingsGoalResult = Result<SavingsGoal>
+export type SavingsContributionResult = Result<SavingsContribution>
+export type SpendingTrendResult = Result<SpendingTrend>
+export type RecurringResult = Result<RecurringSuggestion[]>
 
 // ---------- users ----------
 
@@ -345,6 +432,17 @@ export interface FinanceServiceContract {
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
+
+  ListSavingsGoals(): Promise<SavingsGoalView[]>
+  CreateSavingsGoal(name: string, targetAmount: string, targetPeriod: string): Promise<SavingsGoalResult>
+  UpdateSavingsGoal(id: number, name: string, targetAmount: string, targetPeriod: string): Promise<SavingsGoalResult>
+  DeleteSavingsGoal(id: number): Promise<OpResult>
+  RestoreSavingsGoal(id: number): Promise<OpResult>
+  AddSavingsContribution(goalID: number, period: string, amount: string): Promise<SavingsContributionResult>
+  DeleteSavingsContribution(id: number): Promise<OpResult>
+
+  SpendingTrend(period: string, months: number): Promise<SpendingTrendResult>
+  DetectRecurring(period: string): Promise<RecurringResult>
 
   ListTrash(): Promise<TrashResult>
 }

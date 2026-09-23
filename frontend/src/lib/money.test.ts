@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { greaterThan, isNegative, maxAbs, ratio, times } from '@/lib/money'
+import { greaterThan, isNegative, maxAbs, pctChange, ratio, times } from '@/lib/money'
 import { formatCLP } from '@/lib/format'
 
 describe('money helpers', () => {
@@ -15,6 +15,13 @@ describe('money helpers', () => {
     expect(ratio('300', '200')).toBe(1)
     expect(ratio('-50', '200')).toBe(0.25)
     expect(ratio('10', '0')).toBe(0)
+  })
+
+  it('pctChange redondea y no divide por cero', () => {
+    expect(pctChange('118', '100')).toBe(18)
+    expect(pctChange('95', '100')).toBe(-5)
+    expect(pctChange('1', '3')).toBe(-67)
+    expect(pctChange('10', '0')).toBeNull()
   })
 
   it('maxAbs y times', () => {

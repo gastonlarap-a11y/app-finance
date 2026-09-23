@@ -3,8 +3,10 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, KIND_UNICO, type ExpenseFilter } from '@/services/finance'
 import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
 import { useQuery } from '@/lib/useQuery'
-import { formatCLP, formatDate, periodLabel } from '@/lib/format'
+import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
+import { exportBasename, searchTable } from '@/lib/exportTables'
 import { Button, Empty, Field, QueryError, Section, Select, inputCls } from './ui'
+import { ExportButton } from './ExportButton'
 
 const PAGE = 50
 const MAX_RESULTS = 200 // backend cap per request
@@ -136,7 +138,10 @@ export function SearchView() {
       ) : data.count === 0 ? (
         <Empty>{hasFilters ? 'Ningún gasto coincide con la búsqueda.' : 'Aún no registras gastos.'}</Empty>
       ) : (
-        <Section title={`${data.count} ${data.count === 1 ? 'gasto' : 'gastos'}`}>
+        <Section
+          title={`${data.count} ${data.count === 1 ? 'gasto' : 'gastos'}`}
+          action={<ExportButton build={() => searchTable(data.items)} basename={exportBasename('busqueda', todayISO())} />}
+        >
           <div className={`overflow-x-auto transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale} aria-live="polite">
             <table className="w-full text-sm">
               <thead className="text-left text-xs uppercase text-slate-400">

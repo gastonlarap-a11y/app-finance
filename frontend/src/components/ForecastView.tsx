@@ -3,7 +3,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService } from '@/services/finance'
 import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
 import { useQuery } from '@/lib/useQuery'
-import { compare, isNegative, maxAbs, ratio, sum } from '@/lib/money'
+import { compare, isNegative, isZero, maxAbs, ratio, sum } from '@/lib/money'
 import { formatCLP, periodLabel } from '@/lib/format'
 import { QueryError, Section, Spinner, StatCard } from './ui'
 
@@ -38,6 +38,7 @@ export function ForecastView() {
     undefined,
   )
   const anyEstimated = data.some((m) => m.ingresoEstimado)
+  const anySavings = data.some((m) => !isZero(m.ahorro))
 
   return (
     <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
@@ -94,6 +95,7 @@ export function ForecastView() {
                 <th className="pb-2">Mes</th>
                 <th className="pb-2 text-right">Cuotas</th>
                 <th className="pb-2 text-right">Fijos</th>
+                {anySavings && <th className="pb-2 text-right">Ahorro</th>}
                 <th className="pb-2 text-right">Ingresos</th>
                 <th className="pb-2 text-right">Libre</th>
                 <th className="hidden pb-2 text-right md:table-cell">Saldo proy.</th>
@@ -119,6 +121,7 @@ export function ForecastView() {
                   </td>
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.cuotas)}</td>
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.fijos)}</td>
+                  {anySavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
                   <td className={`py-2 text-right tabular-nums ${m.ingresoEstimado ? 'italic text-slate-400' : 'text-slate-300'}`}>
                     {formatCLP(m.ingresos)}
                     {m.ingresoEstimado && <span className="sr-only"> (estimado)</span>}

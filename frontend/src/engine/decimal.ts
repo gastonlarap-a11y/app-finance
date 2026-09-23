@@ -32,6 +32,20 @@ export class Money {
     return new Money(this.v.times(n))
   }
 
+  // divCeil mirrors types.Decimal.DivCeil: this / n rounded up to a whole unit.
+  divCeil(n: number): Money {
+    return new Money(this.v.div(n).toDecimalPlaces(0, Big.ROUND_CEIL))
+  }
+
+  // divRound mirrors types.Decimal.DivRound: half away from zero, whole units.
+  divRound(n: number): Money {
+    return new Money(this.v.div(n).toDecimalPlaces(0, Big.ROUND_HALF_UP))
+  }
+
+  abs(): Money {
+    return new Money(this.v.abs())
+  }
+
   gte(o: Money): boolean {
     return this.v.gte(o.v)
   }

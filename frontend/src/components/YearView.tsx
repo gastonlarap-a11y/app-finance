@@ -5,6 +5,8 @@ import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
 import { formatCLP, monthLabel, yearOf } from '@/lib/format'
 import { Bar, Empty, QueryError, Section, Spinner, StatCard } from './ui'
+import { ExportButton } from './ExportButton'
+import { exportBasename, yearTable } from '@/lib/exportTables'
 
 function signTone(v: string): string {
   return isNegative(v) ? 'text-danger' : 'text-success'
@@ -42,6 +44,7 @@ export function YearView() {
   }
 
   const barMax = maxAbs(data.months.flatMap((m) => [m.gastos, m.ingresos]))
+  const hasSavings = !isZero(data.totalAhorro)
 
   return (
     <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
@@ -55,7 +58,7 @@ export function YearView() {
         />
       </div>
 
-      <Section title={`Meses de ${year}`}>
+      <Section title={`Meses de ${year}`} action={<ExportButton build={() => yearTable(data)} basename={exportBasename('anio', String(year))} />}>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase text-slate-400">
@@ -63,6 +66,7 @@ export function YearView() {
                 <th className="pb-2">Mes</th>
                 <th className="pb-2 text-right">Ingresos</th>
                 <th className="pb-2 text-right">Gastos</th>
+                {hasSavings && <th className="pb-2 text-right">Ahorro</th>}
                 <th className="pb-2 text-right">Balance</th>
                 <th className="pb-2 text-right">Saldo acum.</th>
                 <th className="pb-2 text-center">¿Alcanza?</th>
@@ -82,6 +86,7 @@ export function YearView() {
                   </td>
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ingresos)}</td>
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.gastos)}</td>
+                  {hasSavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
                   <td className={`py-2 text-right tabular-nums ${signTone(m.balance)}`}>{formatCLP(m.balance)}</td>
                   <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>{formatCLP(m.saldo)}</td>
                   <td className="py-2 text-center">

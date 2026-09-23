@@ -14,6 +14,7 @@ const TYPE_LABELS: Record<string, string> = {
   income: 'Ingreso',
   expense: 'Gasto',
   fixedexpense: 'Gasto fijo',
+  savingsgoal: 'Meta de ahorro',
 }
 
 // Arrow wrappers (not bare method references) so the service keeps its `this`.
@@ -24,6 +25,7 @@ const RESTORE_BY_TYPE: Record<string, (id: number) => Promise<OpResult>> = {
   income: (id) => FinanceService.RestoreIncome(id),
   expense: (id) => FinanceService.RestoreExpense(id),
   fixedexpense: (id) => FinanceService.RestoreFixedExpense(id),
+  savingsgoal: (id) => FinanceService.RestoreSavingsGoal(id),
 }
 
 export function TrashView() {

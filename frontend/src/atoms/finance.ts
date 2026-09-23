@@ -6,6 +6,7 @@ export type Tab =
   | 'anio'
   | 'proyeccion'
   | 'buscar'
+  | 'ahorro'
   | 'fijos'
   | 'tarjetas'
   | 'categorias'
