@@ -172,6 +172,16 @@ function App() {
         {tab === 'ajustes' && <SettingsView />}
       </main>
 
+      {IS_WEB && (
+        // The web build is the app's public home page: Google's OAuth policy asks it to link the privacy policy.
+        <footer className="mx-auto max-w-[1536px] px-6 pb-6 text-center text-xs text-slate-500">
+          App Finance guarda tus datos solo en este dispositivo ·{' '}
+          <a className="underline hover:text-slate-300" href={`${import.meta.env.BASE_URL}privacy.html`}>
+            Política de privacidad
+          </a>
+        </footer>
+      )}
+
       <Toaster />
     </div>
   )

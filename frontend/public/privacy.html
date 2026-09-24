@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Política de privacidad · App Finance</title>
+  <meta name="description" content="Qué datos usa App Finance, dónde se guardan y cómo usa Google Drive y el correo." />
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #1f2933;
+      --muted: #52606d;
+      --accent: #4f46e5;
+      --rule: #e4e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --fg: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #818cf8;
+        --rule: #1e293b;
+      }
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 16px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+    main {
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: 2rem 1rem 4rem;
+    }
+    h1 { font-size: 1.8rem; margin: 0 0 0.25rem; }
+    h2 { font-size: 1.15rem; margin: 2rem 0 0.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+    p, li { color: var(--fg); }
+    .muted { color: var(--muted); }
+    a { color: var(--accent); }
+    code { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Política de privacidad de App Finance</h1>
+    <p class="muted">Vigente desde el 24 de septiembre de 2026.</p>
+
+    <p>
+      App Finance es un gestor de finanzas personales para registrar ingresos, gastos, cuotas de
+      tarjetas y presupuestos mes a mes. Se distribuye como aplicación de escritorio (macOS y Windows)
+      y como aplicación web instalable en
+      <a href="https://gastonlarap-a11y.github.io/app-finance/">gastonlarap-a11y.github.io/app-finance</a>.
+      Su código fuente es público en
+      <a href="https://github.com/gastonlarap-a11y/app-finance">GitHub</a>.
+    </p>
+
+    <h2>Resumen</h2>
+    <ul>
+      <li>Tus datos financieros se guardan <strong>solo en tu dispositivo</strong>.</li>
+      <li>App Finance <strong>no tiene servidores propios</strong>: no recibe, no almacena y no ve tus datos.</li>
+      <li>No hay cuentas de usuario, publicidad, analítica ni rastreadores.</li>
+      <li>No vendemos ni compartimos datos con terceros.</li>
+    </ul>
+
+    <h2>Datos que guarda la app</h2>
+    <p>
+      Todo lo que ingresas (ingresos, gastos, tarjetas, categorías, comercios, metas de ahorro y
+      movimientos importados) se guarda en una base de datos local: un archivo SQLite en tu
+      computador (versión de escritorio) o el almacenamiento privado de tu navegador (versión web).
+      Puedes exportarla, respaldarla o borrarla cuando quieras.
+    </p>
+
+    <h2>Google Drive (opcional)</h2>
+    <p>
+      Si decides conectar Google Drive, la app te pide el permiso
+      <code>https://www.googleapis.com/auth/drive.file</code>, que <strong>solo da acceso a los archivos
+      y carpetas que la propia App Finance crea</strong>. No puede ver ni modificar ningún otro archivo de
+      tu Drive. Se usa únicamente para subir copias de respaldo de tu base de datos a una carpeta de tu
+      propio Drive, y para leer tu dirección de correo de Google a fin de mostrarte con qué cuenta estás
+      conectado.
+    </p>
+    <p>
+      El token de acceso que entrega Google se guarda solo en tu computador y nunca se envía a otro
+      lugar. Puedes desconectar Drive desde Ajustes o revocar el acceso en
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+    </p>
+    <p>
+      El uso y la transferencia de la información recibida de las APIs de Google cumplen la
+      <a href="https://developers.google.com/terms/api-services-user-data-policy">Política de datos de
+      usuario de los servicios de API de Google</a>, incluidos los requisitos de uso limitado.
+    </p>
+
+    <h2>Correo de alertas del banco (opcional, solo escritorio)</h2>
+    <p>
+      Si configuras tu correo, la app se conecta por IMAP directamente desde tu computador a tu proveedor
+      de correo, con una contraseña de aplicación que se guarda en el llavero del sistema operativo. Solo
+      busca los correos del remitente que tú indicas (por ejemplo, tu banco), los lee en modo de solo
+      lectura (no los marca como leídos, no los borra ni envía correos) y guarda en tu base de datos
+      local únicamente los movimientos que extrae de ellos para que los revises.
+    </p>
+
+    <h2>Estados de cuenta en PDF</h2>
+    <p>
+      Los PDF que importas se procesan dentro de la app, en tu dispositivo. No se suben a ningún
+      servidor.
+    </p>
+
+    <h2>Actualizaciones</h2>
+    <p>
+      La versión de escritorio consulta periódicamente la lista pública de versiones del proyecto en
+      GitHub para avisarte cuando hay una actualización. Esa consulta no incluye datos personales ni
+      financieros.
+    </p>
+
+    <h2>Cómo borrar tus datos</h2>
+    <p>
+      Borra el archivo de base de datos (su ubicación se muestra en Ajustes) o los datos del sitio en tu
+      navegador, desinstala la app, elimina los respaldos de la carpeta de App Finance en tu Drive y
+      revoca el acceso de Google desde el enlace indicado arriba. La contraseña del correo se elimina al
+      pulsar «Desconectar» en Ajustes.
+    </p>
+
+    <h2>Cambios y contacto</h2>
+    <p>
+      Si esta política cambia, se publicará en esta misma página con su nueva fecha. Para consultas,
+      abre un issue en
+      <a href="https://github.com/gastonlarap-a11y/app-finance/issues">github.com/gastonlarap-a11y/app-finance/issues</a>.
+    </p>
+  </main>
+</body>
+</html>
