@@ -24,8 +24,11 @@ below are the local equivalent (testing a build, or packaging without CI).
    - `task build` → `bin/app-finance` (stripped production binary).
    - `task package` → `bin/app-finance.app` (ad-hoc signed bundle).
    - `task package:dmg` → `bin/app-finance.dmg` (the shareable artifact).
-   - The bundle is **not notarized** (needs an Apple Developer account); on another Mac, Gatekeeper
-     may block the first launch → right-click → Open → Open anyway.
+   - The bundle is **not notarized** (needs an Apple Developer account). A downloaded copy carries
+     the quarantine flag and Gatekeeper blocks its first launch; since macOS 15 right-click → Open no
+     longer bypasses it: System Settings → Privacy & Security → **Open Anyway**, or
+     `xattr -dr com.apple.quarantine /Applications/app-finance.app`. Tell the user never to pick
+     "Move to Trash" in that dialog.
 
 3. **Windows** (cross-compiled from macOS, no CGO — pure-Go `modernc.org/sqlite`):
    - One-time prerequisite: `brew install makensis`.
