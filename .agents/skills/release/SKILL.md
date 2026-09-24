@@ -14,6 +14,14 @@ Official releases are built by CI: bump `info.version` in `build/config.yml`, ru
 `.github/workflows/release.yml` publishes the `.dmg` + Windows setup as a GitHub Release. The steps
 below are the local equivalent (testing a build, or packaging without CI).
 
+**Google Drive backup in releases**: the workflow writes the gitignored
+`backend/shared/drive/credentials.local.go` from the repository secrets `GOOGLE_OAUTH_CLIENT_ID` /
+`GOOGLE_OAUTH_CLIENT_SECRET` (a Google Cloud "Desktop app" OAuth client) and fails if they are
+missing — a release without them cannot refresh Drive tokens. To rotate the client: create a new
+one in Google Cloud Console, delete the old one, `gh secret set` both values, update your local
+`credentials.local.go`, and reconnect Drive once in Ajustes after installing the release. Keep the
+consent screen **In production** (in "Testing" refresh tokens expire after 7 days).
+
 **In-app updates** (`backend/updates`, Wails v3 `pkg/updater`): installed apps ≥ 0.3.0 check the
 latest GitHub Release and update themselves from two extra assets the workflow publishes —
 `app-finance-darwin-universal.zip` (the signed `.app` zipped with

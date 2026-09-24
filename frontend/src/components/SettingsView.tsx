@@ -180,6 +180,14 @@ function DesktopSettingsView() {
           )}
         </div>
 
+        {state.driveConnected && !state.clientIdConfigured && (
+          <p role="alert" className="mt-3 rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-200 ring-1 ring-amber-500/40">
+            Tu sesión de Google sigue guardada, pero esta copia de la app no trae la credencial de Google
+            necesaria para renovarla, así que los respaldos a Drive fallarán. Actualiza a la próxima versión
+            o pega la credencial en «Opciones avanzadas» y vuelve a conectar.
+          </p>
+        )}
+
         {state.driveConnected && (
           <div className="mt-4">
             <Field label="Carpeta en Drive para los respaldos">

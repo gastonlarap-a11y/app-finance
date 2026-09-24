@@ -153,7 +153,7 @@ func (s *Service) runSync(ctx context.Context, accountID int64) error {
 	}
 	ev := SyncEvent{UserID: acc.UserID, Summary: &sum}
 	if syncErr != nil {
-		ev.Error = syncErr.Error()
+		ev.Error = errorText(syncErr)
 	}
 	if s.emit != nil {
 		s.emit(EventSyncDone, ev)
@@ -164,7 +164,7 @@ func (s *Service) runSync(ctx context.Context, accountID int64) error {
 func (s *Service) recordOutcome(ctx context.Context, accountID int64, sum SyncSummary, syncErr error) error {
 	q := s.db.NewUpdate().Model((*MailAccount)(nil)).Where("id = ?", accountID)
 	if syncErr != nil {
-		q = q.Set("last_error = ?", syncErr.Error())
+		q = q.Set("last_error = ?", errorText(syncErr))
 	} else {
 		q = q.Set("last_error = ''").Set("last_synced_at = ?", time.Now()).
 			Set("last_messages = ?", sum.Messages).Set("last_recognized = ?", sum.Recognized).Set("last_added = ?", sum.Added)
@@ -236,6 +236,11 @@ func validateInput(in MailAccountInput) (MailAccountInput, *shared.AppError) {
 	}
 	if in.Folder == "" {
 		in.Folder = defaultFolder
+	}
+	// Google shows app passwords as four groups ("abcd efgh ijkl mnop"); they
+	// never contain spaces, so a pasted one is accepted either way.
+	if strings.Contains(strings.ToLower(in.Host), "gmail") {
+		in.Password = strings.Join(strings.Fields(in.Password), "")
 	}
 	if _, err := time.Parse(dateLayout, in.StartDate); err != nil {
 		return in, shared.NewError(shared.ErrValidation, "fecha de inicio inválida (use YYYY-MM-DD)")

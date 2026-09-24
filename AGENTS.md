@@ -112,7 +112,9 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Shared packages** under `backend/shared/`: `config`, `prefs` (user prefs that override config),
   `db`, `logger`, `errors.go` (`AppError`), `windowstate`, `background` (goroutine pool), `backup`,
   `drive`, `types` (Decimal). The `settings` domain owns DB-folder selection, Google Drive OAuth
-  and backup-on-close (backup runs in `main.go`'s `OnShutdown`).
+  and backup-on-close (backup runs in `main.go`'s `OnShutdown`). The OAuth client is never in git:
+  local builds read the gitignored `backend/shared/drive/credentials.local.go`; the release workflow
+  generates it from the `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` repository secrets.
 - **Web/PWA target (iPad)**: `vite --mode web` ships the same React app as a PWA backed by a TS
   port of the domain (`frontend/src/engine/`) over sqlite-wasm (opfs-sahpool, Worker + Comlink).
   Mode `web` aliases `@/services/{finance,users,settings,mailsync,…}` → `frontend/src/services/web/*`; the

@@ -123,8 +123,17 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
           aria-describedby="mail-password-help"
         />
         <p id="mail-password-help" className="mt-1 text-xs text-slate-500">
-          En Gmail usa una contraseña de aplicación (Cuenta de Google → Seguridad → Verificación en 2 pasos →
-          Contraseñas de aplicaciones), no tu clave normal. Se guarda en el llavero del sistema, no en la app.
+          {host.toLowerCase().includes('gmail') ? (
+            <>
+              Gmail <strong className="text-slate-300">no acepta tu clave normal</strong>: activa la verificación en
+              2 pasos y crea una contraseña de aplicación en{' '}
+              <span className="select-all font-mono text-slate-300">myaccount.google.com/apppasswords</span> (16
+              letras, puedes pegarla con o sin espacios).
+            </>
+          ) : (
+            'Si tu proveedor lo exige, usa una contraseña de aplicación en vez de tu clave normal.'
+          )}{' '}
+          Se guarda en el llavero del sistema, no en la app.
         </p>
       </Field>
       <div className="grid grid-cols-2 gap-3">
