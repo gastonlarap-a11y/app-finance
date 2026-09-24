@@ -162,9 +162,12 @@ task package:dmg
 Crea un disco de imagen comprimido a partir del `.app`. Este es el archivo ideal para compartir —
 el usuario lo abre, arrastra la app a su carpeta de Aplicaciones y listo.
 
-> El `.app` **no está notarizado** (notarización requiere cuenta de Apple Developer ~$99/año). Para
-> uso personal/familiar en tu mismo Mac funciona perfectamente. En un Mac ajeno, Gatekeeper puede
-> bloquear el primer arranque: clic derecho → Abrir → Abrir igualmente.
+> El `.app` **no está notarizado** (notarización requiere cuenta de Apple Developer ~$99/año). Lo que
+> compilas en tu Mac abre directo; lo **descargado** (Release) trae la marca de cuarentena y Gatekeeper
+> lo bloquea la primera vez («Apple no pudo verificar…»). **No elijas «Trasladar a la Papelera»**:
+> pulsa OK → **Ajustes del Sistema → Privacidad y seguridad → Abrir igualmente** (desde macOS 15 el
+> clic derecho → Abrir ya no lo permite), o en Terminal:
+> `xattr -dr com.apple.quarantine /Applications/app-finance.app`.
 
 ---
 
@@ -328,8 +331,10 @@ Ejecutarlo manualmente (*Run workflow*) genera los mismos instaladores como arti
 (prueba en seco). Las secciones 3 y 4 describen el empaquetado local equivalente.
 
 **Actualizar la app instalada**: descarga el último Release; en macOS arrastra `app-finance` a
-Aplicaciones (reemplaza la anterior); en Windows ejecuta el instalador (se instala encima). Los datos
-no se tocan y las migraciones se aplican solas al abrir; conviene «☁ Respaldar» antes.
+Aplicaciones (reemplaza la anterior) y la primera vez autorízala en **Privacidad y seguridad →
+Abrir igualmente** (ver la nota de la sección 3); en Windows ejecuta el instalador (se instala
+encima). Los datos no se tocan y las migraciones se aplican solas al abrir; conviene «☁ Respaldar»
+antes.
 
 ## Más
 

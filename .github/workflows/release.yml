@@ -94,9 +94,21 @@ jobs:
           cat > notes.md <<'EOF'
           ## Instalación
 
-          **macOS** (Apple Silicon e Intel): abre el `.dmg` y arrastra **app-finance** a *Aplicaciones*
-          (reemplaza la versión anterior). La app no está notarizada: la primera vez, clic derecho →
-          **Abrir** → **Abrir igualmente**.
+          **macOS** (Apple Silicon e Intel): cierra la app, abre el `.dmg` y arrastra **app-finance** a
+          *Aplicaciones* (reemplaza la versión anterior).
+
+          La app no está notarizada por Apple, así que la primera vez macOS avisa que «no pudo
+          verificar» la app. **No elijas «Trasladar a la Papelera»**: pulsa **OK**, ve a **Ajustes del
+          Sistema → Privacidad y seguridad**, baja hasta el mensaje sobre «app-finance» y pulsa
+          **Abrir igualmente** (pide tu contraseña). Desde macOS 15 el clic derecho → Abrir ya no
+          sirve para esto. Alternativa en Terminal, que quita la cuarentena solo a esta app:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/app-finance.app
+          ```
+
+          Si ya la mandaste a la Papelera: ábrela, clic derecho sobre **app-finance** → **Devolver**,
+          y sigue los pasos anteriores.
 
           **Windows**: ejecuta `…-windows-setup.exe`. SmartScreen avisará porque no tiene firma
           comercial: **Más información → Ejecutar de todos modos**. Se instala sobre la versión anterior.
