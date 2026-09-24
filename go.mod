@@ -4,6 +4,8 @@ go 1.27.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/emersion/go-imap/v2 v2.0.0-beta.8
+	github.com/emersion/go-message v0.18.2
 	github.com/lmittmann/tint v1.2.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/uptrace/bun v1.2.18
@@ -13,6 +15,8 @@ require (
 	// Wails v3 is pinned (beta nightlies may still break). Bump together with the wails3 CLI and @wailsio/runtime.
 	github.com/wailsapp/wails/v3 v3.0.0-beta.25
 	github.com/xuri/excelize/v2 v2.11.0
+	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.298.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -25,7 +29,9 @@ require (
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -58,7 +64,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect

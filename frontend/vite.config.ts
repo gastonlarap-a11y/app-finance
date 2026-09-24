@@ -66,7 +66,8 @@ export default defineConfig(({ mode }) => {
                 ],
               },
               workbox: {
-                globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,woff2}'],
+                // mjs: pdf.js ships its worker as .mjs (statement import must work offline).
+                globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,wasm,woff2}'],
                 // sqlite3.wasm outgrows workbox's default 2 MB precache limit.
                 maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
               },
@@ -83,6 +84,8 @@ export default defineConfig(({ mode }) => {
               { find: '@/services/settings', replacement: path.resolve(__dirname, './src/services/web/settings.ts') },
               { find: '@/services/diagnostics', replacement: path.resolve(__dirname, './src/services/web/diagnostics.ts') },
               { find: '@/services/reports', replacement: path.resolve(__dirname, './src/services/web/reports.ts') },
+              { find: '@/services/mailsync', replacement: path.resolve(__dirname, './src/services/web/mailsync.ts') },
+              { find: '@/services/updates', replacement: path.resolve(__dirname, './src/services/web/updates.ts') },
             ]
           : []),
         { find: '@', replacement: path.resolve(__dirname, './src') },

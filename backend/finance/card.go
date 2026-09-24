@@ -17,6 +17,7 @@ type Card struct {
 	Name        string        `bun:"name,notnull" json:"name"`
 	CreditLimit types.Decimal `bun:"credit_limit,notnull" json:"creditLimit"` // cupo total
 	BillingDay  int           `bun:"billing_day,notnull" json:"billingDay"`   // día de corte (ej. 24)
+	LastDigits  string        `bun:"last_digits,notnull" json:"lastDigits"`   // últimos 4 dígitos; "" = sin informar
 	CreatedAt   time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	DeletedAt   *time.Time    `bun:",soft_delete" json:"deletedAt,omitempty"`
 }

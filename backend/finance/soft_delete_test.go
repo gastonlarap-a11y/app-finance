@@ -37,7 +37,7 @@ func TestSoftDeleteRestoreRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)
 
-	cardRes := s.CreateCard(ctx, "Itau", "1000000", 24)
+	cardRes := s.CreateCard(ctx, "Itau", "1000000", 24, "")
 	if cardRes.Error != nil {
 		t.Fatalf("CreateCard: %v", cardRes.Error)
 	}
@@ -151,7 +151,7 @@ func TestDeleteCardKeepsHistoricalCardName(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)
 
-	cardRes := s.CreateCard(ctx, "Visa", "500000", 24)
+	cardRes := s.CreateCard(ctx, "Visa", "500000", 24, "")
 	if cardRes.Error != nil {
 		t.Fatalf("CreateCard: %v", cardRes.Error)
 	}

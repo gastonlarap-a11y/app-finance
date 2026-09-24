@@ -50,6 +50,7 @@ export function CardsView() {
                 <div className="font-medium">{c.name}</div>
                 <div className="text-xs text-slate-500">
                   Cupo {formatCLP(c.creditLimit)} · corte día {c.billingDay}
+                  {c.lastDigits !== '' && <> · terminada en {c.lastDigits}</>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -95,6 +96,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
   const [name, setName] = useState(card?.name ?? '')
   const [limit, setLimit] = useState(card?.creditLimit ?? '')
   const [billingDay, setBillingDay] = useState(String(card?.billingDay ?? 24))
+  const [lastDigits, setLastDigits] = useState(card?.lastDigits ?? '')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: SubmitEvent) {
@@ -103,8 +105,8 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
     try {
       const day = Math.min(28, Math.max(1, Number(billingDay) || 24))
       const res = card
-        ? await FinanceService.UpdateCard(card.id, name, limit || '0', day)
-        : await FinanceService.CreateCard(name, limit || '0', day)
+        ? await FinanceService.UpdateCard(card.id, name, limit || '0', day, lastDigits)
+        : await FinanceService.CreateCard(name, limit || '0', day, lastDigits)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -126,6 +128,20 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
           <input className={inputCls} type="number" min="1" max="28" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
           <p className="mt-1 text-xs text-slate-500">
             Compras hasta el día anterior (inclusive) quedan en el mes actual. El día del corte y los siguientes van al mes siguiente.
+          </p>
+        </Field>
+        <Field label="Últimos 4 dígitos (opcional)">
+          <input
+            className={inputCls}
+            inputMode="numeric"
+            pattern="[0-9]{4}"
+            maxLength={4}
+            value={lastDigits}
+            onChange={(e) => setLastDigits(e.target.value.replace(/\D/g, ''))}
+            placeholder="1234"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Permiten asociar a esta tarjeta los movimientos importados de correos y estados de cuenta.
           </p>
         </Field>
         <div className="flex justify-end gap-2 pt-2">

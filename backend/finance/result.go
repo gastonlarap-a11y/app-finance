@@ -319,6 +319,46 @@ type ExpenseSearchResult struct {
 	Error *shared.AppError `json:"error,omitempty"`
 }
 
+// --- Import inbox ---
+
+// StageSummary reports what a StageImport did with each candidate: Added are
+// new pending items, Duplicates were already in the inbox (same external key)
+// and Reconciled matched an item from the other source family.
+type StageSummary struct {
+	Added      int `json:"added"`
+	Duplicates int `json:"duplicates"`
+	Reconciled int `json:"reconciled"`
+}
+
+type StageResult struct {
+	Data  *StageSummary    `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// ImportItemView is an inbox item plus everything the review screen suggests:
+// the card resolved from its last digits, the merchant/category of the rule it
+// matches, the pattern a new rule would use, a live expense that looks like the
+// same purchase (to link instead of duplicating it) and, for conciliado items,
+// the sighting it was matched with.
+type ImportItemView struct {
+	ImportItem
+	CardID               *int64 `json:"cardId"`
+	CardName             string `json:"cardName"`
+	RulePattern          string `json:"rulePattern"` // "" = ninguna regla aplica
+	SuggestedMerchant    string `json:"suggestedMerchant"`
+	SuggestedCategory    string `json:"suggestedCategory"`
+	SuggestedPattern     string `json:"suggestedPattern"`
+	DuplicateExpenseID   *int64 `json:"duplicateExpenseId"`
+	DuplicateDescription string `json:"duplicateDescription"`
+	MatchedSource        string `json:"matchedSource"`
+	MatchedDate          string `json:"matchedDate"`
+}
+
+type ImportItemsResult struct {
+	Data  []ImportItemView `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
 // --- Trash (papelera) ---
 
 // TrashItem is one soft-deleted record of any entity type, shown in the trash

@@ -201,7 +201,7 @@ func TestSearchExpenses(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)
 
-	card := s.CreateCard(ctx, "Visa", "1000000", 24)
+	card := s.CreateCard(ctx, "Visa", "1000000", 24, "")
 	mustOK(t, "CreateCard", card.Error)
 	mustOK(t, "e1", s.CreateExpense(ctx, "2030-01-05", "Supermercado Lider", "Comida", "Lider", nil, KindUnico, "30000", 1).Error)
 	mustOK(t, "e2", s.CreateExpense(ctx, "2030-02-05", "Zapatillas", "Ropa", "Falabella", &card.Data.ID, KindCuotas, "20000", 3).Error)

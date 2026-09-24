@@ -9,6 +9,7 @@ import (
 	"github.com/uptrace/bun/migrate"
 
 	financemigrations "github.com/gastonlarap-a11y/app-finance/backend/finance/migrations"
+	mailsyncmigrations "github.com/gastonlarap-a11y/app-finance/backend/mailsync/migrations"
 	windowstatemigrations "github.com/gastonlarap-a11y/app-finance/backend/shared/windowstate/migrations"
 	usersmigrations "github.com/gastonlarap-a11y/app-finance/backend/users/migrations"
 )
@@ -21,6 +22,7 @@ func RunMigrations(ctx context.Context, bdb *bun.DB) error {
 
 	for _, fsys := range []embed.FS{
 		financemigrations.Migrations,
+		mailsyncmigrations.Migrations, // desktop only: the web engine does not load it
 		windowstatemigrations.Migrations,
 		usersmigrations.Migrations,
 	} {

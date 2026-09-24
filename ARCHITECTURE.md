@@ -26,6 +26,9 @@ Stack:
   the in-memory active-user `Session`, and soft-delete/restore of profiles.
 - **`settings`** (`backend/settings/`) — DB-folder selection, Google Drive connect/disconnect, OAuth
   client config, backup-on-close, and `BackupNow`. Drives the "Ajustes" tab.
+- **`mailsync`** (`backend/mailsync/`, desktop only) — reads the bank's purchase-alert emails over
+  IMAP and stages them in the finance import inbox (see §18). Drives "Ajustes → Correo de alertas".
+- **`updates`** (`backend/updates/`, desktop only) — in-app updates from GitHub Releases (see §19).
 - **`diagnostics`** — error reporting. **`reports`** — Excel export (`backend/reports/excel.go`).
 
 `main.go` also constructs the `users.Session` (seeded from `prefs.ActiveUserID`) before the finance
@@ -160,7 +163,11 @@ row, e.g. `DELETE FROM app_settings WHERE key = 'window_state';`.
 into a service and start/stop it from `ServiceStartup`/`ServiceShutdown`, then
 enqueue work with `worker.Enqueue(func(ctx) error { ... })`. Bound methods must
 not block the call handler — hand heavy work to the worker and stream results via
-emitted events. (The current finance methods are fast DB calls and don't use it.)
+emitted events. `mailsync` is the reference user: a single-concurrency worker runs mailbox syncs
+(queued by `SyncNow` and by an auto-sync loop owned by the service) and reports each outcome with
+`application.Get().Event.Emit("mailsync:done", SyncEvent)`, which the frontend receives through
+`onMailSyncDone` (`services/mailsync.ts`, `Events.On` from `@wailsio/runtime`). The finance methods
+are fast DB calls and don't use it.
 
 ## 10. Adding a New Domain
 
@@ -279,8 +286,8 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
 - **Shared migrations**: the engine raw-imports the same `backend/*/migrations/*.up.sql` files
   (glob — new migrations are picked up automatically), replicates bun's `--bun:split` parsing and
   its `bun_migrations` bookkeeping (name = numeric filename prefix). This makes an exported
-  `.db` file **interchangeable between desktop and web** (the `windowstate` set and the web's
-  `web_prefs` table are each ignored by the other side).
+  `.db` file **interchangeable between desktop and web** (the desktop-only `windowstate` and
+  `mailsync` sets and the web's `web_prefs` table are each ignored by the other side).
 - **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
   (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`). Import validates the file's
   bytes first (`engine/db/dbfile.ts`), then reopens the imported database to report what it held
@@ -292,3 +299,57 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
 - **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
   `base: /app-finance/`) to GitHub Pages on pushes to `main`.
+
+## 18. Import inbox (bank emails & statements)
+
+Movements detected by the bank reach the app through **one reviewed inbox** — nothing becomes an
+expense until the user confirms it:
+
+- **Inbox** (`backend/finance/importitem.go` + `imports.go`, mirrored in the TS engine):
+  `import_items` rows move `pendiente → confirmado` (new expense via `ConfirmImportItem`, or an
+  existing one via `LinkImportItem`) or `→ descartado`. `StageCandidates(ctx, idb, uid, batch)` is
+  the single entry point (bound `StageImport` for statements; `mailsync` passes its own tx). It
+  rejects a batch whole if any candidate is invalid, dedupes by a per-user `external_key` built from
+  the candidate's stable fields + its ordinal among identical ones (re-importing adds nothing), and
+  **reconciles** across source families: a statement line matching an unmatched alert email (same
+  amount/currency, compatible last digits, ±1 day) is stored `conciliado` so a purchase is never
+  reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
+  `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`) and a live
+  expense that looks like the same purchase (±2 days, cuota or total).
+- **Statements (PDF, desktop + web)**: parsed in the frontend only (`frontend/src/lib/statements/`),
+  then staged with `StageImport`. `pdfText.ts` is the only pdf.js module (dynamic import; its worker
+  is precached by the PWA). Parsers work on positioned runs: **rows are rebuilt from y coordinates**
+  (`layout.ts`), never from text order, because statements come out column by column. One parser per
+  issuer/format (`detect.ts` registry); each reports notes (what it skipped on purpose) and
+  warnings (e.g. the Itaú cartola replays daily balances and flags a mismatch). Fixtures are
+  **anonymized** `TextRun` JSON produced by `frontend/scripts/pdf-runs.mjs` — never commit a real
+  statement (the repo is public).
+- **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,
+  `BODY.PEEK[]` so nothing is marked read), MIME/charsets via `go-message`, HTML reduced to text.
+  Incremental by **UIDVALIDITY + last UID** per account; the server filters by sender (`FROM`), and
+  each fetched chunk's items and watermark commit in one transaction. The password lives in the OS
+  keychain (`go-keyring`), never in the DB or prefs. Email parsers implement `EmailParser`
+  (`parsers.go` registry); emails nobody recognizes are counted and reported, not guessed.
+
+## 19. In-app updates (desktop)
+
+`backend/updates` drives Wails v3 `pkg/updater` with its GitHub provider over this repo's Releases:
+check at startup (+20 s) and every 6 h → banner (`UpdateNotice.tsx`) → `InstallUpdate` downloads in
+the background (progress: `wails:updater:download-progress`) and verifies the SHA-256 from
+`SHA256SUMS.txt` → `RestartToUpdate` backs up, then Wails spawns the app itself in helper mode, which
+waits for the app to exit, swaps the `.app` bundle / `.exe` (keeping a `.bak` to roll back) and
+relaunches it (`open -n` on macOS). State changes reach the UI through `updates:changed`, emitted
+after the service records them (Wails' own events fire earlier).
+
+Constraints, all verified on macOS with the real bundle and the real updater code:
+- `updater.HandleHelperMode()` is the first call in `main()` (the helper must not open the DB).
+- Releases whose artifact is missing from `SHA256SUMS.txt` are refused (Wails would install them
+  unverified).
+- The helper aborts if the app takes > 30 s to exit, so the close-time backup runs inside
+  `RestartToUpdate` and `OnShutdown` skips it (`Restarting` flag).
+- The macOS zip must be built with `ditto --norsrc --noextattr --noacl`; the extracted bundle keeps
+  a valid ad-hoc signature and carries no quarantine flag, so Gatekeeper does not prompt again.
+- The app refuses to self-update when it cannot write next to itself (read-only folder, mounted
+  `.dmg`), runs translocated (not moved to Aplicaciones) or is a `wails3 dev` build.
+- Windows installs per user (`INSTALL_SCOPE: user`) so the exe can be replaced without UAC.
+- The PWA (web build) updates through its service worker; `services/web/updates.ts` is a stub.

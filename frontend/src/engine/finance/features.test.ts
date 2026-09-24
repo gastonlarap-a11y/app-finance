@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb } from '@/engine/testing/db'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession, createUsersService } from '@/engine/users/service'
-import type { ExpenseFilter, FinanceServiceContract, OpResult, UsersServiceContract } from '@/services/contract'
+import type {
+  ExpenseFilter,
+  FinanceServiceContract,
+  ImportBatch,
+  OpResult,
+  UsersServiceContract,
+} from '@/services/contract'
 
 let finance: FinanceServiceContract
 let users: UsersServiceContract
@@ -133,7 +139,7 @@ describe('proyección de compromisos', () => {
 
 describe('búsqueda de gastos', () => {
   it('filtra por texto, categoría, tarjeta y rango, pagina y escapa comodines', async () => {
-    const card = ok(await finance.CreateCard('Visa', '1000000', 24))
+    const card = ok(await finance.CreateCard('Visa', '1000000', 24, ''))
     ok(await finance.CreateExpense('2030-01-05', 'Supermercado Lider', 'Comida', 'Lider', null, 'unico', '30000', 1))
     ok(await finance.CreateExpense('2030-02-05', 'Zapatillas', 'Ropa', 'Falabella', card.data!.id, 'cuotas', '20000', 3))
     ok(await finance.CreateExpense('2030-03-05', 'Descuento 100%_off', '', '', null, 'unico', '1000', 1))
@@ -173,6 +179,25 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const cat = ok(await finance.CreateCategory('Servicios'))
     ok(await finance.SetCategoryBudget(cat.data!.id, period, '50000'))
     ok(await finance.CreateExpense(`${period}-10`, 'Cine', 'Servicios', '', null, 'cuotas', '10000', 3))
+    const blank = { currency: '', cardLastDigits: '', account: '', reference: '', installmentsTotal: 0, hint: '' }
+    const batch: ImportBatch = {
+      source: 'pdf_account',
+      issuer: 'itau',
+      items: [
+        { ...blank, date: `${period}-05`, description: 'CRUZ VERDE L9093 CHILLAN C', amount: '16182' },
+        { ...blank, date: `${period}-06`, description: 'ENTEL PCS PAGO ENSANTIAGO C', amount: '16990' },
+      ],
+    }
+    expect(ok(await finance.StageImport(batch)).data?.added).toBe(2)
+    // Newest first: [0] is Entel (confirmed below), [1] Cruz Verde (stays pending).
+    const pending = ok(await finance.ListImportItems('pendiente')).data!
+    const [otherItemID, itemID] = [pending[0]!.id, pending[1]!.id]
+    const expense = ok(await finance.CreateExpense(`${period}-05`, 'Farmacia', 'Salud', '', null, 'unico', '16182', 1))
+    ok(
+      await finance.ConfirmImportItem(otherItemID, `${period}-06`, 'Entel', 'Servicios', 'Entel', null, 'unico', '16990', 1, 'entel pcs'),
+    )
+    const rules = await finance.ListMerchantRules()
+    expect(rules).toHaveLength(1)
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -180,8 +205,19 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetFixedExpensePaid(fe.data!.id, period, true),
       () => finance.SetCategoryBudget(cat.data!.id, period, '1'),
       () => finance.DeleteFixedExpense(fe.data!.id),
+      () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
+      () => finance.LinkImportItem(itemID, expense.data!.id),
+      () => finance.DiscardImportItem(itemID),
+      () => finance.RestoreImportItem(itemID),
+      () => finance.DeleteMerchantRule(rules[0]!.id),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
+    for (const status of ['pendiente', 'confirmado']) {
+      expect(ok(await finance.ListImportItems(status)).data).toEqual([])
+    }
+    expect(await finance.ListMerchantRules()).toEqual([])
+    // Keys are per profile: the same statement is new for Camila, never reconciled with Gastón's.
+    expect(ok(await finance.StageImport(batch)).data).toEqual({ added: 2, duplicates: 0, reconciled: 0 })
 
     expect(ok(await finance.SearchExpenses(filter())).data?.count).toBe(0)
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
@@ -191,5 +227,6 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await users.SwitchUser(1))
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })
+    expect(ok(await finance.ListImportItems('pendiente')).data!.map((it) => it.id)).toEqual([itemID])
   })
 })

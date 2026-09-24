@@ -47,7 +47,7 @@ func TestUserIsolation(t *testing.T) {
 	}
 
 	// As Gastón: create a card and a category.
-	if r := fin.CreateCard(ctx, "Itau", "1000000", 24); r.Error != nil {
+	if r := fin.CreateCard(ctx, "Itau", "1000000", 24, ""); r.Error != nil {
 		t.Fatalf("CreateCard: %v", r.Error)
 	}
 	if r := fin.CreateCategory(ctx, "Comida"); r.Error != nil {
@@ -123,6 +123,30 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if contrib.Error != nil {
 		t.Fatalf("AddSavingsContribution: %v", contrib.Error)
 	}
+	batch := finance.ImportBatch{Source: finance.ImportSourcePDFAccount, Issuer: "itau", Items: []finance.ImportCandidate{
+		{Date: period + "-05", Description: "CRUZ VERDE L9093 CHILLAN C", Amount: "16182"},
+		{Date: period + "-06", Description: "ENTEL PCS PAGO ENSANTIAGO C", Amount: "16990"},
+	}}
+	if r := fin.StageImport(ctx, batch); r.Error != nil || r.Data.Added != 2 {
+		t.Fatalf("StageImport = %+v, want 2 added", r)
+	}
+	pending := fin.ListImportItems(ctx, finance.ImportPendiente)
+	if pending.Error != nil || len(pending.Data) != 2 {
+		t.Fatalf("ListImportItems = %+v, want 2 pending", pending)
+	}
+	// Newest first: [0] is Entel (confirmed below), [1] Cruz Verde (stays pending).
+	otherItemID, itemID := pending.Data[0].ID, pending.Data[1].ID
+	expense := fin.CreateExpense(ctx, period+"-05", "Farmacia", "Salud", "", nil, finance.KindUnico, "16182", 1)
+	if expense.Error != nil {
+		t.Fatalf("CreateExpense: %v", expense.Error)
+	}
+	if r := fin.ConfirmImportItem(ctx, otherItemID, period+"-06", "Entel", "Servicios", "Entel", nil, finance.KindUnico, "16990", 1, "entel pcs"); r.Error != nil {
+		t.Fatalf("ConfirmImportItem: %v", r.Error)
+	}
+	rules, err := fin.ListMerchantRules(ctx)
+	if err != nil || len(rules) != 1 {
+		t.Fatalf("ListMerchantRules = %+v (err %v), want 1", rules, err)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -136,6 +160,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetFixedExpensePaid", func() finance.OpResult { return fin.SetFixedExpensePaid(ctx, fe.Data.ID, period, true) }},
 		{"SetCategoryBudget", func() finance.OpResult { return fin.SetCategoryBudget(ctx, cat.Data.ID, period, "1") }},
 		{"DeleteFixedExpense", func() finance.OpResult { return fin.DeleteFixedExpense(ctx, fe.Data.ID) }},
+		{"ConfirmImportItem", func() finance.OpResult {
+			return finance.OpResult{Error: fin.ConfirmImportItem(ctx, itemID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1, "").Error}
+		}},
+		{"LinkImportItem", func() finance.OpResult { return fin.LinkImportItem(ctx, itemID, expense.Data.ID) }},
+		{"DiscardImportItem", func() finance.OpResult { return fin.DiscardImportItem(ctx, itemID) }},
+		{"RestoreImportItem", func() finance.OpResult { return fin.RestoreImportItem(ctx, itemID) }},
+		{"DeleteMerchantRule", func() finance.OpResult { return fin.DeleteMerchantRule(ctx, rules[0].ID) }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {
@@ -178,6 +209,19 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.DeleteSavingsGoal(ctx, goal.Data.ID); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila DeleteSavingsGoal on Gastón's goal = %+v, want NOT_FOUND", r.Error)
 	}
+	for _, status := range []string{finance.ImportPendiente, finance.ImportConfirmado} {
+		if r := fin.ListImportItems(ctx, status); r.Error != nil || len(r.Data) != 0 {
+			t.Fatalf("Camila ListImportItems(%s) = %+v, want none", status, r)
+		}
+	}
+	if rules, err := fin.ListMerchantRules(ctx); err != nil || len(rules) != 0 {
+		t.Fatalf("Camila ListMerchantRules = %+v (err %v), want none", rules, err)
+	}
+	// The same statement is new for Camila: keys are per profile, and Gastón's
+	// items are never reconciled against hers.
+	if r := fin.StageImport(ctx, batch); r.Error != nil || r.Data.Added != 2 || r.Data.Reconciled != 0 {
+		t.Fatalf("Camila StageImport = %+v, want 2 added", r)
+	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.
 	if r := usr.SwitchUser(ctx, 1); r.Error != nil {
@@ -191,6 +235,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		if mv.FixedID != nil && *mv.FixedID == fe.Data.ID && (mv.Amount.String() != "8000" || mv.Status != finance.StatusPendiente) {
 			t.Fatalf("Gastón's fixed expense was modified by Camila: %+v", mv)
 		}
+	}
+	if r := fin.ListImportItems(ctx, finance.ImportPendiente); r.Error != nil || len(r.Data) != 1 || r.Data[0].ID != itemID {
+		t.Fatalf("Gastón's pending import items after Camila = %+v, want only item %d", r, itemID)
 	}
 }
 

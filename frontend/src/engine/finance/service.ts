@@ -24,8 +24,14 @@ import type {
   FixedExpenseView,
   ForecastMonth,
   ForecastResult,
+  ImportBatch,
+  ImportCandidate,
+  ImportItem,
+  ImportItemView,
+  ImportItemsResult,
   Income,
   MerchantResult,
+  MerchantRule,
   MonthlySummary,
   MonthlySummaryResult,
   Movimiento,
@@ -41,6 +47,8 @@ import type {
   SettingsResult,
   SpendingTrend,
   SpendingTrendResult,
+  StageResult,
+  StageSummary,
   TrashItem,
   TrashResult,
   TrendMonth,
@@ -60,7 +68,18 @@ import {
   type DateParts,
 } from '@/engine/finance/period'
 import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
+import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import {
+  HintCardPayment,
+  HintNone,
+  HintTransfer,
+  ImportConciliado,
+  ImportConfirmado,
+  ImportDescartado,
+  ImportPendiente,
+  ImportSourceEmail,
+  ImportSourcePDFAccount,
+  ImportSourcePDFCard,
   KindCuotas,
   KindUnico,
   SourceCuota,
@@ -72,9 +91,11 @@ import {
   rowToExpense,
   rowToFixedExpense,
   rowToFixedExpenseAmount,
+  rowToImportItem,
   rowToIncome,
   rowToInstallment,
   rowToMerchant,
+  rowToMerchantRule,
   rowToPeriodSalary,
   rowToSavingsContribution,
   rowToSavingsGoal,
@@ -246,6 +267,137 @@ function amountOrError(s: string): { amount?: Money; error?: ReturnType<typeof n
   }
 }
 
+// validateLastDigits mirrors the Go helper: '' (not informed) or exactly four digits.
+function validateLastDigits(s: string): { digits: string; error?: ReturnType<typeof newError> } {
+  const t = s.trim()
+  if (t === '' || /^[0-9]{4}$/.test(t)) return { digits: t }
+  return { digits: '', error: newError(ErrValidation, 'los últimos dígitos deben ser 4 números') }
+}
+
+// ---------- import inbox (mirror of backend/finance/imports.go) ----------
+
+// reconcileWindowDays: an alert email and its statement line may be dated a
+// day apart (purchase date vs posting date).
+const reconcileWindowDays = 1
+// duplicateWindowDays: how far a manually entered expense may be from the
+// detected movement and still be offered as "probably the same purchase".
+const duplicateWindowDays = 2
+
+function validImportStatus(status: string): boolean {
+  return [ImportPendiente, ImportConfirmado, ImportDescartado, ImportConciliado].includes(status)
+}
+
+// validImportDate mirrors time.Parse("2006-01-02"): strict YYYY-MM-DD of a real day.
+function validImportDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return false
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const t = new Date(Date.UTC(y, mo - 1, d))
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d
+}
+
+interface StagedItem {
+  source: string
+  issuer: string
+  externalKey: string
+  date: string
+  description: string
+  amount: Money
+  currency: string
+  cardLastDigits: string
+  installmentsTotal: number
+  hint: string
+}
+
+// validateCandidate mirrors the Go helper of the same name.
+function validateCandidate(
+  c: ImportCandidate,
+): { item?: Omit<StagedItem, 'source' | 'issuer' | 'externalKey'>; error?: ReturnType<typeof newError> } {
+  const description = c.description.trim()
+  if (description === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
+  const date = c.date.trim()
+  if (!validImportDate(date)) return { error: newError(ErrValidation, 'fecha inválida (use YYYY-MM-DD): ' + c.date) }
+  const parsed = amountOrError(c.amount)
+  if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(c.amount) }
+  if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+  const digits = validateLastDigits(c.cardLastDigits)
+  if (digits.error) return { error: digits.error }
+  if (![HintNone, HintCardPayment, HintTransfer].includes(c.hint)) {
+    return { error: newError(ErrValidation, 'pista inválida: ' + c.hint) }
+  }
+  const currency = c.currency.trim().toUpperCase()
+  return {
+    item: {
+      date,
+      description,
+      amount: parsed.amount,
+      currency: currency === '' ? 'CLP' : currency,
+      cardLastDigits: digits.digits,
+      installmentsTotal: Math.max(c.installmentsTotal, 1),
+      hint: c.hint,
+    },
+  }
+}
+
+// validateBatch mirrors the Go helper: rejects the whole batch when any
+// candidate is invalid, and keys each item by its stable fields plus its
+// ordinal among identical candidates of the batch.
+function validateBatch(batch: ImportBatch): { items?: StagedItem[]; error?: ReturnType<typeof newError> } {
+  if (![ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard].includes(batch.source)) {
+    return { error: newError(ErrValidation, 'origen de importación inválido: ' + batch.source) }
+  }
+  const issuer = batch.issuer.trim().toLowerCase()
+  if (issuer === '') return { error: newError(ErrValidation, 'el emisor es obligatorio') }
+  const ordinals = new Map<string, number>()
+  const items: StagedItem[] = []
+  for (const [i, c] of batch.items.entries()) {
+    const v = validateCandidate(c)
+    if (v.error || !v.item) {
+      const err = v.error ?? newError(ErrValidation, 'movimiento inválido')
+      return { error: newError(err.code, `movimiento ${i + 1}: ${err.message}`) }
+    }
+    const base = [
+      issuer,
+      batch.source,
+      c.account.trim(),
+      v.item.date,
+      v.item.amount.toString(),
+      v.item.currency,
+      v.item.cardLastDigits,
+      normalizeKey(v.item.description),
+      c.reference.trim(),
+    ].join('|')
+    const ordinal = ordinals.get(base) ?? 0
+    ordinals.set(base, ordinal + 1)
+    items.push({ ...v.item, source: batch.source, issuer, externalKey: `${base}|${ordinal}` })
+  }
+  return { items }
+}
+
+// cardsByLastDigits maps last digits to the one live card that has them;
+// digits shared by several cards are ambiguous and resolve to none.
+function cardsByLastDigits(cards: Card[]): Map<string, Card> {
+  const out = new Map<string, Card>()
+  const seen = new Map<string, number>()
+  for (const c of cards) {
+    if (c.lastDigits === '') continue
+    seen.set(c.lastDigits, (seen.get(c.lastDigits) ?? 0) + 1)
+    out.set(c.lastDigits, c)
+  }
+  for (const [digits, n] of seen) if (n > 1) out.delete(digits)
+  return out
+}
+
+// validateRulePattern normalizes a rule pattern like descriptors; '' = no rule.
+function validateRulePattern(pattern: string): { pattern: string; error?: ReturnType<typeof newError> } {
+  if (pattern.trim() === '') return { pattern: '' }
+  const norm = normalizeDescriptor(pattern)
+  if (norm === '') {
+    return { pattern: '', error: newError(ErrValidation, 'el patrón de la regla no tiene palabras válidas') }
+  }
+  return { pattern: norm }
+}
+
 export function createFinanceService(db: SqlDb, session: ActiveSession): FinanceServiceContract {
   const uid = () => session.active()
 
@@ -363,6 +515,118 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         ],
       )
     }
+  }
+
+  // insertExpense writes a validated expense and its installments; callers wrap
+  // it in their transaction (CreateExpense, ConfirmImportItem).
+  function insertExpense(ex: ValidatedExpense, billingDay: number): Expense {
+    const row = db.query(
+      `INSERT INTO expenses (user_id, date, description, category, merchant, card_id, kind, installment_amount, installments_total, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      [
+        uid(),
+        ex.date.iso,
+        ex.description,
+        ex.category,
+        ex.merchant,
+        ex.cardId,
+        ex.kind,
+        ex.installmentAmount.toString(),
+        ex.installmentsTotal,
+        nowIso(),
+      ],
+    )[0]
+    if (!row) throw new Error('INSERT expenses RETURNING produced no row')
+    const created = rowToExpense(row)
+    generateInstallments(created.id, ex, billingDay, 0)
+    return created
+  }
+
+  // ---------- import inbox helpers ----------
+
+  // findReconcileMatch mirrors the Go helper: the other-family sighting of the
+  // item nothing has been matched with yet; closest date wins, then oldest row.
+  function findReconcileMatch(item: StagedItem): ImportItem | null {
+    const familyFilter = item.source === ImportSourceEmail ? 'source <> ?' : 'source = ?'
+    const row = db.query(
+      `SELECT * FROM import_items
+       WHERE user_id = ? AND status <> ? AND amount = ? AND currency = ?
+       AND ABS(julianday(date) - julianday(?)) <= ?
+       AND (card_last_digits = ? OR card_last_digits = '' OR ? = '')
+       AND id NOT IN (SELECT matched_item_id FROM import_items WHERE user_id = ? AND matched_item_id IS NOT NULL)
+       AND ${familyFilter}
+       ORDER BY ABS(julianday(date) - julianday(?)) ASC, id ASC LIMIT 1`,
+      [
+        uid(),
+        ImportConciliado,
+        item.amount.toString(),
+        item.currency,
+        item.date,
+        reconcileWindowDays,
+        item.cardLastDigits,
+        item.cardLastDigits,
+        uid(),
+        ImportSourceEmail,
+        item.date,
+      ],
+    )[0]
+    return row ? rowToImportItem(row) : null
+  }
+
+  function listMerchantRules(): MerchantRule[] {
+    return db
+      .query('SELECT * FROM merchant_rules WHERE user_id = ? ORDER BY pattern ASC, id ASC', [uid()])
+      .map(rowToMerchantRule)
+  }
+
+  // findDuplicateExpense mirrors the Go helper: a live expense not yet linked to
+  // an import item, within duplicateWindowDays, whose cuota or total equals the
+  // amount and, when the item's card is known, on that card.
+  function findDuplicateExpense(item: ImportItem, cardId: number | null): Expense | null {
+    const params: SqlValue[] = [uid(), item.date, duplicateWindowDays, uid()]
+    let cardFilter = ''
+    if (cardId != null) {
+      cardFilter = 'AND card_id = ?'
+      params.push(cardId)
+    }
+    params.push(item.date)
+    const rows = db.query(
+      `SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL
+       AND ABS(julianday(substr(date, 1, 10)) - julianday(?)) <= ?
+       AND id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)
+       ${cardFilter}
+       ORDER BY ABS(julianday(substr(date, 1, 10)) - julianday(?)) ASC, id ASC`,
+      params,
+    )
+    const amount = Money.fromString(item.amount)
+    for (const r of rows) {
+      const ex = rowToExpense(r)
+      const cuota = Money.fromString(ex.installmentAmount)
+      if (cuota.cmp(amount) === 0 || cuota.mulInt(ex.installmentsTotal).cmp(amount) === 0) return ex
+    }
+    return null
+  }
+
+  // loadPendingItem: NotFound when the item does not exist for the user,
+  // Conflict when it was already processed.
+  function loadPendingItem(id: number): { item?: ImportItem; error?: ReturnType<typeof newError> } {
+    const row = db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [id, uid()])[0]
+    if (!row) return { error: newError(ErrNotFound, 'movimiento no encontrado') }
+    const item = rowToImportItem(row)
+    if (item.status !== ImportPendiente) return { error: newError(ErrConflict, 'el movimiento ya fue procesado') }
+    return { item }
+  }
+
+  function moveImportItem(id: number, from: string, to: string): OpResult {
+    return db.transaction((): OpResult => {
+      const row = db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [id, uid()])[0]
+      if (!row) return { error: newError(ErrNotFound, 'movimiento no encontrado') }
+      if (rowToImportItem(row).status !== from) {
+        return { error: newError(ErrConflict, 'el movimiento no está ' + from) }
+      }
+      db.exec('UPDATE import_items SET status = ? WHERE id = ? AND user_id = ?', [to, id, uid()])
+      return {}
+    })
   }
 
   interface LoadedFixed {
@@ -739,29 +1003,39 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return listCardsActive()
     },
 
-    async CreateCard(name: string, creditLimit: string, billingDay: number): Promise<CardResult> {
+    async CreateCard(name: string, creditLimit: string, billingDay: number, lastDigits: string): Promise<CardResult> {
       if (name.trim() === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
       const parsed = amountOrError(creditLimit)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(creditLimit) }
+      const digits = validateLastDigits(lastDigits)
+      if (digits.error) return { error: digits.error }
       const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
       const row = db.query(
-        `INSERT INTO cards (user_id, name, credit_limit, billing_day, created_at)
-         VALUES (?, ?, ?, ?, ?) RETURNING *`,
-        [uid(), name.trim(), parsed.amount.toString(), day, nowIso()],
+        `INSERT INTO cards (user_id, name, credit_limit, billing_day, last_digits, created_at)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+        [uid(), name.trim(), parsed.amount.toString(), day, digits.digits, nowIso()],
       )[0]
       if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
       return { data: rowToCard(row) }
     },
 
-    async UpdateCard(id: number, name: string, creditLimit: string, billingDay: number): Promise<CardResult> {
+    async UpdateCard(
+      id: number,
+      name: string,
+      creditLimit: string,
+      billingDay: number,
+      lastDigits: string,
+    ): Promise<CardResult> {
       if (name.trim() === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
       const parsed = amountOrError(creditLimit)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(creditLimit) }
+      const digits = validateLastDigits(lastDigits)
+      if (digits.error) return { error: digits.error }
       const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
       db.exec(
-        `UPDATE cards SET name = ?, credit_limit = ?, billing_day = ?
+        `UPDATE cards SET name = ?, credit_limit = ?, billing_day = ?, last_digits = ?
          WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-        [name.trim(), parsed.amount.toString(), day, id, uid()],
+        [name.trim(), parsed.amount.toString(), day, digits.digits, id, uid()],
       )
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
       const row = db.query('SELECT * FROM cards WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
@@ -983,28 +1257,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const ex = v.expense
       const billing = billingDayFor(cardID)
       if (billing.error) return { error: billing.error }
-      return db.transaction((): ExpenseResult => {
-        const row = db.query(
-          `INSERT INTO expenses (user_id, date, description, category, merchant, card_id, kind, installment_amount, installments_total, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-          [
-            uid(),
-            ex.date.iso,
-            ex.description,
-            ex.category,
-            ex.merchant,
-            ex.cardId,
-            ex.kind,
-            ex.installmentAmount.toString(),
-            ex.installmentsTotal,
-            nowIso(),
-          ],
-        )[0]
-        if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
-        const created = rowToExpense(row)
-        generateInstallments(created.id, ex, billing.day, 0)
-        return { data: created }
-      })
+      return db.transaction((): ExpenseResult => ({ data: insertExpense(ex, billing.day) }))
     },
 
     async UpdateExpense(
@@ -1777,6 +2030,176 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       out.sort((a, b) => b.periods.length - a.periods.length || compareStrings(a.description, b.description))
       return { data: out }
+    },
+
+    // ---------- import inbox ----------
+
+    async StageImport(batch: ImportBatch): Promise<StageResult> {
+      const v = validateBatch(batch)
+      if (v.error || !v.items) return { error: v.error ?? newError(ErrValidation, 'lote inválido') }
+      const items = v.items
+      return db.transaction((): StageResult => {
+        const sum: StageSummary = { added: 0, duplicates: 0, reconciled: 0 }
+        for (const item of items) {
+          const exists = db.query('SELECT 1 FROM import_items WHERE user_id = ? AND external_key = ?', [
+            uid(),
+            item.externalKey,
+          ])
+          if (exists.length > 0) {
+            sum.duplicates++
+            continue
+          }
+          const match = findReconcileMatch(item)
+          db.exec(
+            `INSERT INTO import_items (user_id, source, issuer, external_key, date, description, amount, currency,
+             card_last_digits, installments_total, hint, status, matched_item_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              uid(),
+              item.source,
+              item.issuer,
+              item.externalKey,
+              item.date,
+              item.description,
+              item.amount.toString(),
+              item.currency,
+              item.cardLastDigits,
+              item.installmentsTotal,
+              item.hint,
+              match ? ImportConciliado : ImportPendiente,
+              match ? match.id : null,
+              nowIso(),
+            ],
+          )
+          if (!match) {
+            sum.added++
+            continue
+          }
+          sum.reconciled++
+          // A statement knows the installment count an alert may not carry.
+          if (item.installmentsTotal > 1 && match.installmentsTotal === 1) {
+            db.exec('UPDATE import_items SET installments_total = ? WHERE id = ? AND user_id = ?', [
+              item.installmentsTotal,
+              match.id,
+              uid(),
+            ])
+          }
+        }
+        return { data: sum }
+      })
+    },
+
+    async ListImportItems(status: string): Promise<ImportItemsResult> {
+      if (!validImportStatus(status)) return { error: newError(ErrValidation, 'estado inválido: ' + status) }
+      const items = db
+        .query('SELECT * FROM import_items WHERE user_id = ? AND status = ? ORDER BY date DESC, id DESC', [
+          uid(),
+          status,
+        ])
+        .map(rowToImportItem)
+      const cardByDigits = cardsByLastDigits(listCardsActive())
+      const rules = listMerchantRules()
+      const data = items.map((it): ImportItemView => {
+        const card = cardByDigits.get(it.cardLastDigits)
+        const rule = ruleFor(rules, it.description)
+        const dup = it.status === ImportPendiente ? findDuplicateExpense(it, card?.id ?? null) : null
+        const matchedRow =
+          it.matchedItemId != null
+            ? db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [it.matchedItemId, uid()])[0]
+            : undefined
+        const matched = matchedRow ? rowToImportItem(matchedRow) : null
+        return {
+          ...it,
+          cardId: card?.id ?? null,
+          cardName: card?.name ?? '',
+          rulePattern: rule?.pattern ?? '',
+          suggestedMerchant: rule?.merchant ?? '',
+          suggestedCategory: rule?.category ?? '',
+          suggestedPattern: suggestPattern(it.description),
+          duplicateExpenseId: dup?.id ?? null,
+          duplicateDescription: dup?.description ?? '',
+          matchedSource: matched?.source ?? '',
+          matchedDate: matched?.date ?? '',
+        }
+      })
+      return { data }
+    },
+
+    async ConfirmImportItem(
+      id: number,
+      dateStr: string,
+      description: string,
+      category: string,
+      merchant: string,
+      cardID: number | null,
+      kind: string,
+      installmentAmount: string,
+      installmentsTotal: number,
+      rulePattern: string,
+    ): Promise<ExpenseResult> {
+      const v = validateExpense(dateStr, description, category, merchant, cardID, kind, installmentAmount, installmentsTotal)
+      if (v.error || !v.expense) return { error: v.error ?? newError(ErrValidation, 'gasto inválido') }
+      const ex = v.expense
+      const pattern = validateRulePattern(rulePattern)
+      if (pattern.error) return { error: pattern.error }
+      const billing = billingDayFor(cardID)
+      if (billing.error) return { error: billing.error }
+      return db.transaction((): ExpenseResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error) return { error: pending.error }
+        const created = insertExpense(ex, billing.day)
+        db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          created.id,
+          id,
+          uid(),
+        ])
+        if (pattern.pattern !== '') {
+          db.exec(
+            `INSERT INTO merchant_rules (user_id, pattern, merchant, category, created_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (user_id, pattern) DO UPDATE SET merchant = EXCLUDED.merchant, category = EXCLUDED.category`,
+            [uid(), pattern.pattern, ex.merchant, ex.category, nowIso()],
+          )
+        }
+        return { data: created }
+      })
+    },
+
+    async LinkImportItem(id: number, expenseID: number): Promise<OpResult> {
+      return db.transaction((): OpResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error) return { error: pending.error }
+        const ok = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+          expenseID,
+          uid(),
+        ])
+        if (ok.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          expenseID,
+          id,
+          uid(),
+        ])
+        return {}
+      })
+    },
+
+    async DiscardImportItem(id: number): Promise<OpResult> {
+      return moveImportItem(id, ImportPendiente, ImportDescartado)
+    },
+
+    async RestoreImportItem(id: number): Promise<OpResult> {
+      return moveImportItem(id, ImportDescartado, ImportPendiente)
+    },
+
+    async ListMerchantRules(): Promise<MerchantRule[]> {
+      return listMerchantRules()
+    },
+
+    async DeleteMerchantRule(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM merchant_rules WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'regla no encontrada') }
+      return {}
     },
 
     // ---------- trash (papelera) ----------
