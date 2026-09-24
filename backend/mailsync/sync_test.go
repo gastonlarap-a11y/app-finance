@@ -350,8 +350,58 @@ func TestSyncWithWrongPasswordRecordsTheError(t *testing.T) {
 	if acc := h.account(t); !strings.Contains(acc.LastError, "contraseña") || acc.LastSyncedAt != nil {
 		t.Fatalf("account after failed sync = %+v", acc)
 	}
+	if acc := h.account(t); strings.HasPrefix(acc.LastError, "VALIDATION_ERROR") || strings.HasPrefix(h.events[len(h.events)-1].Error, "VALIDATION_ERROR") {
+		t.Fatalf("the user-facing error leaks the internal code: %q", acc.LastError)
+	}
 	if r := h.svc.TestMailConnection(t.Context()); r.Error == nil {
 		t.Fatal("TestMailConnection with a wrong password = ok")
+	}
+}
+
+func TestGmailAppPasswordSpacesAreDropped(t *testing.T) {
+	tests := []struct {
+		host, password, want string
+	}{
+		{"imap.gmail.com", "abcd efgh ijkl mnop", "abcdefghijklmnop"},
+		{"IMAP.GMAIL.COM", " abcd efgh ijkl mnop ", "abcdefghijklmnop"},
+		{"imap.otro.cl", "clave con espacios", "clave con espacios"}, // other servers keep it verbatim
+	}
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			in, aerr := validateInput(MailAccountInput{
+				Host: tt.host, Username: "u", Password: tt.password, SenderFilter: "itau.cl", StartDate: "2026-07-01",
+			})
+			if aerr != nil || in.Password != tt.want {
+				t.Fatalf("password = %q (err %v), want %q", in.Password, aerr, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoginErrorExplainsGmailAppPasswords(t *testing.T) {
+	tests := []struct {
+		name, server, want string
+	}{
+		{
+			"gmail with the account password",
+			"imap: NO [ALERT] Application-specific password required: https://support.google.com/accounts/answer/185833 (Failure)",
+			"contraseña de aplicación",
+		},
+		{"wrong password elsewhere", "imap: NO [AUTHENTICATIONFAILED] Invalid credentials", "rechazó el usuario o la contraseña"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ae := loginError(errors.New(tt.server))
+			if ae.Code != "VALIDATION_ERROR" || !strings.Contains(ae.Message, tt.want) {
+				t.Fatalf("loginError = %+v, want a validation error mentioning %q", ae, tt.want)
+			}
+			if got := errorText(ae); got != ae.Message {
+				t.Fatalf("errorText = %q, want only the message", got)
+			}
+		})
+	}
+	if got := errorText(errors.New("dial tcp: timeout")); got != "dial tcp: timeout" {
+		t.Fatalf("errorText(system error) = %q", got)
 	}
 }
 

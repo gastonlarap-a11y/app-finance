@@ -8,6 +8,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -85,7 +86,7 @@ func (s *Service) open(ctx context.Context, acc *MailAccount) (*session, error) 
 	}
 	if err := c.Login(acc.Username, password).Wait(); err != nil {
 		_ = c.Close() // the login error is the one worth reporting
-		return nil, shared.NewError(shared.ErrValidation, "el servidor rechazó el usuario o la contraseña: "+err.Error())
+		return nil, loginError(err)
 	}
 	folder, err := c.Select(acc.Folder, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
@@ -93,6 +94,30 @@ func (s *Service) open(ctx context.Context, acc *MailAccount) (*session, error) 
 		return nil, shared.NewError(shared.ErrValidation, fmt.Sprintf("no se pudo abrir la carpeta %q: %v", acc.Folder, err))
 	}
 	return &session{client: c, folder: folder}, nil
+}
+
+// gmailAppPasswordAlert is how Gmail rejects an account's regular password
+// over IMAP: it only accepts app passwords there.
+const gmailAppPasswordAlert = "Application-specific password required"
+
+// loginError turns a rejected LOGIN into a message the user can act on.
+func loginError(err error) *shared.AppError {
+	if strings.Contains(err.Error(), gmailAppPasswordAlert) {
+		return shared.NewError(shared.ErrValidation,
+			"Gmail exige una contraseña de aplicación, no la clave de tu cuenta. Créala en "+
+				"https://myaccount.google.com/apppasswords (requiere la verificación en 2 pasos) y "+
+				"pégala en Ajustes → Correo de alertas.")
+	}
+	return shared.NewError(shared.ErrValidation, "el servidor rechazó el usuario o la contraseña: "+err.Error())
+}
+
+// errorText is what the user sees for a failed sync: the message of a business
+// error (without its code), or the system error as is.
+func errorText(err error) string {
+	if ae, ok := errors.AsType[*shared.AppError](err); ok {
+		return ae.Message
+	}
+	return err.Error()
 }
 
 // searchCriteria asks the server only for the bank's emails that are new: by
