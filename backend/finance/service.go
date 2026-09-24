@@ -197,7 +197,19 @@ func normalizeBillingDay(day int) int {
 	return day
 }
 
-func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit string, billingDay int) CardResult {
+// validateLastDigits accepts "" (not informed) or exactly four digits.
+func validateLastDigits(s string) (string, *shared.AppError) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if len(s) != 4 || strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return "", shared.NewError(shared.ErrValidation, "los últimos dígitos deben ser 4 números")
+	}
+	return s, nil
+}
+
+func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit string, billingDay int, lastDigits string) CardResult {
 	if strings.TrimSpace(name) == "" {
 		return CardResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
 	}
@@ -205,18 +217,29 @@ func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit strin
 	if aerr != nil {
 		return CardResult{Error: aerr}
 	}
-	card := &Card{UserID: s.uid(), Name: strings.TrimSpace(name), CreditLimit: limit, BillingDay: normalizeBillingDay(billingDay)}
+	digits, aerr := validateLastDigits(lastDigits)
+	if aerr != nil {
+		return CardResult{Error: aerr}
+	}
+	card := &Card{
+		UserID: s.uid(), Name: strings.TrimSpace(name), CreditLimit: limit,
+		BillingDay: normalizeBillingDay(billingDay), LastDigits: digits,
+	}
 	if _, err := s.db.NewInsert().Model(card).Returning("*").Exec(ctx); err != nil {
 		return CardResult{Error: internalErr(err)}
 	}
 	return CardResult{Data: card}
 }
 
-func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditLimit string, billingDay int) CardResult {
+func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditLimit string, billingDay int, lastDigits string) CardResult {
 	if strings.TrimSpace(name) == "" {
 		return CardResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
 	}
 	limit, aerr := parseAmount(creditLimit)
+	if aerr != nil {
+		return CardResult{Error: aerr}
+	}
+	digits, aerr := validateLastDigits(lastDigits)
 	if aerr != nil {
 		return CardResult{Error: aerr}
 	}
@@ -227,6 +250,7 @@ func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditL
 			Set("name = ?", strings.TrimSpace(name)).
 			Set("credit_limit = ?", limit).
 			Set("billing_day = ?", normalizeBillingDay(billingDay)).
+			Set("last_digits = ?", digits).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
 		if aerr := requireOne(res, err, "tarjeta no encontrada"); aerr != nil {
 			return aerr

@@ -14,6 +14,16 @@ Official releases are built by CI: bump `info.version` in `build/config.yml`, ru
 `.github/workflows/release.yml` publishes the `.dmg` + Windows setup as a GitHub Release. The steps
 below are the local equivalent (testing a build, or packaging without CI).
 
+**In-app updates** (`backend/updates`, Wails v3 `pkg/updater`): installed apps ≥ 0.3.0 check the
+latest GitHub Release and update themselves from two extra assets the workflow publishes —
+`app-finance-darwin-universal.zip` (the signed `.app` zipped with
+`ditto -c -k --norsrc --noextattr --noacl --keepParent`; plain `ditto` adds `._*` AppleDouble files
+that break the bundle's signature seal once extracted) and `app-finance-windows-amd64.exe`. Both
+**must be listed in `SHA256SUMS.txt`**: the app refuses to install an artifact without a checksum.
+Keep those asset names (the macOS one is matched as platform `darwin` + arch `universal`). The
+version the app compares against is `info.version` in `build/config.yml` (embedded by `main.go`),
+so the tag must equal it — the workflow already enforces that.
+
 1. **Pre-flight**: `task check` (vet + lint + typecheck + tests + web build) and
    `cd frontend && npm run build` must pass (under the Claude Code sandbox use
    `go build -ldflags=-w -o /dev/null .` for the compile check — see AGENTS.md). Confirm the
@@ -35,6 +45,8 @@ below are the local equivalent (testing a build, or packaging without CI).
    - `task build:windows` → `bin/app-finance.exe` (amd64).
    - `task package:windows` → `bin/app-finance-amd64-installer.exe` (Start-menu entry +
      uninstaller). Unsigned → SmartScreen warns on first run (Más información → Ejecutar de todos modos).
+     It installs **per user** (`%LOCALAPPDATA%\Programs`, no UAC) so the in-app updater can replace
+     the exe; an older machine-wide install (Program Files, < 0.3.0) must be uninstalled first.
 
 4. If `build/config.yml` changed (product name, file associations, icons), regenerate platform assets
    first: `wails3 task common:update:build-assets`.

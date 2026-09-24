@@ -6,13 +6,16 @@ import (
 	"log/slog"
 	"os"
 	goruntime "runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/diagnostics"
 	"github.com/gastonlarap-a11y/app-finance/backend/finance"
+	"github.com/gastonlarap-a11y/app-finance/backend/mailsync"
 	"github.com/gastonlarap-a11y/app-finance/backend/reports"
 	"github.com/gastonlarap-a11y/app-finance/backend/settings"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/backup"
@@ -22,6 +25,7 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/logger"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/prefs"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/windowstate"
+	"github.com/gastonlarap-a11y/app-finance/backend/updates"
 	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
@@ -31,7 +35,20 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// buildConfig carries info.version, the version the updater compares releases against.
+//
+//go:embed build/config.yml
+var buildConfig []byte
+
+// updateFeed is the GitHub repository whose releases update the app.
+const updateFeed = "gastonlarap-a11y/app-finance"
+
 func main() {
+	// When relaunched as the updater's helper (to swap in a new version), do only
+	// that and exit — before touching config, logs or the database while the
+	// app being replaced is still shutting down.
+	updater.HandleHelperMode()
+
 	cfg := config.MustLoad()
 	logger.Setup(cfg.LogLevel)
 
@@ -59,11 +76,42 @@ func main() {
 	})
 	backupRunner := backup.NewRunner(bdb, appName, cfg.DBFilename, cfg.BackupLocalDirResolved(), driveMgr)
 	settingsSvc := settings.NewService(appName, bdb, cfg, driveMgr, backupRunner)
+	// Syncs run in the background and report through a frontend event; the app
+	// exists by the time the first one finishes (it starts after ServiceStartup).
+	mailSvc := mailsync.NewService(bdb, session, mailsync.NewKeychain(appName), mailsync.DefaultParsers(),
+		func(name string, data any) { application.Get().Event.Emit(name, data) })
+
+	version, err := updates.VersionFromConfig(buildConfig)
+	if err != nil {
+		slog.Error("versión desconocida: actualizaciones desactivadas", "err", err)
+	}
+	backupOnClose := func(ctx context.Context) error {
+		if !prefs.Load(appName).BackupOnClose {
+			return nil
+		}
+		info, err := backupRunner.Run(ctx)
+		if err != nil {
+			return err
+		}
+		slog.Info("respaldo", "local", info.LocalPath, "subido", info.Uploaded)
+		return nil
+	}
+	// Raised when quitting into an update: its backup already ran (see updates.Options).
+	restartingToUpdate := new(atomic.Bool)
+	updatesSvc := updates.NewService(updates.Options{
+		Emit:           func(name string, data any) { application.Get().Event.Emit(name, data) },
+		Repository:     updateFeed,
+		CurrentVersion: version,
+		BeforeRestart:  backupOnClose,
+		Restarting:     restartingToUpdate,
+	})
 
 	services := []application.Service{
 		application.NewService(financeSvc),
 		application.NewService(usersSvc),
 		application.NewService(settingsSvc),
+		application.NewService(mailSvc),
+		application.NewService(updatesSvc),
 		application.NewService(diagnostics.NewDiagnosticsService()),
 		application.NewService(reports.NewReportsService()),
 		// add new services here as you create new domains
@@ -78,16 +126,16 @@ func main() {
 		},
 		// Back up when the app closes (snapshot + upload to Drive if connected).
 		// Failures (offline, not connected) are logged but never block shutdown.
+		// Quitting into an update skips it: RestartToUpdate already backed up, and
+		// the updater's helper gives up if the app takes over 30 s to exit.
 		OnShutdown: func() {
-			if !prefs.Load(appName).BackupOnClose {
+			if restartingToUpdate.Load() {
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
-			if info, err := backupRunner.Run(ctx); err != nil {
+			if err := backupOnClose(ctx); err != nil {
 				slog.Error("respaldo al cerrar falló", "err", err)
-			} else {
-				slog.Info("respaldo al cerrar", "local", info.LocalPath, "subido", info.Uploaded)
 			}
 		},
 	})

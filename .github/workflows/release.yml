@@ -60,20 +60,34 @@ jobs:
           mkdir -p frontend/dist && touch frontend/dist/.gitkeep
           go test ./...
 
-      - name: macOS — universal .app (arm64 + amd64) → .dmg
+      - name: macOS — universal .app (arm64 + amd64) → .dmg + in-app update zip
         run: |
           wails3 task darwin:package:universal
           dmg="bin/App-Finance-${{ steps.version.outputs.version }}-macos.dmg"
           hdiutil create -volname "App Finance" -srcfolder bin/app-finance.app -ov -format UDZO "$dmg"
+          # In-app updater artifact (backend/updates): the signed .app as the zip's
+          # single top-level entry. No resource forks / xattrs / ACLs: ditto would
+          # otherwise add ._* AppleDouble files inside the bundle, which break its
+          # code-signature seal once the updater extracts them.
+          ditto -c -k --norsrc --noextattr --noacl --keepParent bin/app-finance.app bin/app-finance-darwin-universal.zip
+          if unzip -Z1 bin/app-finance-darwin-universal.zip | grep -Eq '(^|/)(\._|__MACOSX)'; then
+            echo "::error::AppleDouble files in the update zip"; exit 1
+          fi
 
-      - name: Windows — NSIS installer (amd64)
+      - name: Windows — NSIS installer (amd64, per-user) + in-app update exe
         run: |
+          # Per-user install (%LOCALAPPDATA%\Programs, no UAC) so the in-app updater
+          # can replace the exe without admin rights.
           wails3 task package:windows
           mv bin/app-finance-amd64-installer.exe "bin/App-Finance-${{ steps.version.outputs.version }}-windows-setup.exe"
+          cp bin/app-finance.exe bin/app-finance-windows-amd64.exe
 
       - name: Checksums
         working-directory: bin
-        run: shasum -a 256 App-Finance-*.dmg App-Finance-*-setup.exe | tee SHA256SUMS.txt
+        # The in-app updater refuses any artifact that is not listed here.
+        run: |
+          shasum -a 256 App-Finance-*.dmg App-Finance-*-setup.exe \
+            app-finance-darwin-universal.zip app-finance-windows-amd64.exe | tee SHA256SUMS.txt
 
       - name: Upload artifacts (dry run)
         if: github.ref_type != 'tag'
@@ -83,6 +97,8 @@ jobs:
           path: |
             bin/App-Finance-*.dmg
             bin/App-Finance-*-setup.exe
+            bin/app-finance-darwin-universal.zip
+            bin/app-finance-windows-amd64.exe
             bin/SHA256SUMS.txt
 
       - name: Publish GitHub Release
@@ -92,7 +108,14 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           cat > notes.md <<'EOF'
-          ## Instalación
+          ## Actualizar desde la app
+
+          Desde la versión 0.3.0 la app avisa sola cuando hay una versión nueva: pulsa **Actualizar** y
+          luego **Reiniciar y actualizar** (respalda antes si tienes activado el respaldo al cerrar).
+          Los archivos `app-finance-darwin-universal.zip` y `app-finance-windows-amd64.exe` son los que
+          usa ese actualizador; para instalar a mano usa el `.dmg` o el `-setup.exe`.
+
+          ## Instalación manual
 
           **macOS** (Apple Silicon e Intel): cierra la app, abre el `.dmg` y arrastra **app-finance** a
           *Aplicaciones* (reemplaza la versión anterior).
@@ -111,7 +134,10 @@ jobs:
           y sigue los pasos anteriores.
 
           **Windows**: ejecuta `…-windows-setup.exe`. SmartScreen avisará porque no tiene firma
-          comercial: **Más información → Ejecutar de todos modos**. Se instala sobre la versión anterior.
+          comercial: **Más información → Ejecutar de todos modos**. Se instala para tu usuario (sin
+          permisos de administrador) en `%LOCALAPPDATA%\Programs`. Si tenías una versión anterior a la
+          0.3.0 (instalada en *Archivos de programa*), desinstálala primero desde Configuración →
+          Aplicaciones; tus datos no se borran.
 
           Tus datos no se tocan: la base de datos vive fuera de la app y las migraciones nuevas se
           aplican solas al abrirla. Recomendado: «☁ Respaldar» antes de actualizar.
@@ -124,4 +150,6 @@ jobs:
             --title "App Finance ${VERSION}" \
             --notes-file notes.md \
             --generate-notes \
-            bin/App-Finance-*.dmg bin/App-Finance-*-setup.exe bin/SHA256SUMS.txt
+            bin/App-Finance-*.dmg bin/App-Finance-*-setup.exe \
+            bin/app-finance-darwin-universal.zip bin/app-finance-windows-amd64.exe \
+            bin/SHA256SUMS.txt

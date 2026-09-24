@@ -21,11 +21,11 @@ beforeEach(async () => {
 
 describe('cards', () => {
   it('CRUD + soft delete + restore', async () => {
-    const created = await finance.CreateCard('Visa', '500000', 24)
+    const created = await finance.CreateCard('Visa', '500000', 24, '')
     expect(created.error).toBeUndefined()
     expect(created.data?.creditLimit).toBe('500000')
 
-    const updated = await finance.UpdateCard(created.data!.id, 'Visa Gold', '800000', 15)
+    const updated = await finance.UpdateCard(created.data!.id, 'Visa Gold', '800000', 15, '')
     expect(updated.data?.name).toBe('Visa Gold')
     expect(updated.data?.billingDay).toBe(15)
 
@@ -42,9 +42,9 @@ describe('cards', () => {
   })
 
   it('día de corte fuera de rango cae al 24 y nombre vacío falla', async () => {
-    const bad = await finance.CreateCard('  ', '0', 10)
+    const bad = await finance.CreateCard('  ', '0', 10, '')
     expect(bad.error?.code).toBe('VALIDATION_ERROR')
-    const def = await finance.CreateCard('CMR', '100000', 99)
+    const def = await finance.CreateCard('CMR', '100000', 99, '')
     expect(def.data?.billingDay).toBe(24)
   })
 })
@@ -74,7 +74,7 @@ describe('categories', () => {
 
 describe('expenses + installments', () => {
   it('cuotas ruedan según el corte de la tarjeta', async () => {
-    const card = await finance.CreateCard('Visa', '1000000', 24)
+    const card = await finance.CreateCard('Visa', '1000000', 24, '')
     const ex = await finance.CreateExpense(
       '2026-06-26', 'MacBook', 'Tecnología', '', card.data!.id, 'cuotas', '100000', 3,
     )
@@ -153,7 +153,7 @@ describe('MonthlySummary', () => {
   it('calcula ingresos, acumulado, gastos y cupos como el backend Go', async () => {
     await finance.SetSalary('2026-07', '1000000')
     await finance.CreateIncome('2026-07', 'Bono', '50000')
-    const card = await finance.CreateCard('Visa', '500000', 24)
+    const card = await finance.CreateCard('Visa', '500000', 24, '')
     // 3 cuotas de 30000 desde 2026-07 (compra día 10 < corte 24).
     await finance.CreateExpense('2026-07-10', 'Sofá', 'Hogar', '', card.data!.id, 'cuotas', '30000', 3)
     // Fijo de 10000 desde junio → junio pesa en el acumulado de julio.
@@ -182,7 +182,7 @@ describe('MonthlySummary', () => {
   })
 
   it('pagar una cuota mueve pendiente→pagado y libera cupo', async () => {
-    const card = await finance.CreateCard('Visa', '500000', 24)
+    const card = await finance.CreateCard('Visa', '500000', 24, '')
     const ex = await finance.CreateExpense('2026-07-10', 'TV', '', '', card.data!.id, 'cuotas', '30000', 3)
     const first = db.query('SELECT id FROM installments WHERE expense_id = ? AND number = 1', [ex.data!.id])[0]
     await finance.SetInstallmentPaid(Number(first!.id), true)
@@ -227,7 +227,7 @@ describe('YearSummary', () => {
 
 describe('aislamiento multi-usuario', () => {
   it('cada perfil ve sólo sus datos y el switch es inmediato', async () => {
-    await finance.CreateCard('Visa G', '100000', 24)
+    await finance.CreateCard('Visa G', '100000', 24, '')
     await finance.SetSalary('2026-07', '500000')
 
     const friend = await users.CreateUser('Amigo') // create-and-enter
@@ -235,7 +235,7 @@ describe('aislamiento multi-usuario', () => {
     expect(await finance.ListCards()).toHaveLength(0)
     expect((await finance.MonthlySummary('2026-07')).data?.salary).toBe('0')
 
-    await finance.CreateCard('Master A', '200000', 24)
+    await finance.CreateCard('Master A', '200000', 24, '')
     expect((await finance.ListCards()).map((c) => c.name)).toEqual(['Master A'])
 
     await users.SwitchUser(1)

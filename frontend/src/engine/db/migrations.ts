@@ -1,7 +1,8 @@
 // Shares the Go backend's embedded .up.sql files with the web engine via Vite
 // raw imports. New migrations added under backend/*/migrations are picked up by
-// the glob automatically — no engine change needed. The windowstate set is
-// intentionally not included (native window geometry has no meaning on web).
+// the glob automatically — no engine change needed. The windowstate and
+// mailsync sets are intentionally not included (native window geometry and
+// IMAP mailboxes have no meaning on web).
 
 const modules: Record<string, string> = {
   ...import.meta.glob<string>('../../../../backend/finance/migrations/*.up.sql', {

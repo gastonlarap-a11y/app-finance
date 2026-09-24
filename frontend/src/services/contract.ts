@@ -28,6 +28,7 @@ export interface Card {
   name: string
   creditLimit: string
   billingDay: number
+  lastDigits: string // last 4 digits, '' = not informed
   createdAt: string
   deletedAt?: string | null
 }
@@ -327,6 +328,79 @@ export interface ExpenseSearch {
   count: number
 }
 
+// ---------- import inbox ----------
+
+export type ImportSource = 'email' | 'pdf_account' | 'pdf_card'
+export type ImportStatus = 'pendiente' | 'confirmado' | 'descartado' | 'conciliado'
+// '' = no hint; card_payment warns before counting card purchases twice.
+export type ImportHint = '' | 'card_payment' | 'transfer'
+
+export interface ImportItem {
+  id: number
+  userId: number
+  source: string // ImportSource (Go serializes a plain string)
+  issuer: string
+  date: string // YYYY-MM-DD
+  description: string // the bank's descriptor, verbatim
+  amount: string
+  currency: string
+  cardLastDigits: string
+  installmentsTotal: number
+  hint: string // ImportHint
+  status: string // ImportStatus
+  expenseId: number | null
+  matchedItemId: number | null
+  createdAt: string
+}
+
+export interface ImportItemView extends ImportItem {
+  cardId: number | null // card resolved from cardLastDigits
+  cardName: string
+  rulePattern: string // '' = no rule applies
+  suggestedMerchant: string
+  suggestedCategory: string
+  suggestedPattern: string
+  duplicateExpenseId: number | null // live expense that looks like the same purchase
+  duplicateDescription: string
+  matchedSource: string // for conciliado items: the other sighting
+  matchedDate: string
+}
+
+export interface MerchantRule {
+  id: number
+  userId: number
+  pattern: string
+  merchant: string
+  category: string
+  createdAt: string
+}
+
+// One movement as a parser extracted it. account/reference only feed the
+// deduplication key; amount is a positive decimal string.
+export interface ImportCandidate {
+  date: string // YYYY-MM-DD
+  description: string
+  amount: string
+  currency: string // '' = CLP
+  cardLastDigits: string
+  account: string
+  reference: string
+  installmentsTotal: number // < 1 = 1
+  hint: string // ImportHint
+}
+
+export interface ImportBatch {
+  source: string // ImportSource
+  issuer: string
+  items: ImportCandidate[]
+}
+
+export interface StageSummary {
+  added: number
+  duplicates: number
+  reconciled: number
+}
+
 export interface TrashItem {
   type: string
   id: number
@@ -356,6 +430,8 @@ export type SavingsGoalResult = Result<SavingsGoal>
 export type SavingsContributionResult = Result<SavingsContribution>
 export type SpendingTrendResult = Result<SpendingTrend>
 export type RecurringResult = Result<RecurringSuggestion[]>
+export type StageResult = Result<StageSummary>
+export type ImportItemsResult = Result<ImportItemView[]>
 
 // ---------- users ----------
 
@@ -376,8 +452,8 @@ export interface FinanceServiceContract {
   SetSalary(period: string, amount: string): Promise<SalaryResult>
 
   ListCards(): Promise<Card[]>
-  CreateCard(name: string, creditLimit: string, billingDay: number): Promise<CardResult>
-  UpdateCard(id: number, name: string, creditLimit: string, billingDay: number): Promise<CardResult>
+  CreateCard(name: string, creditLimit: string, billingDay: number, lastDigits: string): Promise<CardResult>
+  UpdateCard(id: number, name: string, creditLimit: string, billingDay: number, lastDigits: string): Promise<CardResult>
   DeleteCard(id: number): Promise<OpResult>
   RestoreCard(id: number): Promise<OpResult>
 
@@ -444,6 +520,19 @@ export interface FinanceServiceContract {
   SpendingTrend(period: string, months: number): Promise<SpendingTrendResult>
   DetectRecurring(period: string): Promise<RecurringResult>
 
+  StageImport(batch: ImportBatch): Promise<StageResult>
+  ListImportItems(status: string): Promise<ImportItemsResult>
+  ConfirmImportItem(
+    id: number, dateStr: string, description: string, category: string, merchant: string,
+    cardID: number | null, kind: string, installmentAmount: string, installmentsTotal: number,
+    rulePattern: string,
+  ): Promise<ExpenseResult>
+  LinkImportItem(id: number, expenseID: number): Promise<OpResult>
+  DiscardImportItem(id: number): Promise<OpResult>
+  RestoreImportItem(id: number): Promise<OpResult>
+  ListMerchantRules(): Promise<MerchantRule[]>
+  DeleteMerchantRule(id: number): Promise<OpResult>
+
   ListTrash(): Promise<TrashResult>
 }
 
@@ -490,6 +579,101 @@ export interface SettingsServiceContract {
   SetOAuthClient(clientID: string, clientSecret: string): Promise<OpResult>
   SetBackupOnClose(enabled: boolean): Promise<OpResult>
   BackupNow(): Promise<BackupResult>
+}
+
+// ---------- mail sync (desktop-native; the web build answers with WEB_ONLY errors) ----------
+
+// An empty password keeps the one already stored in the OS keychain.
+export interface MailAccountInput {
+  host: string
+  port: number // 0 = 993
+  username: string
+  password: string
+  folder: string // '' = INBOX
+  senderFilter: string // matched against the From header, e.g. "itau.cl"
+  startDate: string // YYYY-MM-DD
+  autoSync: boolean
+}
+
+export interface MailState {
+  configured: boolean
+  host: string
+  port: number
+  username: string
+  folder: string
+  senderFilter: string
+  startDate: string
+  autoSync: boolean
+  syncing: boolean
+  lastSyncedAt: string | null // RFC3339
+  lastError: string
+  lastMessages: number
+  lastRecognized: number
+  lastAdded: number
+  issuers: string[] // banks whose alert format is supported
+}
+
+export type MailStateResult = Result<MailState>
+
+export interface SyncSummary {
+  messages: number
+  recognized: number
+  unrecognized: number
+  unreadable: number
+  added: number
+  duplicates: number
+  reconciled: number
+}
+
+// Payload of the "mailsync:done" event emitted after every sync.
+export interface SyncEvent {
+  userId: number
+  summary?: SyncSummary | null
+  error?: string
+}
+
+export interface MailSyncServiceContract {
+  GetMailState(): Promise<MailStateResult>
+  SaveMailAccount(input: MailAccountInput): Promise<OpResult>
+  TestMailConnection(): Promise<OpResult>
+  SyncNow(): Promise<OpResult>
+  ResyncMailFrom(since: string): Promise<OpResult>
+  DisconnectMail(): Promise<OpResult>
+}
+
+// ---------- app updates (desktop-native; the PWA updates itself through its service worker) ----------
+
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'restarting'
+
+export interface ReleaseInfo {
+  version: string
+  notes: string // markdown, as published on GitHub
+  publishedAt: string // RFC3339
+  size: number // bytes to download
+}
+
+export interface UpdateState {
+  currentVersion: string
+  phase: string // UpdatePhase (Go serializes a plain string)
+  available: ReleaseInfo | null // null = up to date or not checked yet
+  lastChecked: string | null // RFC3339
+  lastError: string
+  blocked: string // why this copy cannot update itself; '' = it can
+}
+
+export type UpdateStateResult = Result<UpdateState>
+
+// Payload of the updater's download-progress event (bytes, ~10 per second).
+export interface DownloadProgress {
+  written: number
+  total: number
+}
+
+export interface UpdatesServiceContract {
+  GetUpdateState(): Promise<UpdateStateResult>
+  CheckForUpdate(): Promise<UpdateStateResult>
+  InstallUpdate(): Promise<OpResult>
+  RestartToUpdate(skipBackup: boolean): Promise<OpResult>
 }
 
 export interface UsersServiceContract {

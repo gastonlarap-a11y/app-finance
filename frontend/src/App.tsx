@@ -1,8 +1,14 @@
 import { useEffect } from 'react'
-import { useAtom } from 'jotai'
-import { periodAtom, tabAtom, type Tab } from '@/atoms/finance'
+import { useAtom, useSetAtom } from 'jotai'
+import { periodAtom, refreshAtom, tabAtom, type Tab } from '@/atoms/finance'
+import { onMailSyncDone } from '@/services/mailsync'
+import { UsersService } from '@/services/users'
+import { notify } from '@/lib/notify'
+import { IS_WEB } from '@/lib/platform'
+import { UpdateBanner } from '@/components/UpdateNotice'
 import { currentPeriod, periodLabel, shiftPeriod, yearOf } from '@/lib/format'
 import { MonthView } from '@/components/MonthView'
+import { ImportInboxView, PendingImportsBadge } from '@/components/ImportInboxView'
 import { YearView } from '@/components/YearView'
 import { ForecastView } from '@/components/ForecastView'
 import { SearchView } from '@/components/SearchView'
@@ -19,6 +25,7 @@ import { Toaster } from '@/components/ui'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'mes', label: 'Mes' },
+  { id: 'importar', label: 'Importar' },
   { id: 'anio', label: 'Año' },
   { id: 'proyeccion', label: 'Proyección' },
   { id: 'buscar', label: 'Buscar' },
@@ -42,9 +49,30 @@ function isTyping(target: EventTarget | null): boolean {
 
 const navBtn = 'rounded bg-surface px-3 py-1.5 ring-1 ring-slate-700 hover:ring-slate-500'
 
+// useMailSyncNotices refreshes the views after every background mail sync and
+// tells the active profile what it brought (other profiles' syncs stay quiet).
+function useMailSyncNotices() {
+  const bump = useSetAtom(refreshAtom)
+  useEffect(
+    () =>
+      onMailSyncDone((ev) => {
+        bump((n) => n + 1)
+        void UsersService.ActiveUser().then((active) => {
+          if (active.data?.id !== ev.userId) return
+          if (ev.error) notify('No se pudo revisar el correo: ' + ev.error)
+          else if (ev.summary && ev.summary.added > 0) {
+            notify(`${ev.summary.added} movimiento(s) nuevo(s) desde tu correo para revisar en Importar.`, 'success')
+          }
+        })
+      }),
+    [bump],
+  )
+}
+
 function App() {
   const [tab, setTab] = useAtom(tabAtom)
   const [period, setPeriod] = useAtom(periodAtom)
+  useMailSyncNotices()
   const monthNav = MONTH_TABS.has(tab)
   const step = tab === 'anio' ? 12 : 1
 
@@ -87,6 +115,7 @@ function App() {
                 }`}
               >
                 {t.label}
+                {t.id === 'importar' && <PendingImportsBadge />}
               </button>
             ))}
           </nav>
@@ -126,8 +155,11 @@ function App() {
         </div>
       </header>
 
+      {!IS_WEB && <UpdateBanner />}
+
       <main className="mx-auto max-w-[1536px] px-6 py-6">
         {tab === 'mes' && <MonthView />}
+        {tab === 'importar' && <ImportInboxView />}
         {tab === 'anio' && <YearView />}
         {tab === 'proyeccion' && <ForecastView />}
         {tab === 'buscar' && <SearchView />}

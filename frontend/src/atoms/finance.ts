@@ -3,6 +3,7 @@ import { currentPeriod } from '@/lib/format'
 
 export type Tab =
   | 'mes'
+  | 'importar'
   | 'anio'
   | 'proyeccion'
   | 'buscar'

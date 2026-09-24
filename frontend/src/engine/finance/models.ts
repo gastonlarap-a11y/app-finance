@@ -5,9 +5,11 @@ import type {
   Category,
   Expense,
   FixedExpense,
+  ImportItem,
   Income,
   Installment,
   Merchant,
+  MerchantRule,
   PeriodSalary,
   SavingsContribution,
   SavingsGoal,
@@ -29,6 +31,49 @@ export const StatusPagado = 'pagado'
 export const SourceCuota = 'cuota'
 export const SourceFijo = 'fijo'
 
+// Import inbox (mirror backend/finance/importitem.go constants).
+export const ImportSourceEmail = 'email'
+export const ImportSourcePDFAccount = 'pdf_account'
+export const ImportSourcePDFCard = 'pdf_card'
+export const ImportPendiente = 'pendiente'
+export const ImportConfirmado = 'confirmado'
+export const ImportDescartado = 'descartado'
+export const ImportConciliado = 'conciliado'
+export const HintNone = ''
+export const HintCardPayment = 'card_payment'
+export const HintTransfer = 'transfer'
+
+export function rowToImportItem(r: SqlRow): ImportItem {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    source: asString(r.source),
+    issuer: asString(r.issuer),
+    date: asString(r.date),
+    description: asString(r.description),
+    amount: asString(r.amount),
+    currency: asString(r.currency),
+    cardLastDigits: asString(r.card_last_digits),
+    installmentsTotal: asNumber(r.installments_total),
+    hint: asString(r.hint),
+    status: asString(r.status),
+    expenseId: asNullableNumber(r.expense_id),
+    matchedItemId: asNullableNumber(r.matched_item_id),
+    createdAt: asString(r.created_at),
+  }
+}
+
+export function rowToMerchantRule(r: SqlRow): MerchantRule {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    pattern: asString(r.pattern),
+    merchant: asString(r.merchant),
+    category: asString(r.category),
+    createdAt: asString(r.created_at),
+  }
+}
+
 export function rowToCard(r: SqlRow): Card {
   return {
     id: asNumber(r.id),
@@ -36,6 +81,7 @@ export function rowToCard(r: SqlRow): Card {
     name: asString(r.name),
     creditLimit: asString(r.credit_limit),
     billingDay: asNumber(r.billing_day),
+    lastDigits: asString(r.last_digits),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

@@ -108,11 +108,14 @@ tasks:
       - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
 
   package:windows:
-    summary: Creates a Windows NSIS installer (amd64) — requires 'brew install makensis'
+    summary: Creates a Windows NSIS installer (amd64, per-user) — requires 'brew install makensis'
     cmds:
       - task: windows:package
         vars:
           ARCH: amd64
+          # Per-user install (%LOCALAPPDATA%\Programs, no UAC): the in-app updater
+          # (backend/updates) must be able to replace the exe without admin rights.
+          INSTALL_SCOPE: user
 
   build:server:
     summary: Builds the application in server mode (no GUI, HTTP server only)

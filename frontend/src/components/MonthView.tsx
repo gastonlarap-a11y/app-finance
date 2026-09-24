@@ -456,7 +456,7 @@ export function MonthView() {
           cards={summary.porTarjeta.map((t) => t.card)}
           categories={categories}
           merchants={merchants}
-          expense={editing}
+          target={editing ? { mode: 'edit', expense: editing } : { mode: 'create' }}
           onClose={() => setShowForm(false)}
           onSaved={reload}
         />

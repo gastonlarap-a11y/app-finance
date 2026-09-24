@@ -55,6 +55,12 @@ export function pctChange(current: string, base: string): number | null {
   return dec(current).minus(b).div(b.abs()).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber()
 }
 
+// perInstallment splits a purchase total into n cuotas rounded up to whole
+// pesos (the cuota a bank bills), to prefill a form from a detected total.
+export function perInstallment(total: string, n: number): string {
+  return dec(total).div(Math.max(n, 1)).toDecimalPlaces(0, Decimal.ROUND_CEIL).toString()
+}
+
 // times returns a × n (e.g. cuota × número de cuotas), for previews.
 export function times(a: string, n: number): string {
   return dec(a).times(n).toString()

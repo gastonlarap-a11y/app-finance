@@ -70,7 +70,7 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `Services` slice → `application.New` → window → `app.Run()`.
 - **One Service per domain**: plain struct + `application.NewService(...)`; exported methods
   auto-bind to TS. Reference: `backend/finance/service.go`. Current services: `finance`, `users`,
-  `settings`, `diagnostics`, `reports`.
+  `settings`, `mailsync` (desktop only), `updates` (desktop only), `diagnostics`, `reports`.
 - **`finance`** (`backend/finance/`) is the core domain — one file per entity plus `period.go`
   (YYYY-MM math), `result.go` (view models) and `service.go` (bound methods + summaries).
   Per-month values resolve by lexical `period` string comparison; fixed expenses use
@@ -87,6 +87,17 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
   (`liveGoalContributions`), like installments of a deleted expense.
+- **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
+  `finance.StageCandidates` into `import_items` and become expenses only when the user confirms
+  them (`ConfirmImportItem`/`LinkImportItem`). Never create expenses straight from a parser. Statement
+  parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); email
+  parsers in `backend/mailsync` (desktop only, IMAP). Parser fixtures must be anonymized (public
+  repo) — `frontend/scripts/pdf-runs.mjs` dumps a PDF's positioned text runs. See `ARCHITECTURE.md` §18.
+- **In-app updates** (`backend/updates`, Wails `pkg/updater`): `main()` must call
+  `updater.HandleHelperMode()` before anything else; the app version is `info.version` of the
+  embedded `build/config.yml`; a release artifact without an entry in `SHA256SUMS.txt` is never
+  installed; the close-time backup runs in `RestartToUpdate`, not `OnShutdown` (the updater's helper
+  aborts if the app takes > 30 s to quit). Release asset names/zip flags: `release` skill.
 - **Export**: views build an `ExportTable` (`frontend/src/lib/exportTables.ts`, money as decimal
   strings); `@/services/reports` writes it — desktop via `ReportsService.SaveTable` (.xlsx + native
   Save dialog; blob downloads are unreliable in the webview), web via CSV + Share Sheet.
@@ -104,7 +115,7 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   and backup-on-close (backup runs in `main.go`'s `OnShutdown`).
 - **Web/PWA target (iPad)**: `vite --mode web` ships the same React app as a PWA backed by a TS
   port of the domain (`frontend/src/engine/`) over sqlite-wasm (opfs-sahpool, Worker + Comlink).
-  Mode `web` aliases `@/services/{finance,users,settings}` → `frontend/src/services/web/*`; the
+  Mode `web` aliases `@/services/{finance,users,settings,mailsync,…}` → `frontend/src/services/web/*`; the
   shared type contract is `frontend/src/services/contract.ts`. The engine reuses the SAME
   `backend/*/migrations/*.up.sql` files, so exported `.sqlite` files are interchangeable
   desktop⇄web. Deploy: `.github/workflows/deploy-web.yml` → GitHub Pages. See `ARCHITECTURE.md` §17.

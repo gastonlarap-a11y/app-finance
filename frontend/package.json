@@ -23,6 +23,7 @@
     "comlink": "^4.4.2",
     "decimal.js": "^10.6.0",
     "jotai": "^3.0.0",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

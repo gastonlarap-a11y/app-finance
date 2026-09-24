@@ -6,6 +6,8 @@ import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { Button, Field, QueryError, Section, Spinner, inputCls } from './ui'
+import { MailSettings } from './MailSettings'
+import { UpdatesSettings } from './UpdateNotice'
 
 // On the web build the whole desktop surface (DB folder, Google Drive) is
 // native-only; settings become the export/import backup view instead. Loaded
@@ -233,6 +235,10 @@ function DesktopSettingsView() {
           </div>
         </div>
       </Section>
+
+      <MailSettings />
+
+      <UpdatesSettings />
     </div>
   )
 }
