@@ -486,6 +486,12 @@ func (s *FinanceService) feedInbox(
 // purchase total as amount and the bank's cuota apart; the key uses the
 // reference and total (not the cuota number), so the same purchase seen in
 // next month's statement is recognized as already in the inbox.
+//
+// The item's kind is decided here, not by the amount's sign downstream: a
+// negative line in a charge section (a purchase reversal, a refunded fee) is
+// money back, so it stages as a credit like the abono section. The statement
+// also fixes the billing month of every purchase: cuota n/N started n-1 months
+// before it, and a one-payment purchase is billed in the statement's month.
 func lineCandidate(st *CardStatement, l *CardStatementLine) ImportCandidate {
 	c := ImportCandidate{
 		Date:              l.OperationDate,
@@ -498,11 +504,15 @@ func lineCandidate(st *CardStatement, l *CardStatementLine) ImportCandidate {
 		InstallmentNumber: l.InstallmentNumber,
 	}
 	charged := l.InstallmentAmount.Abs()
-	switch l.Section {
-	case LineCredit:
+	reversal := l.Section != LineCredit && (l.InstallmentAmount.IsNegative() || l.OperationAmount.IsNegative())
+	switch {
+	case l.Section == LineCredit || reversal:
 		c.Kind = ImportKindCredit
 		c.Amount = charged.String()
-	case LinePurchase, LineVoluntary:
+		if charged.IsZero() {
+			c.Amount = l.OperationAmount.Abs().String()
+		}
+	case l.Section == LinePurchase || l.Section == LineVoluntary:
 		total := l.OperationAmount.Abs()
 		if st.Kind == StatementInternational || total.IsZero() {
 			total = charged // USD lines carry only the charged amount
@@ -510,10 +520,11 @@ func lineCandidate(st *CardStatement, l *CardStatementLine) ImportCandidate {
 		c.Amount = total.String()
 		if l.InstallmentsTotal > 1 {
 			c.InstallmentAmount = charged.String()
-			c.FirstPeriod = addMonths(st.Period, -(l.InstallmentNumber - 1))
 		}
-	default: // cargo
+		c.FirstPeriod = addMonths(st.Period, -(l.InstallmentNumber - 1))
+	default: // cargo: a fee or tax billed in the statement's month
 		c.Amount = charged.String()
+		c.FirstPeriod = st.Period
 	}
 	return c
 }
@@ -570,11 +581,14 @@ func isInternationalPayment(description string) bool {
 
 // reconcilePaymentLine marks as conciliado the cartola card-payment items
 // that a statement payment line accounts for, and learns the USD rate from
-// an international one. Returns how many items it matched.
+// an international one. Returns how many items it matched. A payment the user
+// already discarded (it is not an expense) still counts: it is the same bank
+// fact, and the only source of the USD rate.
 func reconcilePaymentLine(ctx context.Context, tx bun.Tx, uid int64, st *CardStatement, l *CardStatementLine) (int, error) {
 	var items []ImportItem
 	q := tx.NewSelect().Model(&items).
-		Where("user_id = ? AND status = ? AND hint = ? AND statement_line_id IS NULL", uid, ImportPendiente, HintCardPayment).
+		Where("user_id = ? AND status IN (?) AND hint = ? AND statement_line_id IS NULL",
+			uid, bun.List([]string{ImportPendiente, ImportDescartado}), HintCardPayment).
 		Where("ABS(julianday(date) - julianday(?)) <= ?", l.OperationDate, paymentWindowDays).
 		OrderExpr("ABS(julianday(date) - julianday(?)) ASC, id ASC", l.OperationDate)
 	paid := l.InstallmentAmount.Abs()
@@ -866,13 +880,20 @@ func (s *FinanceService) ConfirmImportItemAsIncome(ctx context.Context, id int64
 	uid := s.uid()
 	inc := &Income{UserID: uid, Period: period, Description: desc, Amount: amt}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := loadPendingItem(ctx, tx, uid, id); err != nil {
+		item, err := loadPendingItem(ctx, tx, uid, id)
+		if err != nil {
+			return err
+		}
+		if err := requireKind(item, ImportKindCredit); err != nil {
+			return err
+		}
+		if err := requirePesos(item, amt); err != nil {
 			return err
 		}
 		if _, err := tx.NewInsert().Model(inc).Returning("*").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting income: %w", err)
 		}
-		_, err := tx.NewUpdate().Model((*ImportItem)(nil)).
+		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportConfirmado).Set("income_id = ?", inc.ID).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
 		return err

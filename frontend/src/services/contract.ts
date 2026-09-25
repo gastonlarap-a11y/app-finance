@@ -358,6 +358,9 @@ export interface ImportItem {
   installmentAmount: string // the bank's exact cuota; '' = unknown
   firstPeriod: string // YYYY-MM of cuota 1; '' = derived from the date
   incomeId: number | null
+  // A charge linked to a fixed expense marks that month of it as paid.
+  fixedExpenseId: number | null
+  fixedPeriod: string // YYYY-MM marked paid; '' = not linked
 }
 
 export interface ImportItemView extends ImportItem {
@@ -372,6 +375,11 @@ export interface ImportItemView extends ImportItem {
   matchedSource: string // for conciliado items: the other sighting
   matchedDate: string
   suggestedAmountClp: string // USD items: CLP at the rate of the last USD-debt payment; '' = unknown
+  // A pending charge that looks like a fixed expense's monthly bill.
+  suggestedFixedId: number | null
+  suggestedFixedDescription: string
+  suggestedFixedPeriod: string
+  reopenable: boolean // confirmed item whose expense/income went to the trash
 }
 
 export interface MerchantRule {
@@ -727,6 +735,7 @@ export interface FinanceServiceContract {
     rulePattern: string,
   ): Promise<ExpenseResult>
   LinkImportItem(id: number, expenseID: number): Promise<OpResult>
+  LinkImportItemToFixed(id: number, fixedID: number, period: string): Promise<OpResult>
   DiscardImportItem(id: number): Promise<OpResult>
   RestoreImportItem(id: number): Promise<OpResult>
   ListMerchantRules(): Promise<MerchantRule[]>

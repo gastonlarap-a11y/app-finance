@@ -18,7 +18,7 @@ import { errMsg, failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { perInstallment } from '@/lib/money'
 import { errorText, useQuery } from '@/lib/useQuery'
-import { formatAmount, formatCLP, formatDate } from '@/lib/format'
+import { formatAmount, formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { ExpenseForm } from './ExpenseForm'
 import { StatementImport } from './StatementImport'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
@@ -196,6 +196,9 @@ export function ImportInboxView() {
                 onDiscard={() => run(it.id, () => FinanceService.DiscardImportItem(it.id))}
                 onRestore={() => run(it.id, () => FinanceService.RestoreImportItem(it.id))}
                 onLink={(expenseId) => run(it.id, () => FinanceService.LinkImportItem(it.id, expenseId))}
+                onLinkFixed={(fixedId, period) =>
+                  run(it.id, () => FinanceService.LinkImportItemToFixed(it.id, fixedId, period))
+                }
               />
             ))}
           </ul>
@@ -339,6 +342,7 @@ function ImportRow({
   onDiscard,
   onRestore,
   onLink,
+  onLinkFixed,
 }: {
   item: ImportItemView
   cards: Card[]
@@ -347,6 +351,7 @@ function ImportRow({
   onDiscard: () => void
   onRestore: () => void
   onLink: (expenseId: number) => void
+  onLinkFixed: (fixedId: number, period: string) => void
 }) {
   const cardLabel =
     it.cardName !== ''
@@ -392,6 +397,23 @@ function ImportRow({
             </Button>
           </div>
         )}
+        {it.suggestedFixedId != null && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
+            <span>
+              ¿Es el cobro de tu gasto fijo «{it.suggestedFixedDescription}» de {periodLabel(it.suggestedFixedPeriod)}?
+            </span>
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => onLinkFixed(it.suggestedFixedId!, it.suggestedFixedPeriod)}
+            >
+              Sí, marcarlo pagado
+            </Button>
+          </div>
+        )}
+        {it.fixedPeriod !== '' && (
+          <div className="text-xs text-slate-400">Pagó el gasto fijo de {periodLabel(it.fixedPeriod)}</div>
+        )}
       </div>
       <div className="flex flex-col items-end gap-2">
         <span className={`font-semibold tabular-nums ${isCredit(it) ? 'text-success' : ''}`}>
@@ -415,6 +437,14 @@ function ImportRow({
           <Button variant="ghost" disabled={busy} onClick={onRestore}>
             Restaurar
           </Button>
+        )}
+        {it.status === 'confirmado' && it.reopenable && (
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-xs text-slate-400">Su gasto o ingreso está en la papelera</span>
+            <Button variant="ghost" disabled={busy} onClick={onRestore}>
+              Volver a revisar
+            </Button>
+          </div>
         )}
       </div>
     </li>

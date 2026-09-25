@@ -80,6 +80,8 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     installmentAmount: asString(r.installment_amount),
     firstPeriod: asString(r.first_period),
     incomeId: asNullableNumber(r.income_id),
+    fixedExpenseId: asNullableNumber(r.fixed_expense_id),
+    fixedPeriod: asString(r.fixed_period),
   }
 }
 
