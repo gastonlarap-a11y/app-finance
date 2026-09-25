@@ -386,7 +386,13 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
 - **Tests**: `npm test` (vitest) runs the engine against the same sqlite-wasm build in Node
   (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
 - **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
-  `base: /app-finance/`) to GitHub Pages on pushes to `main`. The service worker registers in
+  `base: /app-finance/`, no dependency cache) to GitHub Pages after CI passes on a push to `main`.
+  The build carries a Content-Security-Policy `<meta>` (`web-csp` plugin in `vite.config.ts`,
+  build only): same-origin scripts, workers and connections, `'wasm-unsafe-eval'` for sqlite-wasm,
+  inline styles for React `style` attributes, no objects, no foreign base or form targets. Pages
+  cannot send headers, so `frame-ancestors`/`report-to`/`sandbox` are not enforceable (accepted
+  gap). Verified in a browser: engine, service worker and pdf.js worker run with no violations,
+  and `eval` is blocked. The service worker registers in
   `prompt` mode from `main.tsx` (`injectRegister: false`, so the desktop bundle never imports the
   PWA's virtual module): a new deploy waits for the user's «Actualizar» in `WebUpdateBanner`
   (`lib/pwaUpdate.ts`) instead of swapping files under an open page, and a lazy chunk that fails to

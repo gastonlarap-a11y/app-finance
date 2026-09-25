@@ -71,7 +71,7 @@ tasks:
   vuln:
     summary: Known-vulnerability scan (Go reachability + npm production deps)
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./... # pinned like CI (.github/workflows/ci.yml)
       - npm --prefix frontend audit --omit=dev --audit-level=high
 
   check:

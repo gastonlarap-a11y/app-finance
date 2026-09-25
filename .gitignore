@@ -42,8 +42,20 @@ logs/
 secrets.env
 google-token.json
 
-# Datos personales
+# Datos personales: el repo es público y gitleaks no reconoce finanzas. Bases de
+# datos (y sus archivos WAL/SHM/journal), exportaciones y cartolas del banco.
+# Los fixtures de parsers son JSON anonimizados, nunca el PDF original.
 *.csv
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*-wal
+*-shm
+*-journal
+*.xlsx
+*.pdf
 
 # Plataformas no usadas (generadas por el template de Wails v3)
 build/android/

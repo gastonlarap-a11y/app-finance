@@ -32,6 +32,36 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       ...(isWeb
         ? [
+            // Content-Security-Policy for the PWA build. GitHub Pages cannot send
+            // headers, so it is a <meta> (which ignores frame-ancestors, report-to
+            // and sandbox: accepted gap). The app shows third-party text (bank
+            // descriptors, PDF contents): if any of it ever became markup, only
+            // same-origin scripts could run. 'wasm-unsafe-eval' lets sqlite-wasm
+            // compile its module; style 'unsafe-inline' covers React style={…}
+            // attributes (progress bars). Build only: the dev server injects
+            // inline scripts for hot reload.
+            {
+              name: 'web-csp',
+              apply: 'build',
+              transformIndexHtml() {
+                const csp = [
+                  "default-src 'self'",
+                  "script-src 'self' 'wasm-unsafe-eval'",
+                  "worker-src 'self' blob:",
+                  "style-src 'self' 'unsafe-inline'",
+                  "img-src 'self' data: blob:",
+                  "font-src 'self' data:",
+                  "connect-src 'self' blob: data:",
+                  "manifest-src 'self'",
+                  "object-src 'none'",
+                  "base-uri 'self'",
+                  "form-action 'self'",
+                ].join('; ')
+                return [
+                  { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: csp }, injectTo: 'head-prepend' as const },
+                ]
+              },
+            } satisfies PluginOption,
             // iOS reads its own tags (not the manifest) for Add to Home Screen.
             {
               name: 'ios-pwa-meta',
