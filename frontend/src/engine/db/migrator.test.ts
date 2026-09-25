@@ -33,7 +33,13 @@ describe('migrationFiles', () => {
       '20260923015',
       '20260924016',
       '20260925018',
+      '20260926019', // *.tx.up.sql: bun's transactional suffix, same name rule
     ])
+  })
+
+  it('nombra un archivo .tx.up.sql por su prefijo numérico, como bun', () => {
+    const files = migrationFiles({ '../x/20990101001_algo.tx.up.sql': 'SELECT 1;' })
+    expect(files.map((f) => f.name)).toEqual(['20990101001'])
   })
 })
 

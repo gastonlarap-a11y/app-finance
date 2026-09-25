@@ -81,10 +81,27 @@ startup (`backend/shared/db/migrator.go`, which registers `financemigrations`, `
 - `20260630012_soft_delete_users.{up,down}.sql` (`deleted_at` on users)
 - `20260702013_create_merchants.{up,down}.sql` (merchants table + `expenses.merchant` text column)
 
+(Later sets — budgets, savings, import inbox, mail accounts, card statements — follow the same scheme;
+`ls backend/*/migrations` is the source of truth.) `20260926019_fk_orphan_cleanup.tx.up.sql` applies
+the cascades desktop builds up to 0.3.2 skipped: their DSN used mattn-style keys that the modernc
+driver ignores, so foreign keys were off.
+
 Adding `.sql` files to an already-registered domain `embed.FS` needs no migrator change; only a brand
 new domain `embed.FS` must be added to the slice. SQLite note: `ALTER TABLE ... ADD COLUMN` is
 supported, but changing or dropping a column's type is not — write a new table + copy migration instead
-(see the `period_salaries` composite-PK rebuild in migration 010).
+(see the `period_salaries` composite-PK rebuild in migration 010). With foreign keys on, dropping a
+table that others reference cascades into them — only rebuild leaf tables that way.
+
+Safety rails (`migrator.go`, `main.go`): the migrator records a migration only after it succeeds
+(`WithMarkAppliedOnSuccess`) and new files use bun's `.tx.up.sql` suffix to run in one transaction;
+before applying anything to an existing DB, `main.go` snapshots it to `<backups>/pre-migrate/` (last 3
+kept); a DB carrying migrations this binary does not know (opened by a newer version) is refused with
+`db.ErrNewerSchema` before anything is written.
+
+Connection (`db.go`): `db.DSN` passes `_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)` plus
+`_txlock=immediate`, and `db.Open` fails unless `PRAGMA foreign_keys` reads 1. The journal stays in
+DELETE mode on purpose — the DB folder may be synced by iCloud/Dropbox, and WAL side files synced out
+of step can corrupt it. Tests open DBs through `dbtest.OpenMigrated`, i.e. with the same settings.
 
 ### Per-month & effective-dated data
 
@@ -128,6 +145,13 @@ after its last charge, so nothing is counted twice.
 The `settings` service exposes connect/disconnect, OAuth client config, the Drive folder name, and
 backup-on-close; `main.go` runs a backup in `OnShutdown` when that flag is on. `backend/shared/prefs`
 persists these user choices and overrides `config` at startup (DB folder, OAuth creds, backup-on-close).
+
+Local snapshots are timestamped (`<name>-YYYYMMDD-HHMMSS.db`, last 5 kept) and each is written with
+`VACUUM INTO` to a `.tmp` file renamed into place, so a failed backup never destroys the previous one;
+Drive still holds one file, overwritten by each upload. When the DB file did not exist at startup (a DB
+folder that went missing, e.g. an unsynced cloud folder), the runner refuses to back up while earlier
+backups exist (`backup.ErrFreshDatabase`), so an empty DB never replaces them. `ApplyDBFolder` requires
+an absolute path, compares with `os.SameFile`, and refuses a folder that already holds a DB.
 
 ## 5. Configuration
 

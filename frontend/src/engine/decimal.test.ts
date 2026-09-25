@@ -22,6 +22,29 @@ describe('Money', () => {
     expect(Money.zero().isZero()).toBe(true)
     expect(Money.fromString('-1').isNegative()).toBe(true)
   })
+  it('acepta la misma gramática que shopspring', () => {
+    for (const [input, want] of [
+      ['+15', '15'],
+      ['12.50', '12.5'],
+      ['5.', '5'],
+      ['.5', '0.5'],
+      ['-.5', '-0.5'],
+      ['1e3', '1000'],
+      ['1.5E+2', '150'],
+    ] as const) {
+      expect(Money.fromString(input).toString()).toBe(want)
+    }
+  })
+  it('rechaza lo que decimal.js acepta pero Go no', () => {
+    for (const input of ['NaN', 'Infinity', '-Infinity', '0x10', '0b11', '0o7', '', '.', '1e', '1 000', ' 5']) {
+      expect(() => Money.fromString(input), input).toThrow()
+    }
+  })
+  it('lee -0 como 0, igual que Go', () => {
+    const m = Money.fromString('-0')
+    expect(m.isNegative()).toBe(false)
+    expect(m.toString()).toBe('0')
+  })
 })
 
 describe('parseAmount', () => {
@@ -31,5 +54,9 @@ describe('parseAmount', () => {
   it('rechaza negativos e inválidos', () => {
     expect(parseAmount('-5')).toBeNull()
     expect(parseAmount('abc')).toBeNull()
+    expect(parseAmount('NaN')).toBeNull()
+  })
+  it('acepta -0 como 0 (Go no lo trata como negativo)', () => {
+    expect(parseAmount('-0')?.toString()).toBe('0')
   })
 })

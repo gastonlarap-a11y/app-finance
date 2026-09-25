@@ -7,12 +7,23 @@ import DecimalJs from 'decimal.js'
 // CLP amounts are integers; 40 significant digits leaves huge headroom for sums.
 const Big = DecimalJs.clone({ precision: 40 })
 
+// The grammar shopspring's NewFromString accepts: optional sign, digits with at
+// most one point, optional exponent. decimal.js on its own also takes 'NaN',
+// 'Infinity' and 0x/0b/0o literals, which Go rejects — and a stored NaN would
+// poison every later sum.
+const DECIMAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
+
 export class Money {
   private constructor(private readonly v: DecimalJs) {}
 
   // fromString mirrors types.New: throws on an unparseable value.
   static fromString(s: string): Money {
-    return new Money(new Big(s))
+    if (!DECIMAL_RE.test(s)) {
+      throw new Error(`can't convert ${s} to decimal`)
+    }
+    const v = new Big(s)
+    // Go's big.Int has no negative zero: shopspring reads '-0' as plain 0.
+    return new Money(v.isZero() ? new Big(0) : v)
   }
 
   static zero(): Money {

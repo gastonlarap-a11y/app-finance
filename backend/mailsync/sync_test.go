@@ -3,11 +3,9 @@ package mailsync
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,11 +17,9 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/dialect/sqlitedialect"
-	"github.com/uptrace/bun/driver/sqliteshim"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/finance"
-	"github.com/gastonlarap-a11y/app-finance/backend/shared/db"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/db/dbtest"
 	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
@@ -31,18 +27,7 @@ import (
 
 func openTestDB(t *testing.T) *bun.DB {
 	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "test.db") + "?_journal=WAL&_foreign_keys=on"
-	sqldb, err := sql.Open(sqliteshim.ShimName, dsn)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	sqldb.SetMaxOpenConns(1)
-	bdb := bun.NewDB(sqldb, sqlitedialect.New())
-	if err := db.RunMigrations(t.Context(), bdb); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
-	t.Cleanup(func() { bdb.Close() })
-	return bdb
+	return dbtest.OpenMigrated(t)
 }
 
 // memSecrets is an in-memory SecretStore.

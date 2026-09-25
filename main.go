@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/uptrace/bun"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/updater"
@@ -58,11 +59,16 @@ func main() {
 		cfg.DataDir = p.DBFolder
 	}
 
-	bdb := db.MustConnect(cfg)
-	if err := db.RunMigrations(context.Background(), bdb); err != nil {
-		slog.Error("migration failed", "err", err)
-		os.Exit(1)
+	// Opening a missing file creates an empty DB. When a DB folder was chosen but
+	// holds no DB (an unsynced cloud folder, an unplugged drive), that empty DB
+	// must not replace the good backups: the backup runner refuses it.
+	freshDB := !db.Exists(cfg.DBPath())
+	if freshDB {
+		slog.Warn("no existe la base de datos: se crea una vacía", "carpetaElegida", prefs.Load(appName).DBFolder != "")
 	}
+
+	bdb := db.MustConnect(cfg)
+	migrateDB(bdb, cfg, freshDB)
 
 	// Restore the last selected finance profile (defaults to the seeded "Gastón").
 	session := users.NewSession()
@@ -74,7 +80,7 @@ func main() {
 		p := prefs.Load(appName)
 		return p.OAuthClientID, p.OAuthClientSecret
 	})
-	backupRunner := backup.NewRunner(bdb, appName, cfg.DBFilename, cfg.BackupLocalDirResolved(), driveMgr)
+	backupRunner := backup.NewRunner(bdb, appName, cfg.DBFilename, cfg.BackupLocalDirResolved(), driveMgr, freshDB)
 	settingsSvc := settings.NewService(appName, bdb, cfg, driveMgr, backupRunner)
 	// Syncs run in the background and report through a frontend event; the app
 	// exists by the time the first one finishes (it starts after ServiceStartup).
@@ -177,6 +183,30 @@ func main() {
 
 	if err := app.Run(); err != nil {
 		slog.Error("app exited with error", "err", err)
+		os.Exit(1)
+	}
+}
+
+// migrateDB brings the schema up to date. Before touching an existing DB it
+// keeps a snapshot, so a migration that fails (or misbehaves) can be undone by
+// hand; a DB newer than this binary is refused before anything is written.
+func migrateDB(bdb *bun.DB, cfg *config.Config, freshDB bool) {
+	ctx := context.Background()
+	pending, err := db.PendingMigrations(ctx, bdb)
+	if err != nil {
+		slog.Error("migration check failed", "err", err)
+		os.Exit(1)
+	}
+	if pending > 0 && !freshDB {
+		path, err := backup.SnapshotBeforeMigrate(ctx, bdb, cfg.BackupLocalDirResolved(), cfg.DBFilename)
+		if err != nil {
+			slog.Error("no se pudo respaldar antes de migrar", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("respaldo previo a migrar", "path", path, "pendientes", pending)
+	}
+	if err := db.RunMigrations(ctx, bdb); err != nil {
+		slog.Error("migration failed", "err", err)
 		os.Exit(1)
 	}
 }
