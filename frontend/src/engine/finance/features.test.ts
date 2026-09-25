@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb } from '@/engine/testing/db'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession, createUsersService } from '@/engine/users/service'
+import { blankStatement, statementLine } from '@/engine/testing/cardStatement'
 import type {
+  CardStatementInput,
   ExpenseFilter,
   FinanceServiceContract,
   ImportBatch,
@@ -198,6 +200,22 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     )
     const rules = await finance.ListMerchantRules()
     expect(rules).toHaveLength(1)
+    const statement: CardStatementInput = {
+      ...blankStatement,
+      issuer: 'itau',
+      kind: 'nacional',
+      currency: 'CLP',
+      cardLastDigits: '4321',
+      statementDate: `${period}-25`,
+      periodTo: `${period}-25`,
+      totalBilled: '5000',
+      lines: [
+        statementLine({ section: 'abono', operationDate: `${period}-20`, description: 'CASHBACK', installmentAmount: '-5000' }),
+      ],
+    }
+    const imported = ok(await finance.ImportCardStatement(statement)).data!
+    expect(imported.added).toBe(1)
+    const creditID = ok(await finance.ListImportItems('pendiente')).data!.find((it) => it.kind === 'abono')!.id
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -210,6 +228,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.DiscardImportItem(itemID),
       () => finance.RestoreImportItem(itemID),
       () => finance.DeleteMerchantRule(rules[0]!.id),
+      () => finance.ConfirmImportItemAsIncome(creditID, period, 'x', '1'),
+      () => finance.GetCardStatement(imported.statementId),
+      () => finance.DeleteCardStatement(imported.statementId),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {
@@ -218,6 +239,10 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(await finance.ListMerchantRules()).toEqual([])
     // Keys are per profile: the same statement is new for Camila, never reconciled with Gastón's.
     expect(ok(await finance.StageImport(batch)).data).toEqual({ added: 2, duplicates: 0, reconciled: 0 })
+    expect(ok(await finance.ListCardStatements('')).data).toEqual([])
+    const hers = ok(await finance.ImportCardStatement(statement)).data!
+    expect(hers.alreadyImported).toBe(false)
+    expect(hers.statementId).not.toBe(imported.statementId)
 
     expect(ok(await finance.SearchExpenses(filter())).data?.count).toBe(0)
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
@@ -227,6 +252,8 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await users.SwitchUser(1))
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })
-    expect(ok(await finance.ListImportItems('pendiente')).data!.map((it) => it.id)).toEqual([itemID])
+    const pendingIDs = ok(await finance.ListImportItems('pendiente')).data!.map((it) => it.id)
+    expect(pendingIDs.sort((a, b) => a - b)).toEqual([itemID, creditID].sort((a, b) => a - b))
+    ok(await finance.GetCardStatement(imported.statementId))
   })
 })

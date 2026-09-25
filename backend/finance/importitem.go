@@ -55,7 +55,21 @@ type ImportItem struct {
 	ExpenseID         *int64        `bun:"expense_id" json:"expenseId"`
 	MatchedItemID     *int64        `bun:"matched_item_id" json:"matchedItemId"`
 	CreatedAt         time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
+
+	// Card-statement items carry what the bank already knows about them.
+	Kind              string `bun:"kind,notnull" json:"kind"` // gasto | abono (a credit, confirmed as income)
+	StatementLineID   *int64 `bun:"statement_line_id" json:"statementLineId"`
+	InstallmentNumber int    `bun:"installment_number,notnull" json:"installmentNumber"` // cuota n of InstallmentsTotal on the statement
+	InstallmentAmount string `bun:"installment_amount,notnull" json:"installmentAmount"` // the bank's exact cuota; "" = unknown
+	FirstPeriod       string `bun:"first_period,notnull" json:"firstPeriod"`             // YYYY-MM of cuota 1; "" = from the date
+	IncomeID          *int64 `bun:"income_id" json:"incomeId"`
 }
+
+// Import item kinds.
+const (
+	ImportKindExpense = "gasto" // becomes an expense
+	ImportKindCredit  = "abono" // a bank credit (cashback, points redemption): becomes an extra income
+)
 
 // MerchantRule maps bank descriptors starting with Pattern (normalized, see
 // normalizeDescriptor) to the merchant and category the user chose for them.
@@ -83,6 +97,12 @@ type ImportCandidate struct {
 	Reference         string `json:"reference"`
 	InstallmentsTotal int    `json:"installmentsTotal"` // < 1 = 1
 	Hint              string `json:"hint"`
+
+	// Optional, set by card statements (zero values for alerts and cartolas).
+	Kind              string `json:"kind,omitempty"`              // "" = gasto
+	InstallmentNumber int    `json:"installmentNumber,omitempty"` // < 1 = 1
+	InstallmentAmount string `json:"installmentAmount,omitempty"`
+	FirstPeriod       string `json:"firstPeriod,omitempty"`
 }
 
 // ImportBatch is everything one parser run found in one email or file.

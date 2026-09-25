@@ -50,7 +50,7 @@ func main() {
 	updater.HandleHelperMode()
 
 	cfg := config.MustLoad()
-	logger.Setup(cfg.LogLevel)
+	logger.Setup(cfg.LogLevel, cfg.LogDir())
 
 	appName := cfg.DisplayName
 	// The DB folder chosen in the Settings view (prefs) takes precedence.

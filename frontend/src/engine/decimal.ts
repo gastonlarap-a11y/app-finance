@@ -46,6 +46,25 @@ export class Money {
     return new Money(this.v.abs())
   }
 
+  neg(): Money {
+    return new Money(this.v.neg())
+  }
+
+  // times multiplies by another decimal (e.g. a USD amount by a CLP/USD rate).
+  times(o: Money): Money {
+    return new Money(this.v.times(o.v))
+  }
+
+  // div divides by another decimal; callers round the result with round().
+  div(o: Money): Money {
+    return new Money(this.v.div(o.v))
+  }
+
+  // round mirrors shopspring's Round: half away from zero, to `places` decimals.
+  round(places: number): Money {
+    return new Money(this.v.toDecimalPlaces(places, Big.ROUND_HALF_UP))
+  }
+
   gte(o: Money): boolean {
     return this.v.gte(o.v)
   }

@@ -29,16 +29,13 @@ const REQUIRED: readonly Column[] = ['sucursal', 'codigo', 'cargo', 'abono', 'sa
 
 const NUMERIC = /^[\d.,]+$/
 
-// Descriptors that pay a credit card (its purchases are already counted on
-// the card) or move money to a person: flagged so the inbox warns before they
-// are counted as spending.
+// Descriptors that pay a credit card: its purchases are already counted on the
+// card, so the inbox warns before the payment is counted as spending (and a
+// card statement reconciles it). Transfers to people are ordinary spending.
 const CARD_PAYMENT = [/^PAGO DEUDA/, /^PAGO (TARJETA|TC)\b/, /^TRANSFERENCIA A CMR\b/]
-const TRANSFER = /^TRANSFERENCIA A /
 
 export function hintFor(description: string): string {
-  if (CARD_PAYMENT.some((re) => re.test(description))) return 'card_payment'
-  if (TRANSFER.test(description)) return 'transfer'
-  return ''
+  return CARD_PAYMENT.some((re) => re.test(description)) ? 'card_payment' : ''
 }
 
 interface Movement {
@@ -207,6 +204,6 @@ export const itauAccountStatement: StatementParser = {
           (deposits > 0 ? `, ${deposits} abono${deposits === 1 ? '' : 's'} no se importa${deposits === 1 ? '' : 'n'}.` : '.'),
       )
     }
-    return { batch: { source: 'pdf_account', issuer: 'itau', items }, notes, warnings }
+    return { kind: 'batch', batch: { source: 'pdf_account', issuer: 'itau', items }, notes, warnings }
   },
 }

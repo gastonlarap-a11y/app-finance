@@ -147,7 +147,9 @@ Loader: `backend/shared/config/config.go`.
 
 slog is configured in `backend/shared/logger/logger.go` and installed via
 `slog.SetDefault`. Change the level at runtime with the `LOG_LEVEL`
-config key (`debug` | `info` | `warn` | `error`).
+config key (`debug` | `info` | `warn` | `error`). The rotated JSON file goes to
+`config.LogDir()` — `<app data dir>/logs/app.log` (macOS: `~/Library/Application Support/App
+Finance/logs/`), never a relative path: a packaged app runs with `/` as its working directory.
 In debug mode, bun's `bundebug` hook logs every SQL statement.
 
 ## 8. Window State
@@ -323,7 +325,22 @@ expense until the user confirms it:
   issuer/format (`detect.ts` registry); each reports notes (what it skipped on purpose) and
   warnings (e.g. the Itaú cartola replays daily balances and flags a mismatch). Fixtures are
   **anonymized** `TextRun` JSON produced by `frontend/scripts/pdf-runs.mjs` — never commit a real
-  statement (the repo is public).
+  statement (the repo is public). A parser returns either a batch (cartola → `StageImport`) or whole
+  card statements (`ParsedStatement` union). Only card payments carry a hint (`card_payment`, warned
+  in the inbox and kept out of bulk confirm); transfers are ordinary spending.
+- **Credit-card statements** (`backend/finance/cardstatement.go`, mirrored in the engine; parser
+  `itau/cardStatement.ts`): one Itaú PDF carries a national (CLP) and an international (USD)
+  statement, each stored in full by `ImportCardStatement` — `card_statements` (header, limits,
+  rates, previous period, totals, unique per user+digits+kind+date), `card_statement_lines` (every
+  movement by section `pago|compra|voluntario|cargo|abono`, cuota n/N and the bank's exact cuota)
+  and `card_statement_schedule` (the bank's coming months). In one transaction it links a cuota n
+  that continues an app expense (same card, N, cuota, date ±1) to that installment, reconciles the
+  statement's payments with the cartola's `card_payment` items (both directions; the USD payment
+  also teaches the CLP/USD rate → `suggestedAmountClp`), and stages the rest: purchases keep
+  `installment_number`/`first_period` so `ConfirmImportItem` places cuota 1 in the right month and
+  marks the earlier ones paid; credits stage as `kind = abono` → `ConfirmImportItemAsIncome`. The
+  parser cross-checks the bank's totals (sections, A+B+C+D, credit used, USD debt) into warnings;
+  its fixture (`itau/testdata/cardStatementRuns.ts`) is synthetic text on the real geometry.
 - **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,
   `BODY.PEEK[]` so nothing is marked read), MIME/charsets via `go-message`, HTML reduced to text.
   Incremental by **UIDVALIDITY + last UID** per account; the server filters by sender (`FROM`), and

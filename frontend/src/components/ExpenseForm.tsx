@@ -3,7 +3,7 @@ import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense, type 
 import { errMsg } from '@/lib/result'
 import { errorText } from '@/lib/useQuery'
 import { perInstallment, times } from '@/lib/money'
-import { formatCLP, periodLabel, todayISO } from '@/lib/format'
+import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
 
 const MAX_CUOTAS = 120
@@ -76,12 +76,15 @@ function initialDraft(target: ExpenseFormTarget): Draft {
     }
     case 'confirm': {
       // Detected amounts are purchase totals: a cuotas purchase is split into
-      // its cuota for the per-month field, which the user reviews.
+      // its cuota for the per-month field (the bank's exact cuota when a card
+      // statement gives it), which the user reviews. A USD movement starts at
+      // its CLP estimate, or empty when there is none yet.
       const it = target.item
       const cuotas = it.installmentsTotal > 1
+      const cuota = it.installmentAmount !== '' ? it.installmentAmount : perInstallment(it.amount, it.installmentsTotal)
       return {
         description: it.suggestedMerchant || it.description,
-        amount: cuotas ? perInstallment(it.amount, it.installmentsTotal) : it.amount,
+        amount: it.currency !== 'CLP' ? it.suggestedAmountClp : cuotas ? cuota : it.amount,
         category: it.suggestedCategory,
         merchant: it.suggestedMerchant,
         cardId: it.cardId != null ? String(it.cardId) : '',
@@ -122,7 +125,14 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const isCuotas = kind === KIND_CUOTAS
   const cuotas = isCuotas ? parseCuotas(total) : 1
   const selectedCard = cards.find((c) => String(c.id) === cardId)
-  const firstPeriod = isCuotas && selectedCard && date ? computeFirstPeriod(date, selectedCard.billingDay) : null
+  // A card statement places a cuota n/N exactly (the backend uses it when the
+  // cuota count still matches); otherwise the card's cutoff day decides.
+  const statementPlaced = importItem !== null && importItem.firstPeriod !== '' && isCuotas && cuotas === importItem.installmentsTotal
+  const firstPeriod = statementPlaced
+    ? importItem.firstPeriod
+    : isCuotas && selectedCard && date
+      ? computeFirstPeriod(date, selectedCard.billingDay)
+      : null
 
   // Keep the expense's current category/merchant selectable even if it was
   // removed from the managed list (e.g. editing an old expense).
@@ -168,8 +178,13 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         {importItem && (
           <p className="rounded bg-surface px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-800">
             Glosa del banco: <span className="font-mono text-slate-100">{importItem.description}</span> ·{' '}
-            <span className="tabular-nums">{formatCLP(importItem.amount)}</span>
+            <span className="tabular-nums">{formatAmount(importItem.amount, importItem.currency)}</span>
             {importItem.installmentsTotal > 1 && <> en {importItem.installmentsTotal} cuotas</>}
+            {importItem.installmentNumber > 1 && <> (el estado de cuenta cobra la cuota {importItem.installmentNumber})</>}
+            {importItem.currency !== 'CLP' &&
+              (importItem.suggestedAmountClp !== ''
+                ? <> · ≈ {formatCLP(importItem.suggestedAmountClp)} al tipo de cambio de tu último pago en dólares; ajústalo si pagaste otro monto.</>
+                : <> · Ingresa el monto en pesos: aún no hay un pago en dólares para estimarlo.</>)}
           </p>
         )}
         <Field label="Descripción">
@@ -261,6 +276,9 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         {firstPeriod && (
           <p className="text-xs text-slate-400">
             Primera cuota en: <strong>{periodLabel(firstPeriod)}</strong>
+            {statementPlaced && importItem.installmentNumber > 1 && (
+              <> · según el estado de cuenta; las {importItem.installmentNumber - 1} cuotas anteriores quedan pagadas</>
+            )}
           </p>
         )}
 

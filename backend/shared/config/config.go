@@ -91,6 +91,12 @@ func (c *Config) dataDir() string {
 // DataDirEffective is the resolved directory holding the SQLite DB.
 func (c *Config) DataDirEffective() string { return c.dataDir() }
 
+// LogDir is where the rotated log files go: the per-user app data folder,
+// never the DB folder (which the user may point at a synced drive).
+func (c *Config) LogDir() string {
+	return filepath.Join(resolveDataDir(c.DisplayName), "logs")
+}
+
 // BackupLocalDirResolved is where snapshots are written before upload.
 func (c *Config) BackupLocalDirResolved() string {
 	if c.BackupLocalDir != "" {

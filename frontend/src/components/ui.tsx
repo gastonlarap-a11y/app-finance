@@ -109,7 +109,17 @@ export function IconButton({
 // Modal is a native <dialog> opened with showModal(): the browser provides the
 // focus trap, Escape to close (→ onClose via the cancel event), inert
 // background and ::backdrop. Mount it only while it should be open.
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string
+  onClose: () => void
+  children: ReactNode
+  wide?: boolean // for tables (a statement's detail); forms keep the narrow default
+}) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
 
@@ -132,7 +142,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         e.preventDefault() // let React unmount it, keeping state in charge
         onClose()
       }}
-      className="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-base bg-surface-alt p-6 text-slate-100 shadow-2xl ring-1 ring-slate-700 backdrop:bg-black/60"
+      className={`m-auto max-h-[90vh] w-[calc(100%-2rem)] ${wide ? 'max-w-4xl' : 'max-w-md'} overflow-y-auto rounded-base bg-surface-alt p-6 text-slate-100 shadow-2xl ring-1 ring-slate-700 backdrop:bg-black/60`}
     >
       <div className="mb-4 flex items-center justify-between">
         <h3 id={titleId} className="text-lg font-semibold">

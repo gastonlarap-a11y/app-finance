@@ -630,11 +630,21 @@ func validateExpense(
 // generateInstallments creates one row per cuota. The first paidCount cuotas are
 // marked pagado (used to preserve progress across an edit).
 func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDay, paidCount int) error {
+	return generateInstallmentsFrom(ctx, tx, ex, billingDay, "", paidCount)
+}
+
+// generateInstallmentsFrom is generateInstallments with the first cuota's
+// period fixed by the caller (a card statement knows it); "" derives it from
+// the purchase date and the card's billing day.
+func generateInstallmentsFrom(ctx context.Context, tx bun.Tx, ex *Expense, billingDay int, firstPeriod string, paidCount int) error {
 	total := ex.InstallmentsTotal
 	if ex.Kind == KindUnico {
 		total = 1
 	}
-	first := periodOf(ex.Date, billingDay)
+	first := firstPeriod
+	if first == "" {
+		first = periodOf(ex.Date, billingDay)
+	}
 	now := time.Now()
 	insts := make([]Installment, 0, total)
 	for i := range total {

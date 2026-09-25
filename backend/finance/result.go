@@ -352,11 +352,71 @@ type ImportItemView struct {
 	DuplicateDescription string `json:"duplicateDescription"`
 	MatchedSource        string `json:"matchedSource"`
 	MatchedDate          string `json:"matchedDate"`
+	// USD items: the amount in CLP at the rate implied by the last payment of
+	// the USD card debt; "" when no such payment is known yet.
+	SuggestedAmountClp string `json:"suggestedAmountClp"`
 }
 
 type ImportItemsResult struct {
 	Data  []ImportItemView `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// --- Card statements ---
+
+// CardStatementImport reports what ImportCardStatement did.
+type CardStatementImport struct {
+	StatementID        int64 `json:"statementId"`
+	AlreadyImported    bool  `json:"alreadyImported"`    // the same statement was imported before: nothing changed
+	Added              int   `json:"added"`              // new items in the inbox
+	Duplicates         int   `json:"duplicates"`         // already in the inbox (e.g. from last month's statement)
+	Reconciled         int   `json:"reconciled"`         // matched an alert email
+	LinkedInstallments int   `json:"linkedInstallments"` // cuotas that continue expenses already in the app
+	PaymentsMatched    int   `json:"paymentsMatched"`    // cartola card payments this statement accounts for
+}
+
+type CardStatementImportResult struct {
+	Data  *CardStatementImport `json:"data,omitempty"`
+	Error *shared.AppError     `json:"error,omitempty"`
+}
+
+// CardStatementView is a statement compared with the app: BankCharges are the
+// period's purchases, products and charges (what the app's expenses on the
+// card should add up to), BankCredits the credits (recorded as income), and
+// AppCharges what the app has on that card for the period (nil when the card
+// is not linked by its last digits, or for a USD statement).
+type CardStatementView struct {
+	CardStatement
+	CardName     string         `json:"cardName"`
+	BankCharges  types.Decimal  `json:"bankCharges"`
+	BankCredits  types.Decimal  `json:"bankCredits"`
+	AppCharges   *types.Decimal `json:"appCharges"`
+	PendingItems int            `json:"pendingItems"` // lines still waiting in the inbox
+}
+
+type CardStatementsResult struct {
+	Data  []CardStatementView `json:"data,omitempty"`
+	Error *shared.AppError    `json:"error,omitempty"`
+}
+
+// CardStatementLineView is a line and what became of it in the app.
+type CardStatementLineView struct {
+	CardStatementLine
+	ItemStatus         string `json:"itemStatus"` // status of its inbox item; "" = not staged
+	ExpenseID          *int64 `json:"expenseId"`  // expense it became or whose cuota it bills
+	ExpenseDescription string `json:"expenseDescription"`
+	RedeemedPurchase   string `json:"redeemedPurchase"` // credits: the purchase a points redemption pays
+}
+
+type CardStatementDetail struct {
+	Statement CardStatementView            `json:"statement"`
+	Lines     []CardStatementLineView      `json:"lines"`
+	Schedule  []CardStatementScheduleEntry `json:"schedule"`
+}
+
+type CardStatementDetailResult struct {
+	Data  *CardStatementDetail `json:"data,omitempty"`
+	Error *shared.AppError     `json:"error,omitempty"`
 }
 
 // --- Trash (papelera) ---

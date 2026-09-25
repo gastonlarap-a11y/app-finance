@@ -29,6 +29,11 @@ export function sum(values: readonly string[]): string {
   return values.reduce((acc, v) => acc.plus(dec(v)), new Decimal(0)).toString()
 }
 
+// subtract returns a − b exactly.
+export function subtract(a: string, b: string): string {
+  return dec(a).minus(dec(b)).toString()
+}
+
 // greaterThan reports a > b.
 export function greaterThan(a: string, b: string): boolean {
   return dec(a).gt(dec(b))

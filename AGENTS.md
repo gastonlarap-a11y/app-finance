@@ -88,8 +88,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   count against category budgets. Contributions of a trashed goal are excluded everywhere
   (`liveGoalContributions`), like installments of a deleted expense.
 - **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
-  `finance.StageCandidates` into `import_items` and become expenses only when the user confirms
-  them (`ConfirmImportItem`/`LinkImportItem`). Never create expenses straight from a parser. Statement
+  `finance.StageCandidates`/`stageItems` into `import_items` and become expenses (or, for bank
+  credits, extra incomes) only when the user confirms them (`ConfirmImportItem`/`LinkImportItem`/
+  `ConfirmImportItemAsIncome`). Never create expenses straight from a parser. Credit-card
+  statements are stored whole (`ImportCardStatement` → `card_statements` + lines + schedule) and
+  feed the inbox from the same path. Statement
   parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); email
   parsers in `backend/mailsync` (desktop only, IMAP). Parser fixtures must be anonymized (public
   repo) — `frontend/scripts/pdf-runs.mjs` dumps a PDF's positioned text runs. See `ARCHITECTURE.md` §18.

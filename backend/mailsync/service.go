@@ -226,7 +226,7 @@ func validateInput(in MailAccountInput) (MailAccountInput, *shared.AppError) {
 	case in.Username == "":
 		return in, shared.NewError(shared.ErrValidation, "el usuario es obligatorio")
 	case in.SenderFilter == "":
-		return in, shared.NewError(shared.ErrValidation, "indica el remitente del banco (p. ej. itau.cl) para no revisar todo el correo")
+		return in, shared.NewError(shared.ErrValidation, "indica el remitente del banco (p. ej. eeccvirtual.cl, el de Itaú) para no revisar todo el correo")
 	}
 	if in.Port == 0 {
 		in.Port = defaultPort
@@ -271,6 +271,9 @@ func (s *Service) SaveMailAccount(ctx context.Context, in MailAccountInput) OpRe
 		acc.SenderFilter != in.SenderFilter || acc.StartDate != in.StartDate
 	acc.Host, acc.Port, acc.Username, acc.Folder = in.Host, in.Port, in.Username, in.Folder
 	acc.SenderFilter, acc.StartDate, acc.AutoSync = in.SenderFilter, in.StartDate, in.AutoSync
+	// The last error belongs to the settings that produced it (typically a
+	// rejected password): new settings start clean until they are tried.
+	acc.LastError = ""
 	if moved {
 		acc.UIDValidity, acc.LastUID, acc.LastSyncedAt = 0, 0, nil
 	}
@@ -296,7 +299,9 @@ func (s *Service) SaveMailAccount(ctx context.Context, in MailAccountInput) OpRe
 	return OpResult{}
 }
 
-// TestMailConnection logs in and opens the folder, without fetching mail.
+// TestMailConnection logs in and opens the folder, without fetching mail. Its
+// outcome replaces the mailbox's last error, so the status shown next to the
+// settings reflects the latest attempt.
 func (s *Service) TestMailConnection(ctx context.Context) OpResult {
 	acc, err := s.accountOf(ctx, s.session.Active())
 	if err != nil {
@@ -305,19 +310,34 @@ func (s *Service) TestMailConnection(ctx context.Context) OpResult {
 	if acc == nil {
 		return OpResult{Error: notConfigured()}
 	}
+	aerr := s.tryConnect(ctx, acc)
+	lastError := ""
+	if aerr != nil {
+		lastError = aerr.Message
+	}
+	// context.WithoutCancel: a timed-out test must still record its outcome.
+	if _, err := s.db.NewUpdate().Model((*MailAccount)(nil)).Set("last_error = ?", lastError).
+		Where("id = ?", acc.ID).Exec(context.WithoutCancel(ctx)); err != nil {
+		return OpResult{Error: shared.NewError(shared.ErrInternal, fmt.Sprintf("recording connection test: %v", err))}
+	}
+	return OpResult{Error: aerr}
+}
+
+// tryConnect logs in to acc's server and opens its folder within connectTimeout.
+func (s *Service) tryConnect(ctx context.Context, acc *MailAccount) *shared.AppError {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	sess, err := s.open(ctx, acc)
 	if err != nil {
 		if ae, ok := errors.AsType[*shared.AppError](err); ok {
-			return OpResult{Error: ae}
+			return ae
 		}
-		return OpResult{Error: shared.NewError(shared.ErrValidation, "no se pudo conectar: "+err.Error())}
+		return shared.NewError(shared.ErrValidation, "no se pudo conectar: "+err.Error())
 	}
 	// Logout is best-effort: the connection test already succeeded.
 	_ = sess.client.Logout().Wait()
 	_ = sess.client.Close()
-	return OpResult{}
+	return nil
 }
 
 // SyncNow queues a sync of the active profile's mailbox and returns at once;

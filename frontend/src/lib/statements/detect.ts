@@ -2,13 +2,13 @@
 // bank or document type; the first one whose `matches` accepts the text wins.
 import { groupRows, rowText, type TextRun } from '@/lib/statements/layout'
 import { itauAccountStatement } from '@/lib/statements/itau/accountStatement'
+import { itauCardStatement } from '@/lib/statements/itau/cardStatement'
 import { StatementFormatError, type ParsedStatement, type StatementParser } from '@/lib/statements/types'
 
-const PARSERS: readonly StatementParser[] = [itauAccountStatement]
+const PARSERS: readonly StatementParser[] = [itauAccountStatement, itauCardStatement]
 
-export interface DetectedStatement extends ParsedStatement {
-  format: string // the parser's label, shown to the user
-}
+// format is the parser's label, shown to the user.
+export type DetectedStatement = ParsedStatement & { format: string }
 
 // parseStatement recognizes the document and parses it; an unknown format is
 // a StatementFormatError listing what is supported.

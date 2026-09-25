@@ -351,6 +351,13 @@ export interface ImportItem {
   expenseId: number | null
   matchedItemId: number | null
   createdAt: string
+  // Card-statement items carry what the bank already knows about them.
+  kind: string // 'gasto' | 'abono' (a credit, confirmed as an extra income)
+  statementLineId: number | null
+  installmentNumber: number // cuota n of installmentsTotal on the statement
+  installmentAmount: string // the bank's exact cuota; '' = unknown
+  firstPeriod: string // YYYY-MM of cuota 1; '' = derived from the date
+  incomeId: number | null
 }
 
 export interface ImportItemView extends ImportItem {
@@ -364,6 +371,7 @@ export interface ImportItemView extends ImportItem {
   duplicateDescription: string
   matchedSource: string // for conciliado items: the other sighting
   matchedDate: string
+  suggestedAmountClp: string // USD items: CLP at the rate of the last USD-debt payment; '' = unknown
 }
 
 export interface MerchantRule {
@@ -387,6 +395,11 @@ export interface ImportCandidate {
   reference: string
   installmentsTotal: number // < 1 = 1
   hint: string // ImportHint
+  // Optional, set by card statements.
+  kind?: string // '' = gasto
+  installmentNumber?: number
+  installmentAmount?: string
+  firstPeriod?: string
 }
 
 export interface ImportBatch {
@@ -399,6 +412,189 @@ export interface StageSummary {
   added: number
   duplicates: number
   reconciled: number
+}
+
+// ---------- card statements ----------
+
+// A credit-card statement exactly as the bank issued it. Money is a decimal
+// string (payments/credits negative); rates are percentages ("2.56").
+export interface CardStatement {
+  id: number
+  userId: number
+  cardId: number | null
+  issuer: string
+  kind: string // 'nacional' | 'internacional'
+  currency: string // 'CLP' | 'USD'
+  cardLastDigits: string
+  statementDate: string
+  period: string // YYYY-MM billed
+  periodFrom: string
+  periodTo: string
+  dueDate: string
+  previousPeriodFrom: string
+  previousPeriodTo: string
+  nextPeriodFrom: string
+  nextPeriodTo: string
+  creditLimit: string
+  creditUsed: string
+  creditAvailable: string
+  cashLimit: string
+  cashUsed: string
+  cashAvailable: string
+  previousBalanceStart: string
+  previousBilled: string
+  previousPaid: string
+  previousBalanceEnd: string
+  transferFromNational: string
+  totalOperations: string
+  voluntaryProducts: string
+  chargesNet: string
+  totalBilled: string
+  minimumPayment: string
+  prepaymentCost: string
+  automaticCharge: string
+  unbilledBalance: string
+  rateRevolving: string
+  rateInstallments: string
+  rateCashAdvance: string
+  caeRevolving: string
+  caeInstallments: string
+  caeCashAdvance: string
+  caePrepayment: string
+  lateInterestRate: string
+  fxRate: string // CLP per USD implied by the payment of the USD debt
+  fileHash: string
+  importedAt: string
+}
+
+export interface CardStatementLine {
+  id: number
+  userId: number
+  statementId: number
+  position: number
+  section: string // 'pago' | 'compra' | 'voluntario' | 'cargo' | 'abono'
+  place: string
+  city: string
+  country: string
+  operationDate: string
+  reference: string
+  description: string
+  interestRate: string
+  operationAmount: string
+  totalAmount: string
+  installmentNumber: number
+  installmentsTotal: number
+  installmentAmount: string // charged this period
+  originAmount: string
+  importItemId: number | null
+  installmentId: number | null
+}
+
+export interface CardStatementScheduleEntry {
+  id: number
+  statementId: number
+  period: string
+  amount: string
+}
+
+// What the frontend parser extracts: money as decimal strings ('' = 0).
+export interface CardStatementLineInput {
+  section: string
+  place: string
+  city: string
+  country: string
+  operationDate: string // YYYY-MM-DD
+  reference: string
+  description: string
+  interestRate: string
+  operationAmount: string
+  totalAmount: string
+  installmentNumber: number
+  installmentsTotal: number
+  installmentAmount: string
+  originAmount: string
+}
+
+export interface ScheduleInput {
+  period: string
+  amount: string
+}
+
+export interface CardStatementInput {
+  issuer: string
+  kind: string
+  currency: string
+  cardLastDigits: string
+  statementDate: string
+  periodFrom: string
+  periodTo: string
+  dueDate: string
+  previousPeriodFrom: string
+  previousPeriodTo: string
+  nextPeriodFrom: string
+  nextPeriodTo: string
+  creditLimit: string
+  creditUsed: string
+  creditAvailable: string
+  cashLimit: string
+  cashUsed: string
+  cashAvailable: string
+  previousBalanceStart: string
+  previousBilled: string
+  previousPaid: string
+  previousBalanceEnd: string
+  transferFromNational: string
+  totalOperations: string
+  voluntaryProducts: string
+  chargesNet: string
+  totalBilled: string
+  minimumPayment: string
+  prepaymentCost: string
+  automaticCharge: string
+  unbilledBalance: string
+  rateRevolving: string
+  rateInstallments: string
+  rateCashAdvance: string
+  caeRevolving: string
+  caeInstallments: string
+  caeCashAdvance: string
+  caePrepayment: string
+  lateInterestRate: string
+  fileHash: string
+  lines: CardStatementLineInput[]
+  schedule: ScheduleInput[]
+}
+
+export interface CardStatementImport {
+  statementId: number
+  alreadyImported: boolean
+  added: number
+  duplicates: number
+  reconciled: number
+  linkedInstallments: number // cuotas continuing expenses already in the app
+  paymentsMatched: number // cartola card payments this statement accounts for
+}
+
+// A statement compared with the app (appCharges null: card not linked, or USD).
+export interface CardStatementView extends CardStatement {
+  cardName: string
+  bankCharges: string
+  bankCredits: string
+  appCharges: string | null
+  pendingItems: number
+}
+
+export interface CardStatementLineView extends CardStatementLine {
+  itemStatus: string
+  expenseId: number | null
+  expenseDescription: string
+  redeemedPurchase: string
+}
+
+export interface CardStatementDetail {
+  statement: CardStatementView
+  lines: CardStatementLineView[]
+  schedule: CardStatementScheduleEntry[]
 }
 
 export interface TrashItem {
@@ -432,6 +628,9 @@ export type SpendingTrendResult = Result<SpendingTrend>
 export type RecurringResult = Result<RecurringSuggestion[]>
 export type StageResult = Result<StageSummary>
 export type ImportItemsResult = Result<ImportItemView[]>
+export type CardStatementImportResult = Result<CardStatementImport>
+export type CardStatementsResult = Result<CardStatementView[]>
+export type CardStatementDetailResult = Result<CardStatementDetail>
 
 // ---------- users ----------
 
@@ -532,6 +731,12 @@ export interface FinanceServiceContract {
   RestoreImportItem(id: number): Promise<OpResult>
   ListMerchantRules(): Promise<MerchantRule[]>
   DeleteMerchantRule(id: number): Promise<OpResult>
+  ConfirmImportItemAsIncome(id: number, period: string, description: string, amount: string): Promise<IncomeResult>
+
+  ImportCardStatement(input: CardStatementInput): Promise<CardStatementImportResult>
+  ListCardStatements(period: string): Promise<CardStatementsResult>
+  GetCardStatement(id: number): Promise<CardStatementDetailResult>
+  DeleteCardStatement(id: number): Promise<OpResult>
 
   ListTrash(): Promise<TrashResult>
 }
@@ -590,7 +795,7 @@ export interface MailAccountInput {
   username: string
   password: string
   folder: string // '' = INBOX
-  senderFilter: string // matched against the From header, e.g. "itau.cl"
+  senderFilter: string // matched against the From header, e.g. "eeccvirtual.cl" (Itaú)
   startDate: string // YYYY-MM-DD
   autoSync: boolean
 }

@@ -6,6 +6,7 @@ import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
+import { CardStatementsSection } from './CardStatements'
 
 export function CardsView() {
   const refresh = useAtomValue(refreshAtom)
@@ -27,67 +28,70 @@ export function CardsView() {
   const cards = query.data
 
   return (
-    <Section
-      title="Tarjetas de crédito"
-      action={
-        <Button
-          onClick={() => {
-            setEditing(null)
-            setShowForm(true)
-          }}
-        >
-          + Nueva tarjeta
-        </Button>
-      }
-    >
-      {cards.length === 0 ? (
-        <Empty>Aún no tienes tarjetas. Crea una para asignarle gastos y ver su cupo.</Empty>
-      ) : (
-        <ul className="space-y-2">
-          {cards.map((c) => (
-            <li key={c.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
-              <div>
-                <div className="font-medium">{c.name}</div>
-                <div className="text-xs text-slate-500">
-                  Cupo {formatCLP(c.creditLimit)} · corte día {c.billingDay}
-                  {c.lastDigits !== '' && <> · terminada en {c.lastDigits}</>}
+    <div className="space-y-6">
+      <Section
+        title="Tarjetas de crédito"
+        action={
+          <Button
+            onClick={() => {
+              setEditing(null)
+              setShowForm(true)
+            }}
+          >
+            + Nueva tarjeta
+          </Button>
+        }
+      >
+        {cards.length === 0 ? (
+          <Empty>Aún no tienes tarjetas. Crea una para asignarle gastos y ver su cupo.</Empty>
+        ) : (
+          <ul className="space-y-2">
+            {cards.map((c) => (
+              <li key={c.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
+                <div>
+                  <div className="font-medium">{c.name}</div>
+                  <div className="text-xs text-slate-500">
+                    Cupo {formatCLP(c.creditLimit)} · corte día {c.billingDay}
+                    {c.lastDigits !== '' && <> · terminada en {c.lastDigits}</>}
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setEditing(c)
-                    setShowForm(true)
-                  }}
-                >
-                  Editar
-                </Button>
-                {confirmId === c.id ? (
-                  <>
-                    <span className="text-sm text-danger">¿Eliminar?</span>
-                    <Button variant="danger" onClick={() => remove(c.id)}>Sí</Button>
-                    <Button variant="ghost" onClick={() => setConfirmId(null)}>No</Button>
-                  </>
-                ) : (
-                  <Button variant="danger" onClick={() => setConfirmId(c.id)}>
-                    Eliminar
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setEditing(c)
+                      setShowForm(true)
+                    }}
+                  >
+                    Editar
                   </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+                  {confirmId === c.id ? (
+                    <>
+                      <span className="text-sm text-danger">¿Eliminar?</span>
+                      <Button variant="danger" onClick={() => remove(c.id)}>Sí</Button>
+                      <Button variant="ghost" onClick={() => setConfirmId(null)}>No</Button>
+                    </>
+                  ) : (
+                    <Button variant="danger" onClick={() => setConfirmId(c.id)}>
+                      Eliminar
+                    </Button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {showForm && (
-        <CardForm
-          card={editing}
-          onClose={() => setShowForm(false)}
-          onSaved={() => bump((n) => n + 1)}
-        />
-      )}
-    </Section>
+        {showForm && (
+          <CardForm
+            card={editing}
+            onClose={() => setShowForm(false)}
+            onSaved={() => bump((n) => n + 1)}
+          />
+        )}
+      </Section>
+      <CardStatementsSection />
+    </div>
   )
 }
 
