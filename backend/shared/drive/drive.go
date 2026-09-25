@@ -23,6 +23,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	gdrive "google.golang.org/api/drive/v3"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/prefs"
@@ -104,16 +105,36 @@ func (m *Manager) loadToken() (*oauth2.Token, error) {
 	return t, nil
 }
 
+// saveToken writes the token to a temp file and renames it into place, so a
+// crash mid-write never leaves a torn file (which would read as "not
+// connected" and silently turn every backup local-only). The token stays a
+// 0600 file rather than a keychain item: Windows' credential blob caps at 2560
+// bytes, too close to a token's size, and on macOS go-keyring's items are
+// readable by any process of the same user anyway.
 func (m *Manager) saveToken(t *oauth2.Token) error {
-	if err := os.MkdirAll(prefs.Dir(m.appName), 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(prefs.Dir(m.appName), 0o700); err != nil {
+		return fmt.Errorf("creating the prefs folder: %w", err)
 	}
 	b, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("encoding the token: %w", err)
 	}
-	return os.WriteFile(prefs.TokenPath(m.appName), b, 0o600)
+	path := prefs.TokenPath(m.appName)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return fmt.Errorf("writing the token: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("saving the token: %w", err)
+	}
+	return nil
 }
+
+// ErrReconnect means Google no longer honors the stored refresh token (revoked
+// by the user, or expired — Google expires them after 7 days while an OAuth
+// app is in "Testing"). The token is dropped, so Ajustes shows Drive as
+// disconnected and offers to connect again.
+var ErrReconnect = errors.New("hay que volver a conectar Google Drive: hazlo en Ajustes → Respaldo")
 
 // Connect runs the loopback OAuth flow: it opens the user's browser (via openBrowser)
 // to Google's consent screen and waits for the redirect to capture the code.
@@ -138,27 +159,41 @@ func (m *Manager) Connect(ctx context.Context, openBrowser func(string) error) e
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
+	// report hands the first outcome to Connect; later requests (a reload, a
+	// stray tab) must not block their handler on a full channel.
+	report := func(err error) {
+		select {
+		case errCh <- err:
+		default:
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("state") != state {
+			// Not the redirect this login started (another tab, a stale link):
+			// refuse it without giving up on the real one still to come.
 			http.Error(w, "state inválido", http.StatusBadRequest)
-			errCh <- errors.New("state mismatch")
 			return
 		}
 		if e := q.Get("error"); e != "" {
+			// Plain text: the value comes from the query string.
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			fmt.Fprintf(w, "Error: %s. Puedes cerrar esta pestaña.", e)
-			errCh <- fmt.Errorf("oauth: %s", e)
+			report(fmt.Errorf("oauth: %s", e))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, successHTML)
-		codeCh <- q.Get("code")
+		select {
+		case codeCh <- q.Get("code"):
+		default: // a code already arrived
+		}
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("servidor de callback OAuth: %w", err)
+			report(fmt.Errorf("servidor de callback OAuth: %w", err))
 		}
 	}()
 	defer func() {
@@ -212,7 +247,17 @@ func (m *Manager) service(ctx context.Context) (*gdrive.Service, error) {
 		return nil, errors.New("no estás conectado a Google Drive")
 	}
 	ts := m.oauthConfig("").TokenSource(ctx, tok)
-	if refreshed, err := ts.Token(); err == nil && refreshed.AccessToken != tok.AccessToken {
+	refreshed, err := ts.Token()
+	if err != nil {
+		if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && re.ErrorCode == "invalid_grant" {
+			if rmErr := os.Remove(prefs.TokenPath(m.appName)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				slog.Warn("drive: borrar token revocado", "err", rmErr)
+			}
+			return nil, ErrReconnect
+		}
+		return nil, fmt.Errorf("no se pudo renovar el acceso a Google Drive (¿sin conexión?): %w", err)
+	}
+	if refreshed.AccessToken != tok.AccessToken {
 		// Non-fatal: the in-memory token source keeps working; only the next
 		// launch would refresh again.
 		if err := m.saveToken(refreshed); err != nil {
@@ -220,6 +265,22 @@ func (m *Manager) service(ctx context.Context) (*gdrive.Service, error) {
 		}
 	}
 	return gdrive.NewService(ctx, option.WithTokenSource(ts))
+}
+
+// isGone reports whether a Drive file or folder can no longer be used: it does
+// not exist (404) or it is in the trash (Drive empties it after 30 days, so
+// backing up into it would silently lose the backup). Any other failure — a
+// network blip, a 5xx, a rate limit — is returned as an error: treating it as
+// "missing" used to create a duplicate folder or file on every hiccup.
+func isGone(ctx context.Context, svc *gdrive.Service, id string) (bool, error) {
+	f, err := svc.Files.Get(id).Fields("id,trashed").Context(ctx).Do()
+	if ge, ok := errors.AsType[*googleapi.Error](err); ok && ge.Code == http.StatusNotFound {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("consultando Drive: %w", err)
+	}
+	return f.Trashed, nil
 }
 
 // Upload uploads localFile into folderName (created if needed), overwriting the
@@ -230,9 +291,9 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 		return "", "", err
 	}
 
-	folderID = m.ensureFolder(ctx, svc, folderName, folderID)
-	if folderID == "" {
-		return "", "", errors.New("no se pudo crear/obtener la carpeta en Drive")
+	folderID, err = m.ensureFolder(ctx, svc, folderName, folderID)
+	if err != nil {
+		return "", "", fmt.Errorf("carpeta de respaldos en Drive: %w", err)
 	}
 
 	f, err := os.Open(localFile)
@@ -242,13 +303,21 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 	defer f.Close()
 
 	if fileID != "" {
-		if _, e := svc.Files.Get(fileID).Fields("id").Context(ctx).Do(); e != nil {
+		gone, err := isGone(ctx, svc, fileID)
+		if err != nil {
+			return folderID, "", err
+		}
+		if gone {
 			fileID = ""
 		}
 	}
 	if fileID == "" {
 		q := fmt.Sprintf("name=%s and %s in parents and trashed=false", quote(fileName), quote(folderID))
-		if list, e := svc.Files.List().Q(q).Fields("files(id)").Context(ctx).Do(); e == nil && len(list.Files) > 0 {
+		list, err := svc.Files.List().Q(q).Fields("files(id)").Context(ctx).Do()
+		if err != nil {
+			return folderID, "", fmt.Errorf("buscando el respaldo en Drive: %w", err)
+		}
+		if len(list.Files) > 0 {
 			fileID = list.Files[0].Id
 		}
 	}
@@ -271,10 +340,14 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 // It walks each segment from the root, finding or creating each level. If
 // folderID is still valid it is returned immediately (fast path for repeat
 // backups).
-func (m *Manager) ensureFolder(ctx context.Context, svc *gdrive.Service, name, folderID string) string {
+func (m *Manager) ensureFolder(ctx context.Context, svc *gdrive.Service, name, folderID string) (string, error) {
 	if folderID != "" {
-		if _, e := svc.Files.Get(folderID).Fields("id").Context(ctx).Do(); e == nil {
-			return folderID
+		gone, err := isGone(ctx, svc, folderID)
+		if err != nil {
+			return "", err
+		}
+		if !gone {
+			return folderID, nil
 		}
 	}
 	parentID := ""
@@ -283,17 +356,21 @@ func (m *Manager) ensureFolder(ctx context.Context, svc *gdrive.Service, name, f
 		if seg == "" {
 			continue
 		}
-		parentID = m.ensureFolderChild(ctx, svc, seg, parentID)
-		if parentID == "" {
-			return ""
+		var err error
+		if parentID, err = m.ensureFolderChild(ctx, svc, seg, parentID); err != nil {
+			return "", err
 		}
 	}
-	return parentID
+	if parentID == "" {
+		return "", errors.New("el nombre de la carpeta está vacío")
+	}
+	return parentID, nil
 }
 
 // ensureFolderChild finds or creates a single folder named name as a direct
-// child of parentID (or the user's root Drive when parentID is empty).
-func (m *Manager) ensureFolderChild(ctx context.Context, svc *gdrive.Service, name, parentID string) string {
+// child of parentID (or the user's root Drive when parentID is empty). A failed
+// lookup is an error, never a reason to create another folder.
+func (m *Manager) ensureFolderChild(ctx context.Context, svc *gdrive.Service, name, parentID string) (string, error) {
 	var q string
 	if parentID == "" {
 		// Omit 'root' in parents: with drive.file scope that constraint can return
@@ -303,22 +380,28 @@ func (m *Manager) ensureFolderChild(ctx context.Context, svc *gdrive.Service, na
 	} else {
 		q = fmt.Sprintf("mimeType='application/vnd.google-apps.folder' and name=%s and %s in parents and trashed=false", quote(name), quote(parentID))
 	}
-	if list, e := svc.Files.List().Q(q).Fields("files(id)").Context(ctx).Do(); e == nil && len(list.Files) > 0 {
-		return list.Files[0].Id
+	list, err := svc.Files.List().Q(q).Fields("files(id)").Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("buscando la carpeta %q: %w", name, err)
+	}
+	if len(list.Files) > 0 {
+		return list.Files[0].Id, nil
 	}
 	f := &gdrive.File{Name: name, MimeType: "application/vnd.google-apps.folder"}
 	if parentID != "" {
 		f.Parents = []string{parentID}
 	}
-	created, e := svc.Files.Create(f).Fields("id").Context(ctx).Do()
-	if e != nil {
-		return ""
+	created, err := svc.Files.Create(f).Fields("id").Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("creando la carpeta %q: %w", name, err)
 	}
-	return created.Id
+	return created.Id, nil
 }
 
-// quote renders a Drive query string literal, escaping single quotes.
+// quote renders a Drive query string literal: backslash first, then the single
+// quote, each escaped with a backslash (Drive's query syntax).
 func quote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return "'" + strings.ReplaceAll(s, "'", `\'`) + "'"
 }
 

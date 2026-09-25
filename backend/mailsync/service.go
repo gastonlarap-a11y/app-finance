@@ -52,6 +52,27 @@ type Service struct {
 	stopLoop context.CancelFunc
 	loopDone chan struct{}
 	inFlight sync.Map // account id → struct{}: a sync is queued or running
+	// authFailures counts consecutive rejected logins per account (id → int).
+	// Auto-sync pauses at maxAuthFailures: retrying a wrong password every 15
+	// minutes can lock the mailbox or trip the provider's security alerts. A
+	// manual sync, a new password or a restart tries again.
+	authFailures sync.Map
+}
+
+const maxAuthFailures = 3
+
+func (s *Service) noteAuthFailure(accountID int64) {
+	n := 1
+	if v, ok := s.authFailures.Load(accountID); ok {
+		n = v.(int) + 1 // only ints are stored here
+	}
+	s.authFailures.Store(accountID, n)
+}
+
+// authPaused reports whether auto-sync should skip the account for now.
+func (s *Service) authPaused(accountID int64) bool {
+	v, ok := s.authFailures.Load(accountID)
+	return ok && v.(int) >= maxAuthFailures // only ints are stored here
 }
 
 // NewService wires the mailbox sync. emit forwards events to the frontend
@@ -102,19 +123,39 @@ func (s *Service) autoSyncLoop(ctx context.Context) {
 	}
 }
 
-// enqueueAutoSyncs queues every profile's mailbox with auto-sync on; each sync
-// runs with its own account's user id, whatever profile is active.
+// enqueueAutoSyncs queues every live profile's mailbox with auto-sync on; each
+// sync runs with its own account's user id, whatever profile is active. A
+// profile in the trash is not read, nor a mailbox whose password keeps being
+// rejected (see authFailures).
 func (s *Service) enqueueAutoSyncs(ctx context.Context) {
-	var accounts []MailAccount
-	if err := s.db.NewSelect().Model(&accounts).Where("auto_sync = ?", true).Scan(ctx); err != nil {
+	ids, err := s.autoSyncAccounts(ctx)
+	if err != nil {
 		slog.Error("mailsync: listing accounts", "err", err)
 		return
 	}
-	for _, acc := range accounts {
-		if err := s.enqueue(acc.ID); err != nil && !errors.Is(err, errBusy) {
-			slog.Error("mailsync: queueing auto-sync", "account", acc.ID, "err", err)
+	for _, id := range ids {
+		if err := s.enqueue(id); err != nil && !errors.Is(err, errBusy) {
+			slog.Error("mailsync: queueing auto-sync", "account", id, "err", err)
 		}
 	}
+}
+
+// autoSyncAccounts lists the mailboxes auto-sync should read now.
+func (s *Service) autoSyncAccounts(ctx context.Context) ([]int64, error) {
+	var accounts []MailAccount
+	if err := s.db.NewSelect().Model(&accounts).Where("auto_sync = ?", true).
+		Where("user_id IN (SELECT id FROM users WHERE deleted_at IS NULL)").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("listing auto-sync accounts: %w", err)
+	}
+	ids := make([]int64, 0, len(accounts))
+	for _, acc := range accounts {
+		if s.authPaused(acc.ID) {
+			slog.Warn("mailsync: auto-sync en pausa por contraseña rechazada", "account", acc.ID)
+			continue
+		}
+		ids = append(ids, acc.ID)
+	}
+	return ids, nil
 }
 
 var errBusy = errors.New("sync already queued or running")
@@ -296,6 +337,8 @@ func (s *Service) SaveMailAccount(ctx context.Context, in MailAccountInput) OpRe
 	if err != nil {
 		return OpResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
+	// New settings or password: give auto-sync another chance.
+	s.authFailures.Delete(acc.ID)
 	return OpResult{}
 }
 
@@ -336,7 +379,7 @@ func (s *Service) tryConnect(ctx context.Context, acc *MailAccount) *shared.AppE
 	}
 	// Logout is best-effort: the connection test already succeeded.
 	_ = sess.client.Logout().Wait()
-	_ = sess.client.Close()
+	sess.close()
 	return nil
 }
 

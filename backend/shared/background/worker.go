@@ -3,7 +3,9 @@ package background
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 )
 
@@ -49,11 +51,23 @@ func (w *Worker) run(ctx context.Context) {
 	for {
 		select {
 		case task := <-w.queue:
-			if err := task(ctx); err != nil {
+			if err := runTask(ctx, task); err != nil {
 				slog.Error("background task failed", "err", err)
 			}
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// runTask runs one task, turning a panic into an error. Tasks process untrusted
+// input (bank emails through MIME/HTML parsers); a panic in one must not kill
+// the app — it would come back on every launch with the first auto-sync.
+func runTask(ctx context.Context, task TaskFunc) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("background task panicked: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return task(ctx)
 }

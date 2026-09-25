@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"sync/atomic"
 	"time"
@@ -59,6 +61,54 @@ func main() {
 		cfg.DataDir = p.DBFolder
 	}
 
+	// Assigned once the services exist; the shutdown hook may fire earlier
+	// (a startup failure quits through the app), so it checks for nil.
+	var backupOnClose func(ctx context.Context) error
+	var window *application.WebviewWindow
+	// Raised when quitting into an update: its backup already ran (see updates.Options).
+	restartingToUpdate := new(atomic.Bool)
+
+	// The app is created before the database is touched: SingleInstance is
+	// enforced inside application.New, and a second copy must exit before it
+	// opens, migrates or backs up the DB the first one is using. Services are
+	// registered below with RegisterService, which Wails allows until Run.
+	app := application.New(application.Options{
+		Name:     cfg.DisplayName,
+		LogLevel: slog.LevelInfo,
+		// Without a Logger, release builds discard Wails' own log: binding-call
+		// errors and recovered panics never reached app.log.
+		Logger: slog.Default(),
+		PanicHandler: func(p *application.PanicDetails) {
+			slog.Error("panic", "err", p.Error, "stack", p.FullStackTrace)
+		},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.gastonlarap.app-finance", // info.productIdentifier in build/config.yml
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				if window != nil {
+					window.Show()
+					window.Focus()
+				}
+			},
+		},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
+		},
+		// Back up when the app closes (snapshot + upload to Drive if connected).
+		// Failures (offline, not connected) are logged but never block shutdown.
+		// Quitting into an update skips it: RestartToUpdate already backed up, and
+		// the updater's helper gives up if the app takes over 30 s to exit.
+		OnShutdown: func() {
+			if restartingToUpdate.Load() || backupOnClose == nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			if err := backupOnClose(ctx); err != nil {
+				slog.Error("respaldo al cerrar falló", "err", err)
+			}
+		},
+	})
+
 	// Opening a missing file creates an empty DB. When a DB folder was chosen but
 	// holds no DB (an unsynced cloud folder, an unplugged drive), that empty DB
 	// must not replace the good backups: the backup runner refuses it.
@@ -67,8 +117,13 @@ func main() {
 		slog.Warn("no existe la base de datos: se crea una vacía", "carpetaElegida", prefs.Load(appName).DBFolder != "")
 	}
 
-	bdb := db.MustConnect(cfg)
-	migrateDB(bdb, cfg, freshDB)
+	bdb, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		exitWithDialog(app, cfg.LogDir(), "No se pudo abrir la base de datos", err)
+	}
+	if err := migrateDB(bdb, cfg, freshDB); err != nil {
+		exitWithDialog(app, cfg.LogDir(), "No se pudo preparar la base de datos", err)
+	}
 
 	// Restore the last selected finance profile (defaults to the seeded "Gastón").
 	session := users.NewSession()
@@ -91,7 +146,7 @@ func main() {
 	if err != nil {
 		slog.Error("versión desconocida: actualizaciones desactivadas", "err", err)
 	}
-	backupOnClose := func(ctx context.Context) error {
+	backupOnClose = func(ctx context.Context) error {
 		if !prefs.Load(appName).BackupOnClose {
 			return nil
 		}
@@ -102,8 +157,6 @@ func main() {
 		slog.Info("respaldo", "local", info.LocalPath, "subido", info.Uploaded)
 		return nil
 	}
-	// Raised when quitting into an update: its backup already ran (see updates.Options).
-	restartingToUpdate := new(atomic.Bool)
 	updatesSvc := updates.NewService(updates.Options{
 		Emit:           func(name string, data any) { application.Get().Event.Emit(name, data) },
 		Repository:     updateFeed,
@@ -112,7 +165,7 @@ func main() {
 		Restarting:     restartingToUpdate,
 	})
 
-	services := []application.Service{
+	for _, svc := range []application.Service{
 		application.NewService(financeSvc),
 		application.NewService(usersSvc),
 		application.NewService(settingsSvc),
@@ -121,33 +174,12 @@ func main() {
 		application.NewService(diagnostics.NewDiagnosticsService()),
 		application.NewService(reports.NewReportsService()),
 		// add new services here as you create new domains
+	} {
+		app.RegisterService(svc)
 	}
 
-	app := application.New(application.Options{
-		Name:     cfg.DisplayName,
-		LogLevel: slog.LevelInfo,
-		Services: services,
-		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
-		},
-		// Back up when the app closes (snapshot + upload to Drive if connected).
-		// Failures (offline, not connected) are logged but never block shutdown.
-		// Quitting into an update skips it: RestartToUpdate already backed up, and
-		// the updater's helper gives up if the app takes over 30 s to exit.
-		OnShutdown: func() {
-			if restartingToUpdate.Load() {
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			defer cancel()
-			if err := backupOnClose(ctx); err != nil {
-				slog.Error("respaldo al cerrar falló", "err", err)
-			}
-		},
-	})
-
 	st := windowstate.Load(context.Background(), bdb)
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:           cfg.DisplayName,
 		Width:           st.W,
 		Height:          st.H,
@@ -190,23 +222,35 @@ func main() {
 // migrateDB brings the schema up to date. Before touching an existing DB it
 // keeps a snapshot, so a migration that fails (or misbehaves) can be undone by
 // hand; a DB newer than this binary is refused before anything is written.
-func migrateDB(bdb *bun.DB, cfg *config.Config, freshDB bool) {
+func migrateDB(bdb *bun.DB, cfg *config.Config, freshDB bool) error {
 	ctx := context.Background()
 	pending, err := db.PendingMigrations(ctx, bdb)
 	if err != nil {
-		slog.Error("migration check failed", "err", err)
-		os.Exit(1)
+		return err
 	}
 	if pending > 0 && !freshDB {
 		path, err := backup.SnapshotBeforeMigrate(ctx, bdb, cfg.BackupLocalDirResolved(), cfg.DBFilename)
 		if err != nil {
-			slog.Error("no se pudo respaldar antes de migrar", "err", err)
-			os.Exit(1)
+			return fmt.Errorf("no se pudo respaldar antes de actualizar la base de datos: %w", err)
 		}
 		slog.Info("respaldo previo a migrar", "path", path, "pendientes", pending)
 	}
-	if err := db.RunMigrations(ctx, bdb); err != nil {
-		slog.Error("migration failed", "err", err)
-		os.Exit(1)
+	return db.RunMigrations(ctx, bdb)
+}
+
+// exitWithDialog shows a startup failure in a native dialog, then exits. A
+// packaged app has no console: it used to just vanish, leaving the reason in
+// a log file nobody knew to open. The dialog runs on the app's own loop (Show
+// dispatches to the main thread), so Run is started and quits once it closes.
+func exitWithDialog(app *application.App, logDir, title string, err error) {
+	slog.Error(title, "err", err)
+	go func() {
+		app.Dialog.Error().SetTitle(title).
+			SetMessage(fmt.Sprintf("%v\n\nEl detalle quedó en %s.", err, filepath.Join(logDir, "app.log"))).Show()
+		app.Quit()
+	}()
+	if runErr := app.Run(); runErr != nil {
+		slog.Error("app exited with error", "err", runErr)
 	}
+	os.Exit(1)
 }

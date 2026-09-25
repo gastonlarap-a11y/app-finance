@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -75,20 +74,18 @@ func Exists(path string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// MustConnect opens the database and configures bun. It exits the process on a
-// hard connection failure (only ever called from main.go, never from a service).
-func MustConnect(cfg *config.Config) *bun.DB {
+// Connect opens the app's database at cfg.DBPath (creating its folder) and
+// configures bun. Only main.go calls it: a failure is shown to the user there.
+func Connect(ctx context.Context, cfg *config.Config) (*bun.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath()), 0o755); err != nil {
-		slog.Error("creating data dir failed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("creating the data folder: %w", err)
 	}
-	bdb, err := Open(context.Background(), cfg.DBPath())
+	bdb, err := Open(ctx, cfg.DBPath())
 	if err != nil {
-		slog.Error("db open failed", "err", err)
-		os.Exit(1)
+		return nil, err
 	}
 	if cfg.LogLevel == "debug" {
 		bdb.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 	}
-	return bdb
+	return bdb, nil
 }

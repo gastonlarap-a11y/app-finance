@@ -66,8 +66,11 @@ over `npx tsc` and pass `--cache $TMPDIR/npm-cache` to npm (the npm cache is not
 
 Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 
-- **`main.go` is the only orchestration point** (no `app.go` god object): shared deps →
-  `Services` slice → `application.New` → window → `app.Run()`.
+- **`main.go` is the only orchestration point** (no `app.go` god object): `application.New`
+  (SingleInstance, `Logger`, `PanicHandler`) → DB open + migrations → shared deps → services via
+  `app.RegisterService` → window → `app.Run()`. `New` comes first because SingleInstance is enforced
+  inside it: a second copy must exit before touching the DB. Startup failures go through
+  `exitWithDialog` (native error dialog), never a bare `os.Exit`.
 - **One Service per domain**: plain struct + `application.NewService(...)`; exported methods
   auto-bind to TS. Reference: `backend/finance/service.go`. Current services: `finance`, `users`,
   `settings`, `mailsync` (desktop only), `updates` (desktop only), `diagnostics`, `reports`.
