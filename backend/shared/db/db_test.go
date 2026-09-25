@@ -71,6 +71,20 @@ func TestMigrationsRefuseNewerSchema(t *testing.T) {
 	}
 }
 
+// Databases created from the original template still record its removed
+// migrations (20260628001/002); they must open normally.
+func TestMigrationsIgnoreRetiredOnes(t *testing.T) {
+	ctx := t.Context()
+	bdb := dbtest.OpenMigrated(t)
+	mustExec(t, bdb, "INSERT INTO bun_migrations (name, group_id) VALUES ('20260628001', 1), ('20260628002', 1)")
+	if pending, err := db.PendingMigrations(ctx, bdb); err != nil || pending != 0 {
+		t.Fatalf("PendingMigrations = %d, %v; want 0, nil", pending, err)
+	}
+	if err := db.RunMigrations(ctx, bdb); err != nil {
+		t.Fatalf("RunMigrations with retired migrations recorded: %v", err)
+	}
+}
+
 // TestOrphanCleanupMigration seeds the rows a desktop DB accumulated while its
 // foreign keys were off, then re-runs the cleanup migration over them.
 func TestOrphanCleanupMigration(t *testing.T) {

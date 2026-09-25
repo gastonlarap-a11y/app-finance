@@ -49,18 +49,38 @@ func newMigrator(ctx context.Context, bdb *bun.DB) (*migrate.Migrator, error) {
 		return nil, fmt.Errorf("init migrator: %w", err)
 	}
 
+	newer, err := newerThanKnown(ctx, migrator, m)
+	if err != nil {
+		return nil, err
+	}
+	if len(newer) > 0 {
+		return nil, fmt.Errorf("%w (migraciones desconocidas: %s)", ErrNewerSchema, strings.Join(newer, ", "))
+	}
+	return migrator, nil
+}
+
+// newerThanKnown lists applied migrations this binary does not know and that
+// sort after the last one it knows — the mark of a newer app version, since
+// prefixes grow over time. Unknown migrations that sort before it are retired
+// ones, e.g. the template's 20260628001/002 that early databases still record
+// after those domains were removed; they say nothing about the schema's age.
+func newerThanKnown(ctx context.Context, migrator *migrate.Migrator, known *migrate.Migrations) ([]string, error) {
 	unknown, err := migrator.MissingMigrations(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading applied migrations: %w", err)
 	}
-	if len(unknown) > 0 {
-		names := make([]string, len(unknown))
-		for i, u := range unknown {
-			names[i] = u.Name
-		}
-		return nil, fmt.Errorf("%w (migraciones desconocidas: %s)", ErrNewerSchema, strings.Join(names, ", "))
+	sorted := known.Sorted()
+	if len(sorted) == 0 {
+		return nil, nil
 	}
-	return migrator, nil
+	latest := sorted[len(sorted)-1].Name
+	var newer []string
+	for _, u := range unknown {
+		if u.Name > latest {
+			newer = append(newer, u.Name)
+		}
+	}
+	return newer, nil
 }
 
 // PendingMigrations reports how many migrations RunMigrations would apply, so
