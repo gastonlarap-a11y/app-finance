@@ -14,15 +14,21 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every action is pinned to a full commit SHA (the tag in the comment is what
+# Dependabot updates): a moved or compromised tag cannot change what runs here.
+# Checkouts drop the token from .git/config (persist-credentials: false): no
+# step pushes, and later steps (npm ci runs install scripts) must not reach it.
 jobs:
   # Secret scanning on every push/PR (deny rules on .env* are only advisory).
   gitleaks:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # gitleaks needs full history to resolve the pushed range
-      - uses: gitleaks/gitleaks-action@v3
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # required by the action to scan PRs
 
@@ -31,25 +37,33 @@ jobs:
   # this app only ships for macOS/Windows. macOS runners are free on public repos.
   desktop:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
       # main.go embeds all:frontend/dist; the dir must exist for any go command.
       - name: Placeholder frontend/dist for go:embed
         run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+      - name: Module hygiene (go.mod/go.sum tidy and verified)
+        run: |
+          go mod tidy -diff
+          go mod verify
       - name: Vet
         run: go vet ./...
       - name: Lint (golangci-lint)
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
       - name: Test (race detector)
         run: go test -race ./...
+      # Pinned like everything else: @latest would change what runs without a commit.
       - name: Vulnerabilities (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       # No native window on CI: compile-check the backend, don't run wails3 build.
       - name: Build (compile check)
         run: go build ./...
@@ -58,10 +72,10 @@ jobs:
       # assigns the generated bindings to the hand-written contract, so a Go
       # signature change not mirrored in contract.ts fails here.
       - name: Install wails3 CLI (matches the go.mod pin)
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
       - name: Generate TS bindings
         run: wails3 generate bindings -ts
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: frontend/.nvmrc
           cache: npm
@@ -79,12 +93,15 @@ jobs:
   # Bindings-independent web target: engine tests (Go⇄TS parity mirror) + PWA bundle.
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: frontend/.nvmrc
           cache: npm
