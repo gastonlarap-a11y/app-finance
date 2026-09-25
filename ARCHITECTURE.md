@@ -137,6 +137,21 @@ the history length. **Category budgets** (`category_budgets`, `budget.go`) reuse
 by `category_id` (renames keep the budget; the rows ride along with the category into the trash);
 `MonthlySummary.Presupuestos` compares each cap in effect with the month's `PorCategoria` total.
 
+**Performance (measured, not guessed).** `backend/finance/bench_test.go` seeds 5 years of history
+(≈3.000 expenses, cuotas, fixed expenses, a statement a month, 200 inbox items) and times the hot
+paths (`go test -run '^$' -bench . -benchmem ./backend/finance`); `frontend/src/engine/finance/
+summaries.perf.test.ts` does the same for the web engine (`BENCH=1`). Rules that came out of it:
+- read only the columns a total needs (`sumAmounts`, `pendingByCard`, `cardChargesIn`) — full rows
+  with their timestamps were 95 % of MonthlySummary's allocations; money is still summed as decimals
+  in code, never with SQLite's float `SUM()`;
+- never call a whole summary to get one of its figures: the statement list needs each card's month
+  charges (`cardChargesIn`), not `monthlySummary` per billed month (1,4 s → 10 ms on 5 years);
+- load a list's per-row data in one query (statement lines/pending counts, the inbox's duplicate
+  candidates over a date span and its matched items) instead of one query per row;
+- composite indexes put the equality first (`user_id`) and the range or second filter after
+  (migration `20260926021`); dates are compared as `YYYY-MM-DD…` string ranges, which both stored
+  formats share and an index can serve (`julianday(substr(date…))` cannot).
+
 Read-only aggregates built on top: `CommitmentsForecast` (`forecast.go` — future installments + active
 fixed expenses vs. salary, reusing the last known salary for months without one) and `SearchExpenses`
 (`search.go` — LIKE with escaped wildcards, category/card/period-range filters, paginated with a count).

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -324,6 +325,14 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 			return nil, err
 		}
 	}
+	dups, err := s.duplicateCandidates(ctx, uid, items)
+	if err != nil {
+		return nil, err
+	}
+	matchedByID, err := s.matchedItems(ctx, uid, items)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]ImportItemView, 0, len(items))
 	for _, it := range items {
@@ -342,21 +351,13 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 				v.SuggestedFixedID, v.SuggestedFixedDescription, v.SuggestedFixedPeriod = &fe.ID, fe.Description, period
 			}
 		}
-		if it.Status == ImportPendiente && it.Kind != ImportKindCredit && it.Currency == "CLP" {
-			dup, err := s.findDuplicateExpense(ctx, uid, it, v.CardID)
-			if err != nil {
-				return nil, err
-			}
-			if dup != nil {
+		if duplicateReviewable(it) {
+			if dup := dups.find(it, v.CardID); dup != nil {
 				v.DuplicateExpenseID, v.DuplicateDescription = &dup.ID, dup.Description
 			}
 		}
 		if it.MatchedItemID != nil {
-			matched := new(ImportItem)
-			err := s.db.NewSelect().Model(matched).Where("id = ? AND user_id = ?", *it.MatchedItemID, uid).Scan(ctx)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, fmt.Errorf("loading matched item: %w", err)
-			}
+			matched := matchedByID[*it.MatchedItemID]
 			v.MatchedSource, v.MatchedDate = matched.Source, matched.Date
 		}
 		out = append(out, v)
@@ -409,30 +410,110 @@ func cardsByLastDigits(cards []Card) map[string]Card {
 	return out
 }
 
-// findDuplicateExpense returns a live expense, not yet linked to any import
-// item, that looks like the same purchase: its date within duplicateWindowDays,
-// its cuota or its total equal to the amount and, when the item's card is
-// known, on that card. The closest date wins, then the oldest expense.
-func (s *FinanceService) findDuplicateExpense(ctx context.Context, uid int64, it ImportItem, cardID *int64) (*Expense, error) {
-	var cands []Expense
-	q := s.db.NewSelect().Model(&cands).
-		Where("user_id = ?", uid).
-		Where("ABS(julianday(substr(date, 1, 10)) - julianday(?)) <= ?", it.Date, duplicateWindowDays).
-		Where("id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)", uid).
-		OrderExpr("ABS(julianday(substr(date, 1, 10)) - julianday(?)) ASC, id ASC", it.Date)
-	if cardID != nil {
-		q = q.Where("card_id = ?", *cardID)
-	}
-	if err := q.Scan(ctx); err != nil {
-		return nil, fmt.Errorf("finding duplicate expense: %w", err)
-	}
-	for i := range cands {
-		ex := &cands[i]
-		if ex.InstallmentAmount.Cmp(it.Amount) == 0 || ex.InstallmentAmount.MulInt(int64(ex.InstallmentsTotal)).Cmp(it.Amount) == 0 {
-			return ex, nil
+// duplicateReviewable reports whether an item gets a "did you already enter
+// it?" suggestion: a pending CLP charge.
+func duplicateReviewable(it ImportItem) bool {
+	return it.Status == ImportPendiente && it.Kind != ImportKindCredit && it.Currency == "CLP"
+}
+
+// expenseCandidates are the live, not-yet-linked expenses dated near any of
+// the listed items, loaded once for the whole inbox instead of per item.
+type expenseCandidates []Expense
+
+// duplicateCandidates loads the expenses find may suggest for `items`: one
+// query over the date span of every reviewable item (±duplicateWindowDays). The
+// date column holds "YYYY-MM-DD…" in both the bun and the web engine formats,
+// so a plain string range selects it and can use an index.
+func (s *FinanceService) duplicateCandidates(ctx context.Context, uid int64, items []ImportItem) (expenseCandidates, error) {
+	var from, to time.Time
+	for _, it := range items {
+		if !duplicateReviewable(it) {
+			continue
+		}
+		d, err := time.Parse(dateLayout, it.Date)
+		if err != nil {
+			continue
+		}
+		if from.IsZero() || d.Before(from) {
+			from = d
+		}
+		if to.IsZero() || d.After(to) {
+			to = d
 		}
 	}
-	return nil, nil
+	if from.IsZero() {
+		return nil, nil
+	}
+	var cands []Expense
+	err := s.db.NewSelect().Model(&cands).
+		Where("user_id = ?", uid).
+		Where("date >= ? AND date < ?",
+			from.AddDate(0, 0, -duplicateWindowDays).Format(dateLayout),
+			to.AddDate(0, 0, duplicateWindowDays+1).Format(dateLayout)).
+		Where("id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)", uid).
+		Order("id ASC").Scan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("finding duplicate expenses: %w", err)
+	}
+	return cands, nil
+}
+
+// find returns the expense that looks like the same purchase as it: dated
+// within duplicateWindowDays, its cuota or its total equal to the amount and,
+// when the item's card is known, on that card. The closest date wins, then
+// the oldest expense.
+func (c expenseCandidates) find(it ImportItem, cardID *int64) *Expense {
+	day, err := time.Parse(dateLayout, it.Date)
+	if err != nil {
+		return nil
+	}
+	var best *Expense
+	bestGap := 0
+	for i := range c {
+		ex := &c[i]
+		if cardID != nil && (ex.CardID == nil || *ex.CardID != *cardID) {
+			continue
+		}
+		gap := int(math.Abs(dateOnly(ex.Date).Sub(day).Hours() / 24))
+		if gap > duplicateWindowDays {
+			continue
+		}
+		if ex.InstallmentAmount.Cmp(it.Amount) != 0 && ex.InstallmentAmount.MulInt(int64(ex.InstallmentsTotal)).Cmp(it.Amount) != 0 {
+			continue
+		}
+		if best == nil || gap < bestGap { // c is ordered by id: ties keep the oldest
+			best, bestGap = ex, gap
+		}
+	}
+	return best
+}
+
+// dateOnly is t's calendar date as stored (UTC), at midnight.
+func dateOnly(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+// matchedItems loads, in one query, the items the listed ones were reconciled with.
+func (s *FinanceService) matchedItems(ctx context.Context, uid int64, items []ImportItem) (map[int64]ImportItem, error) {
+	var ids []int64
+	for _, it := range items {
+		if it.MatchedItemID != nil {
+			ids = append(ids, *it.MatchedItemID)
+		}
+	}
+	out := map[int64]ImportItem{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var matched []ImportItem
+	if err := s.db.NewSelect().Model(&matched).Where("user_id = ? AND id IN (?)", uid, bun.List(ids)).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("loading matched items: %w", err)
+	}
+	for _, m := range matched {
+		out[m.ID] = m
+	}
+	return out, nil
 }
 
 // loadPendingItem returns uid's item `id` when it is still pendiente: NotFound

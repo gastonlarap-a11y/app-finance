@@ -1147,34 +1147,26 @@ func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, peri
 // is the amount that carries (positive or negative) into the given month. Sums
 // are done in Go with types.Decimal — never SQLite SUM() over TEXT columns.
 func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
-	total := types.Zero()
-
-	var salaries []PeriodSalary
-	if err := s.db.NewSelect().Model(&salaries).Where("user_id = ? AND period < ?", uid, period).Scan(ctx); err != nil {
-		return types.Zero(), err
+	// Only the amount column is read: this runs on every summary and walks the
+	// whole history, and full rows (timestamps parsed, structs allocated) made
+	// it the bulk of MonthlySummary's cost.
+	salaries, err := sumAmounts(ctx, s.db.NewSelect().Model((*PeriodSalary)(nil)).
+		Where("user_id = ? AND period < ?", uid, period))
+	if err != nil {
+		return types.Zero(), fmt.Errorf("salaries before %s: %w", period, err)
 	}
-	for _, sal := range salaries {
-		total = total.Add(sal.Amount)
+	incomes, err := sumAmounts(ctx, s.db.NewSelect().Model((*Income)(nil)).
+		Where("user_id = ? AND period < ?", uid, period))
+	if err != nil {
+		return types.Zero(), fmt.Errorf("incomes before %s: %w", period, err)
 	}
-
-	var incomes []Income
-	if err := s.db.NewSelect().Model(&incomes).Where("user_id = ? AND period < ?", uid, period).Scan(ctx); err != nil {
-		return types.Zero(), err
-	}
-	for _, inc := range incomes {
-		total = total.Add(inc.Amount)
-	}
-
-	var insts []Installment
-	if err := s.db.NewSelect().Model(&insts).
+	cuotas, err := sumAmounts(ctx, s.db.NewSelect().Model((*Installment)(nil)).
 		Where("user_id = ? AND period < ?", uid, period).
-		Where("expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)").
-		Scan(ctx); err != nil {
-		return types.Zero(), err
+		Where("expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)", uid))
+	if err != nil {
+		return types.Zero(), fmt.Errorf("cuotas before %s: %w", period, err)
 	}
-	for _, inst := range insts {
-		total = total.Sub(inst.Amount)
-	}
+	total := salaries.Add(incomes).Sub(cuotas)
 
 	// Recurring fixed expenses charged in every month before `period`.
 	fixedTotal, err := s.sumFixedBefore(ctx, uid, period)
@@ -1339,20 +1331,78 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	return sum, nil
 }
 
-// pendingByCard sums all pending installments of non-deleted expenses grouped by
-// their expense's card.
-func (s *FinanceService) pendingByCard(ctx context.Context, uid int64) (map[int64]types.Decimal, error) {
-	var pend []Installment
-	if err := s.db.NewSelect().Model(&pend).Relation("Expense").
-		Where("inst.user_id = ? AND inst.status = ?", uid, StatusPendiente).Scan(ctx); err != nil {
-		return nil, err
+// sumAmounts adds up the `amount` column of the rows q selects. Money is TEXT
+// and summed as decimals in Go — never with SQLite's SUM(), which goes through
+// floats. q must select a model with an amount column (soft-delete filters of
+// the model still apply).
+func sumAmounts(ctx context.Context, q *bun.SelectQuery) (types.Decimal, error) {
+	// A struct row, not []types.Decimal: bun would take a slice of structs
+	// (Decimal is one) for a model and look for its fields as columns.
+	var rows []struct {
+		Amount types.Decimal `bun:"amount"`
+	}
+	if err := q.Column("amount").Scan(ctx, &rows); err != nil {
+		return types.Zero(), err
+	}
+	total := types.Zero()
+	for _, r := range rows {
+		total = total.Add(r.Amount)
+	}
+	return total, nil
+}
+
+// cardChargesIn is what the app bills to each card in `period`: the cuotas of
+// live expenses and the fixed expenses charged to it — the same total as
+// MonthlySummary's PorTarjeta[].GastoMes, without the rest of the summary (the
+// carried balance alone rescans the whole history). The statement list needs
+// it once per billed month.
+func (s *FinanceService) cardChargesIn(ctx context.Context, uid int64, period string) (map[int64]types.Decimal, error) {
+	var rows []struct {
+		CardID int64         `bun:"card_id"`
+		Amount types.Decimal `bun:"amount"`
+	}
+	if err := s.db.NewRaw(`
+		SELECT e.card_id, i.amount FROM installments AS i
+		JOIN expenses AS e ON e.id = i.expense_id
+		WHERE i.user_id = ? AND i.period = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL`,
+		uid, period).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("card installments: %w", err)
 	}
 	out := map[int64]types.Decimal{}
-	for _, inst := range pend {
-		if inst.Expense != nil && inst.Expense.CardID != nil {
-			id := *inst.Expense.CardID
-			out[id] = out[id].Add(inst.Amount)
+	for _, r := range rows {
+		out[r.CardID] = out[r.CardID].Add(r.Amount)
+	}
+	fixed, err := s.fixedChargesFor(ctx, uid, period)
+	if err != nil {
+		return nil, err
+	}
+	for _, mv := range fixed {
+		if mv.CardID != nil {
+			out[*mv.CardID] = out[*mv.CardID].Add(mv.Amount)
 		}
+	}
+	return out, nil
+}
+
+// pendingByCard sums all pending installments of non-deleted expenses grouped by
+// their expense's card. Only card and amount are read: it runs on every
+// summary over every pending cuota, and loading full installments with their
+// expenses made it most of MonthlySummary's cost.
+func (s *FinanceService) pendingByCard(ctx context.Context, uid int64) (map[int64]types.Decimal, error) {
+	var rows []struct {
+		CardID int64         `bun:"card_id"`
+		Amount types.Decimal `bun:"amount"`
+	}
+	if err := s.db.NewRaw(`
+		SELECT e.card_id, i.amount FROM installments AS i
+		JOIN expenses AS e ON e.id = i.expense_id
+		WHERE i.user_id = ? AND i.status = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL`,
+		uid, StatusPendiente).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("pending cuotas by card: %w", err)
+	}
+	out := map[int64]types.Decimal{}
+	for _, r := range rows {
+		out[r.CardID] = out[r.CardID].Add(r.Amount)
 	}
 	return out, nil
 }

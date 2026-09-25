@@ -203,16 +203,8 @@ func (s *FinanceService) savingsBefore(ctx context.Context, uid int64, period st
 }
 
 func (s *FinanceService) sumContributions(ctx context.Context, uid int64, where string, arg any) (types.Decimal, error) {
-	var contribs []SavingsContribution
-	if err := s.db.NewSelect().Model(&contribs).
-		Where("user_id = ?", uid).Where(liveGoalContributions).Where(where, arg).Scan(ctx); err != nil {
-		return types.Zero(), err
-	}
-	total := types.Zero()
-	for _, c := range contribs {
-		total = total.Add(c.Amount)
-	}
-	return total, nil
+	return sumAmounts(ctx, s.db.NewSelect().Model((*SavingsContribution)(nil)).
+		Where("user_id = ?", uid).Where(liveGoalContributions).Where(where, arg))
 }
 
 // savingsByMonth sums live-goal contributions per month in [from, to].
