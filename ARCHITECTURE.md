@@ -95,8 +95,10 @@ table that others reference cascades into them — only rebuild leaf tables that
 Safety rails (`migrator.go`, `main.go`): the migrator records a migration only after it succeeds
 (`WithMarkAppliedOnSuccess`) and new files use bun's `.tx.up.sql` suffix to run in one transaction;
 before applying anything to an existing DB, `main.go` snapshots it to `<backups>/pre-migrate/` (last 3
-kept); a DB carrying migrations this binary does not know (opened by a newer version) is refused with
-`db.ErrNewerSchema` before anything is written.
+kept); a DB carrying unknown migrations that sort after this binary's latest one (opened by a newer
+version) is refused with `db.ErrNewerSchema` before anything is written. Unknown migrations that sort
+before it are retired ones and are ignored: early databases still record the original template's
+`20260628001`/`20260628002`.
 
 Connection (`db.go`): `db.DSN` passes `_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)` plus
 `_txlock=immediate`, and `db.Open` fails unless `PRAGMA foreign_keys` reads 1. The journal stays in
@@ -113,7 +115,20 @@ per month. **Fixed expenses** implement carry-forward plus "edit from this month
 the greatest `effective_from <= month`, so editing a month UPSERTs a new override row and leaves
 earlier months untouched; `fixed_expense_payments` records paid/pending sparsely per month. The monthly
 and yearly summaries fold fixed charges into gastos/balance/categorías alongside installments. See
-`backend/finance/fixedexpense.go` and the fixed-expense methods in `service.go`.
+`backend/finance/fixedexpense.go` and the fixed-expense methods in `service.go`. Payments and amount
+changes are accepted only for months the fixed expense bills in (`requireActiveIn`), and it can only be
+ended after its first month (ending it there would leave a row that never bills: delete it instead).
+
+Periods are compared as strings, which orders correctly only while every year has four digits, so
+dates and periods are bounded to 2000–2099 and plans to 120 cuotas (`minYear`/`maxYear`/
+`maxInstallments`; the UI's cuota field already stopped at 120).
+
+**Editing an expense** follows the ledger rule that recorded payments are not rewritten:
+`replanInstallments` adapts the existing cuotas by number instead of regenerating them. Ids stay stable,
+so `card_statement_lines.installment_id` links survive. A new amount reaches pending cuotas only, and
+cuota 1 keeps its month while the old and new date/card lead to the same billing month, because that
+month may come from a card statement (`ConfirmImportItem`'s `FirstPeriod`). Dropping a paid cuota or
+moving a plan that has paid cuotas is refused until the user unmarks them.
 
 The effective-dated lookup is generic (`effectiveDated` rows → `latestAsOf` / `resolveAsOf`), and
 `sumAsOf` totals a month range by multiplying each amount stretch instead of walking month by month —

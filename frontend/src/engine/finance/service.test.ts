@@ -6,7 +6,7 @@ import { createTestDb } from '@/engine/testing/db'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession, createUsersService } from '@/engine/users/service'
 import type { FinanceServiceContract, UsersServiceContract } from '@/services/contract'
-import type { SqlDb } from '@/engine/db/types'
+import { asNullableString, asNumber, asString, type SqlDb } from '@/engine/db/types'
 
 let db: SqlDb
 let finance: FinanceServiceContract
@@ -18,6 +18,31 @@ beforeEach(async () => {
   finance = createFinanceService(db, session)
   users = createUsersService(db, session)
 })
+
+interface CuotaRow {
+  id: number
+  number: number
+  total: number
+  period: string
+  amount: string
+  status: string
+  paidAt: string | null
+}
+
+// cuotasOf reads an expense's installments as the edit tests inspect them.
+function cuotasOf(expenseId: number): CuotaRow[] {
+  return db
+    .query('SELECT * FROM installments WHERE expense_id = ? ORDER BY number', [expenseId])
+    .map((r) => ({
+      id: asNumber(r.id),
+      number: asNumber(r.number),
+      total: asNumber(r.total),
+      period: asString(r.period),
+      amount: asString(r.amount),
+      status: asString(r.status),
+      paidAt: asNullableString(r.paid_at),
+    }))
+}
 
 describe('cards', () => {
   it('CRUD + soft delete + restore', async () => {
@@ -85,23 +110,88 @@ describe('expenses + installments', () => {
     expect(periods).toEqual(['2026-07', '2026-08', '2026-09'])
   })
 
-  it('editar preserva las cuotas ya pagadas', async () => {
+  it('editar no reescribe las cuotas pagadas y conserva los ids', async () => {
     const ex = await finance.CreateExpense('2026-07-01', 'Cama', '', '', null, 'cuotas', '50000', 4)
-    const first = db.query('SELECT id FROM installments WHERE expense_id = ? AND number = 1', [ex.data!.id])[0]
-    await finance.SetInstallmentPaid(Number(first!.id), true)
+    const before = cuotasOf(ex.data!.id)
+    // Sólo la cuota 2 pagada: el replan antiguo por conteo habría marcado la 1.
+    await finance.SetInstallmentPaid(before[1]!.id, true)
+    const paid = cuotasOf(ex.data!.id)[1]
 
-    const upd = await finance.UpdateExpense(
-      ex.data!.id, '2026-07-01', 'Cama king', '', '', null, 'cuotas', '60000', 5,
-    )
+    const upd = await finance.UpdateExpense(ex.data!.id, '2026-07-01', 'Cama king', '', '', null, 'cuotas', '60000', 5)
     expect(upd.error).toBeUndefined()
-    const insts = db.query(
-      'SELECT number, status, amount FROM installments WHERE expense_id = ? ORDER BY number',
-      [ex.data!.id],
+    const after = cuotasOf(ex.data!.id)
+    expect(after).toHaveLength(5)
+    expect(after.slice(0, 4).map((c) => c.id)).toEqual(before.map((c) => c.id))
+    expect(after[1]).toEqual({ ...paid, total: 5 })
+    for (const i of [0, 2, 3, 4]) {
+      expect(after[i]).toMatchObject({ status: 'pendiente', amount: '60000' })
+    }
+    expect(after[4]?.period).toBe('2026-11')
+  })
+
+  it('editar conserva el mes que puso la cartola mientras no cambie el mes de facturación', async () => {
+    const ex = await finance.CreateExpense('2026-07-10', 'Sofá', '', '', null, 'cuotas', '25000', 4)
+    ;['2026-05', '2026-06', '2026-07', '2026-08'].forEach((p, i) =>
+      db.exec('UPDATE installments SET period = ? WHERE expense_id = ? AND number = ?', [p, ex.data!.id, i + 1]),
     )
-    expect(insts).toHaveLength(5)
-    expect(insts[0]?.status).toBe('pagado')
-    expect(insts[1]?.status).toBe('pendiente')
-    expect(insts[0]?.amount).toBe('60000')
+    await finance.UpdateExpense(ex.data!.id, '2026-07-12', 'Sofá', 'Casa', '', null, 'cuotas', '25000', 4)
+    expect(cuotasOf(ex.data!.id)[0]?.period).toBe('2026-05')
+
+    await finance.UpdateExpense(ex.data!.id, '2026-09-01', 'Sofá', 'Casa', '', null, 'cuotas', '25000', 4)
+    expect(cuotasOf(ex.data!.id).map((c) => c.period)).toEqual(['2026-09', '2026-10', '2026-11', '2026-12'])
+  })
+
+  it('rechaza sin tocar nada las ediciones que reescriben cuotas pagadas', async () => {
+    const ex = await finance.CreateExpense('2026-07-10', 'Sofá', '', '', null, 'cuotas', '25000', 4)
+    await finance.SetInstallmentPaid(cuotasOf(ex.data!.id)[2]!.id, true)
+    const before = cuotasOf(ex.data!.id)
+    const drop = await finance.UpdateExpense(ex.data!.id, '2026-07-10', 'Otro', '', '', null, 'cuotas', '25000', 2)
+    expect(drop.error?.code).toBe('VALIDATION_ERROR')
+    const move = await finance.UpdateExpense(ex.data!.id, '2026-08-10', 'Otro', '', '', null, 'cuotas', '25000', 4)
+    expect(move.error?.code).toBe('VALIDATION_ERROR')
+    expect(cuotasOf(ex.data!.id)).toEqual(before)
+    expect(db.query('SELECT description FROM expenses WHERE id = ?', [ex.data!.id])[0]?.description).toBe('Sofá')
+  })
+
+  it('una edición puede conservar una tarjeta en la papelera, pero no cargarle nada nuevo', async () => {
+    const card = await finance.CreateCard('Vieja', '500000', 20, '')
+    const other = await finance.CreateCard('Otra', '500000', 20, '')
+    const ex = await finance.CreateExpense('2026-07-05', 'Zapatos', '', '', card.data!.id, 'unico', '40000', 1)
+    const fe = await finance.CreateFixedExpense('Spotify', '', card.data!.id, '2026-07', '6000')
+    await finance.DeleteCard(card.data!.id)
+    await finance.DeleteCard(other.data!.id)
+
+    const keep = await finance.UpdateExpense(ex.data!.id, '2026-07-05', 'Zapatillas', '', '', card.data!.id, 'unico', '40000', 1)
+    expect(keep.error).toBeUndefined()
+    expect((await finance.UpdateFixedExpense(fe.data!.id, 'Spotify Duo', '', card.data!.id)).error).toBeUndefined()
+    const moveTo = await finance.UpdateExpense(ex.data!.id, '2026-07-05', 'Zapatillas', '', '', other.data!.id, 'unico', '40000', 1)
+    expect(moveTo.error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.UpdateFixedExpense(fe.data!.id, 'x', '', other.data!.id)).error?.code).toBe('VALIDATION_ERROR')
+    const create = await finance.CreateExpense('2026-07-05', 'Polera', '', '', card.data!.id, 'unico', '9000', 1)
+    expect(create.error?.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('las cuotas de un gasto en la papelera quedan congeladas', async () => {
+    const ex = await finance.CreateExpense('2026-07-10', 'Sofá', '', '', null, 'cuotas', '25000', 2)
+    const cuota = cuotasOf(ex.data!.id)[0]!
+    await finance.DeleteExpense(ex.data!.id)
+    expect((await finance.SetInstallmentPaid(cuota.id, true)).error?.code).toBe('NOT_FOUND')
+    await finance.RestoreExpense(ex.data!.id)
+    expect((await finance.SetInstallmentPaid(cuota.id, true)).error).toBeUndefined()
+  })
+
+  it('rangos: años 2000–2099 y hasta 120 cuotas', async () => {
+    for (const [date, total] of [
+      ['1999-12-31', 1],
+      ['2100-01-01', 1],
+      ['0226-07-01', 1],
+      ['2026-07-01', 121],
+    ] as const) {
+      const r = await finance.CreateExpense(date, 'x', '', '', null, 'cuotas', '1000', total)
+      expect(r.error?.code, `${date} × ${total}`).toBe('VALIDATION_ERROR')
+    }
+    expect((await finance.CreateExpense('2099-12-01', 'x', '', '', null, 'cuotas', '1000', 120)).error).toBeUndefined()
+    expect((await finance.MonthlySummary('1999-12')).error?.code).toBe('VALIDATION_ERROR')
   })
 
   it('validaciones espejo de Go', async () => {
@@ -146,6 +236,29 @@ describe('fixed expenses', () => {
     expect((await finance.MonthlySummary('2026-03')).data?.movimientos[0]?.status).toBe('pendiente')
     await finance.SetFixedExpensePaid(fe.data!.id, '2026-02', false)
     expect((await finance.MonthlySummary('2026-02')).data?.movimientos[0]?.status).toBe('pendiente')
+  })
+
+  it('pagos, montos y cancelación sólo dentro de la vigencia', async () => {
+    const fe = await finance.CreateFixedExpense('Gimnasio', '', null, '2026-03', '30000')
+    const id = fe.data!.id
+    expect((await finance.EndFixedExpense(id, '2026-03')).error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.EndFixedExpense(id, '2026-01')).error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.EndFixedExpense(id, '2026-07')).error).toBeUndefined() // último mes: 2026-06
+
+    for (const period of ['2026-02', '2026-07']) {
+      expect((await finance.SetFixedExpensePaid(id, period, true)).error?.code, period).toBe('VALIDATION_ERROR')
+      expect((await finance.SetFixedExpenseAmount(id, period, '35000')).error?.code, period).toBe('VALIDATION_ERROR')
+      expect((await finance.SetFixedExpensePaid(id, period, false)).error, period).toBeUndefined()
+    }
+    expect((await finance.SetFixedExpensePaid(id, '2026-06', true)).error).toBeUndefined()
+    expect((await finance.SetFixedExpenseAmount(id, '2026-05', '35000')).error).toBeUndefined()
+  })
+
+  it('los aportes de una meta en la papelera quedan congelados', async () => {
+    const g = await finance.CreateSavingsGoal('Viaje', '500000', '')
+    const c = await finance.AddSavingsContribution(g.data!.id, '2026-07', '50000')
+    await finance.DeleteSavingsGoal(g.data!.id)
+    expect((await finance.DeleteSavingsContribution(c.data!.id)).error?.code).toBe('NOT_FOUND')
   })
 })
 

@@ -72,6 +72,9 @@ import { Money } from '@/engine/decimal'
 import {
   addMonths,
   currentPeriod,
+  inYearRange,
+  MAX_YEAR,
+  MIN_YEAR,
   monthOf,
   monthsBetween,
   periodOf,
@@ -224,6 +227,10 @@ function recurringFrom(hits: RecurringHit[]): RecurringSuggestion | null {
   }
 }
 
+// MAX_INSTALLMENTS mirrors maxInstallments in Go: a sanity ceiling against typos,
+// not a bank rule (issuers cap purchases at about 48 cuotas commercially).
+const MAX_INSTALLMENTS = 120
+
 const defaultSearchLimit = 50
 const maxSearchLimit = 200
 const maxForecastMonths = 36
@@ -271,6 +278,25 @@ function parseDate(s: string): ParsedDate | null {
     return null
   }
   return { parts: { year: y, month: m, day: d }, iso }
+}
+
+// storedDateParts reads the calendar date of an expenses.date value, in either
+// format that reaches the table: the engine's ISO ('2026-07-10T00:00:00Z') or
+// bun's ('2026-07-10 00:00:00+00:00') from a desktop file. Both are UTC, like
+// the old.Date.UTC() Go uses for the same comparison.
+function storedDateParts(stored: string): DateParts {
+  return {
+    year: Number(stored.slice(0, 4)),
+    month: Number(stored.slice(5, 7)),
+    day: Number(stored.slice(8, 10)),
+  }
+}
+
+// PlacementChange is the cuota-1 month derived from an expense's date and card
+// cutoff before and after an edit (mirrors placementChange in Go).
+interface PlacementChange {
+  before: string
+  after: string
 }
 
 const invalidPeriodError = () => newError(ErrValidation, 'período inválido (use YYYY-MM)')
@@ -710,10 +736,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return out
   }
 
-  // billingDayFor: the card's cutoff day, or 0 (no roll) without a card.
-  function billingDayFor(cardID: number | null): { day: number; error?: ReturnType<typeof newError> } {
+  // billingDayFor: the card's cutoff day, or 0 (no roll) without a card. A card
+  // in the trash is accepted only with allowTrashed: an edit may keep the card a
+  // row already had, but nothing new may be charged to it.
+  function billingDayFor(
+    cardID: number | null,
+    allowTrashed = false,
+  ): { day: number; error?: ReturnType<typeof newError> } {
     if (cardID == null) return { day: 0 }
-    const rows = db.query('SELECT * FROM cards WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [cardID, uid()])
+    const live = allowTrashed ? '' : ' AND deleted_at IS NULL'
+    const rows = db.query(`SELECT * FROM cards WHERE id = ? AND user_id = ?${live}`, [cardID, uid()])
     const row = rows[0]
     if (!row) return { day: 0, error: newError(ErrValidation, 'la tarjeta indicada no existe') }
     return { day: rowToCard(row).billingDay }
@@ -747,6 +779,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     if (!date) {
       return { error: newError(ErrValidation, 'fecha inválida: ' + dateStr.trim()) }
     }
+    if (!inYearRange(date.parts.year)) {
+      return {
+        error: newError(
+          ErrValidation,
+          `fecha fuera de rango: ${dateStr.trim()} (use un año entre ${MIN_YEAR} y ${MAX_YEAR})`,
+        ),
+      }
+    }
     const parsed = amountOrError(installmentAmount)
     if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(installmentAmount) }
     if (parsed.amount.isZero()) {
@@ -758,6 +798,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     } else if (kind === KindCuotas) {
       if (total < 1) {
         return { error: newError(ErrValidation, 'las cuotas totales deben ser al menos 1') }
+      }
+      if (total > MAX_INSTALLMENTS) {
+        return { error: newError(ErrValidation, `las cuotas totales no pueden ser más de ${MAX_INSTALLMENTS}`) }
       }
     } else {
       return { error: newError(ErrValidation, "tipo inválido (use 'unico' o 'cuotas')") }
@@ -776,9 +819,68 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
   }
 
+  // replanInstallments mirrors the Go helper: an edited expense's cuotas are
+  // adapted in place, matched by number, instead of regenerated. Ids stay stable
+  // (card statement lines link to them) and a paid cuota is never rewritten:
+  // the new amount reaches pending cuotas only, and an edit that would drop a
+  // paid cuota or move the plan to other months is refused. It checks before
+  // writing anything, so a refusal leaves the plan untouched.
+  function replanInstallments(
+    expenseId: number,
+    ex: ValidatedExpense,
+    placement: PlacementChange,
+  ): ReturnType<typeof newError> | null {
+    const insts = db
+      .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [expenseId, uid()])
+      .map(rowToInstallment)
+    const byNumber = new Map(insts.map((i) => [i.number, i]))
+    const lastPaid = Math.max(0, ...insts.filter((i) => i.status === StatusPagado).map((i) => i.number))
+
+    const total = ex.installmentsTotal
+    if (lastPaid > total) {
+      return newError(
+        ErrValidation,
+        `la cuota ${lastPaid} ya está pagada: desmárcala antes de dejar el gasto en ${total} cuota(s)`,
+      )
+    }
+    const current = byNumber.get(1)
+    const first = current && placement.before === placement.after ? current.period : placement.after
+    if (lastPaid > 0 && current && first !== current.period) {
+      return newError(
+        ErrValidation,
+        'el cambio mueve las cuotas a otros meses y hay cuotas pagadas: desmárcalas para moverlo',
+      )
+    }
+
+    const amount = ex.installmentAmount.toString()
+    for (let n = 1; n <= total; n++) {
+      const period = addMonths(first, n - 1)
+      const inst = byNumber.get(n)
+      if (!inst) {
+        db.exec(
+          `INSERT INTO installments (user_id, expense_id, number, total, period, amount, status, paid_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+          [uid(), expenseId, n, total, period, amount, StatusPendiente],
+        )
+      } else if (inst.status === StatusPagado) {
+        db.exec('UPDATE installments SET total = ? WHERE id = ?', [total, inst.id])
+      } else {
+        db.exec('UPDATE installments SET total = ?, period = ?, amount = ? WHERE id = ?', [
+          total,
+          period,
+          amount,
+          inst.id,
+        ])
+      }
+    }
+    // Only pending cuotas can be past the new total (checked above).
+    db.exec('DELETE FROM installments WHERE expense_id = ? AND user_id = ? AND number > ?', [expenseId, uid(), total])
+    return null
+  }
+
   // generateInstallments creates one row per cuota starting at firstPeriod ('' =
   // derived from the date and the card's cutoff); the first paidCount are
-  // marked pagado (preserves progress across an edit).
+  // marked pagado (a statement's cuota n means cuotas 1..n-1 were already billed).
   function generateInstallments(
     expenseId: number,
     ex: ValidatedExpense,
@@ -1328,13 +1430,27 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return fe.startPeriod > now ? fe.startPeriod : now
   }
 
-  // ownsFixedExpense: the amount/payment tables carry no user_id of their own,
-  // so every write to them must first prove the parent belongs to the user.
-  function ownsFixedExpense(id: number): boolean {
-    return (
-      db.query('SELECT 1 FROM fixed_expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])
-        .length > 0
-    )
+  // ownFixedExpense returns the (non-deleted) fixed expense if it belongs to the
+  // active user. The amount/payment tables carry no user_id of their own, so
+  // every write to them must pass through this check first.
+  function ownFixedExpense(id: number): FixedExpense | null {
+    const row = db.query('SELECT * FROM fixed_expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+      id,
+      uid(),
+    ])[0]
+    return row ? rowToFixedExpense(row) : null
+  }
+
+  // requireActiveIn mirrors the Go helper: a payment or an amount change outside
+  // [start, end] would never show up anywhere.
+  function requireActiveIn(fe: FixedExpense, period: string, action: string): ReturnType<typeof newError> | null {
+    if (period < fe.startPeriod) {
+      return newError(ErrValidation, `no se puede ${action} en ${period}: el gasto fijo empieza en ${fe.startPeriod}`)
+    }
+    if (fe.endPeriod !== '' && period > fe.endPeriod) {
+      return newError(ErrValidation, `no se puede ${action} en ${period}: el gasto fijo terminó en ${fe.endPeriod}`)
+    }
+    return null
   }
 
   // cumulativeBalanceBefore: Σ salaries + Σ extras − Σ gastos for every period
@@ -1889,15 +2005,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const v = validateExpense(dateStr, description, category, merchant, cardID, kind, installmentAmount, installmentsTotal)
       if (v.error || !v.expense) return { error: v.error ?? newError(ErrValidation, 'gasto inválido') }
       const ex = v.expense
-      const billing = billingDayFor(cardID)
+      const oldRow = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
+      if (!oldRow) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      const old = rowToExpense(oldRow)
+      const billing = billingDayFor(cardID, old.cardId === cardID)
       if (billing.error) return { error: billing.error }
+      // The old card row is gone: its expense was never on a known cutoff.
+      const oldBillingDay = billingDayFor(old.cardId, true).day
+      // The cuota-1 month the old and new inputs lead to (see replanInstallments).
+      const placement: PlacementChange = {
+        before: periodOf(storedDateParts(old.date), oldBillingDay),
+        after: periodOf(ex.date.parts, billing.day),
+      }
       return db.transaction((): ExpenseResult => {
-        // Preserve how many installments were already paid, then regenerate.
-        const paidRow = db.query(
-          'SELECT COUNT(*) AS n FROM installments WHERE expense_id = ? AND user_id = ? AND status = ?',
-          [id, uid(), StatusPagado],
-        )[0]
-        const paidCount = asNumber(paidRow?.n)
+        // A returned error still commits here (only a throw rolls back), so the
+        // replan refuses before writing anything and runs before the UPDATE.
+        const refused = replanInstallments(id, ex, placement)
+        if (refused) return { error: refused }
         db.exec(
           `UPDATE expenses SET date = ?, description = ?, category = ?, merchant = ?, card_id = ?, kind = ?,
            installment_amount = ?, installments_total = ?
@@ -1915,9 +2039,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
             uid(),
           ],
         )
-        if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
-        db.exec('DELETE FROM installments WHERE expense_id = ? AND user_id = ?', [id, uid()])
-        generateInstallments(id, ex, billing.day, paidCount)
+        if (db.changes() === 0) throw new Error(`expense ${id} vanished inside its own transaction`)
         const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
         if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
         return { data: rowToExpense(row) }
@@ -1932,19 +2054,24 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return restoreRow('expenses', id, 'gasto no encontrado')
     },
 
+    // Cuotas of an expense in the trash are frozen with it (mirrors Go).
     async SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult> {
+      const user = uid()
+      const liveParent = 'expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)'
       if (paid) {
-        db.exec('UPDATE installments SET status = ?, paid_at = ? WHERE id = ? AND user_id = ?', [
+        db.exec(`UPDATE installments SET status = ?, paid_at = ? WHERE id = ? AND user_id = ? AND ${liveParent}`, [
           StatusPagado,
           nowIso(),
           id,
-          uid(),
+          user,
+          user,
         ])
       } else {
-        db.exec('UPDATE installments SET status = ?, paid_at = NULL WHERE id = ? AND user_id = ?', [
+        db.exec(`UPDATE installments SET status = ?, paid_at = NULL WHERE id = ? AND user_id = ? AND ${liveParent}`, [
           StatusPendiente,
           id,
-          uid(),
+          user,
+          user,
         ])
       }
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuota no encontrada') }
@@ -2011,10 +2138,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     ): Promise<FixedExpenseResult> {
       const desc = description.trim()
       if (desc === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
-      if (cardID != null) {
-        const billing = billingDayFor(cardID)
-        if (billing.error) return { error: billing.error }
-      }
+      const old = ownFixedExpense(id)
+      if (!old) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+      const billing = billingDayFor(cardID, old.cardId === cardID)
+      if (billing.error) return { error: billing.error }
       db.exec(
         'UPDATE fixed_expenses SET description = ?, category = ?, card_id = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
         [desc, category.trim(), cardID, id, uid()],
@@ -2035,7 +2162,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
       const value = parsed.amount.toString()
       return db.transaction((): OpResult => {
-        if (!ownsFixedExpense(id)) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        const fe = ownFixedExpense(id)
+        if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        const outside = requireActiveIn(fe, fromPeriod, 'cambiar el monto')
+        if (outside) return { error: outside }
         db.exec(
           `INSERT INTO fixed_expense_amounts (fixed_expense_id, effective_from, amount) VALUES (?, ?, ?)
            ON CONFLICT (fixed_expense_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
@@ -2047,13 +2177,21 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
     async EndFixedExpense(id: number, fromPeriod: string): Promise<OpResult> {
       if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
-      const end = addMonths(fromPeriod, -1)
+      const fe = ownFixedExpense(id)
+      if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+      if (fromPeriod <= fe.startPeriod) {
+        return {
+          error: newError(
+            ErrValidation,
+            `el gasto fijo empieza en ${fe.startPeriod}: cancélalo desde un mes posterior, o elimínalo`,
+          ),
+        }
+      }
       db.exec('UPDATE fixed_expenses SET end_period = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
-        end,
+        addMonths(fromPeriod, -1),
         id,
         uid(),
       ])
-      if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
       return {}
     },
 
@@ -2068,8 +2206,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     async SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult> {
       if (!validPeriod(period)) return { error: invalidPeriodError() }
       return db.transaction((): OpResult => {
-        if (!ownsFixedExpense(id)) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        const fe = ownFixedExpense(id)
+        if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
         if (paid) {
+          // Marking needs a month it bills in; unmarking is always allowed.
+          const outside = requireActiveIn(fe, period, 'marcarlo pagado')
+          if (outside) return { error: outside }
           db.exec(
             `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
              ON CONFLICT (fixed_expense_id, period) DO UPDATE SET paid_at = EXCLUDED.paid_at`,
@@ -2550,8 +2692,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       })
     },
 
+    // Contributions of a goal in the trash stay untouched until it is restored.
     async DeleteSavingsContribution(id: number): Promise<OpResult> {
-      db.exec('DELETE FROM savings_contributions WHERE id = ? AND user_id = ?', [id, uid()])
+      const user = uid()
+      db.exec(
+        `DELETE FROM savings_contributions WHERE id = ? AND user_id = ?
+         AND goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)`,
+        [id, user, user],
+      )
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'aporte no encontrado') }
       return {}
     },

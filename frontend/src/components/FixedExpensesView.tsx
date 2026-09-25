@@ -229,6 +229,10 @@ function FixedExpenseForm({
                   {c.name}
                 </option>
               ))}
+              {/* Its card went to the trash: keep it selectable (see ExpenseForm). */}
+              {cardId !== '' && !cards.some((c) => String(c.id) === cardId) && (
+                <option value={cardId}>Tarjeta eliminada</option>
+              )}
             </Select>
           </Field>
         </div>

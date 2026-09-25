@@ -159,6 +159,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}{
 		{"SetFixedExpenseAmount", func() finance.OpResult { return fin.SetFixedExpenseAmount(ctx, fe.Data.ID, period, "1") }},
 		{"SetFixedExpensePaid", func() finance.OpResult { return fin.SetFixedExpensePaid(ctx, fe.Data.ID, period, true) }},
+		{"EndFixedExpense", func() finance.OpResult { return fin.EndFixedExpense(ctx, fe.Data.ID, "2030-06") }},
+		{"UpdateFixedExpense", func() finance.OpResult {
+			return finance.OpResult{Error: fin.UpdateFixedExpense(ctx, fe.Data.ID, "x", "", nil).Error}
+		}},
+		{"UpdateExpense", func() finance.OpResult {
+			return finance.OpResult{Error: fin.UpdateExpense(ctx, expense.Data.ID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1).Error}
+		}},
 		{"SetCategoryBudget", func() finance.OpResult { return fin.SetCategoryBudget(ctx, cat.Data.ID, period, "1") }},
 		{"DeleteFixedExpense", func() finance.OpResult { return fin.DeleteFixedExpense(ctx, fe.Data.ID) }},
 		{"ConfirmImportItem", func() finance.OpResult {

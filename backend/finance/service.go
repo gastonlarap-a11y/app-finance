@@ -65,6 +65,10 @@ func parseDate(s string) (time.Time, *shared.AppError) {
 	s = strings.TrimSpace(s)
 	for _, layout := range []string{"2006-01-02", time.RFC3339, "02/01/2006"} {
 		if t, err := time.Parse(layout, s); err == nil {
+			if !inYearRange(t) {
+				return time.Time{}, shared.NewError(shared.ErrValidation,
+					fmt.Sprintf("fecha fuera de rango: %s (use un año entre %d y %d)", s, minYear, maxYear))
+			}
 			return t, nil
 		}
 	}
@@ -491,13 +495,19 @@ func (s *FinanceService) ListExpenses(ctx context.Context, period string) ([]Exp
 }
 
 // billingDayFor returns the cutoff day to use for an expense: the card's billing
-// day when on a card, or 0 (no roll) for cash/debit expenses.
-func (s *FinanceService) billingDayFor(ctx context.Context, uid int64, cardID *int64) (int, *shared.AppError) {
+// day when on a card, or 0 (no roll) for cash/debit expenses. A card in the trash
+// is accepted only when allowTrashed: an edit may keep the card a row already had
+// (history keeps pointing at archived cards), but nothing new may be charged to it.
+func (s *FinanceService) billingDayFor(ctx context.Context, uid int64, cardID *int64, allowTrashed bool) (int, *shared.AppError) {
 	if cardID == nil {
 		return 0, nil
 	}
 	card := new(Card)
-	err := s.db.NewSelect().Model(card).Where("id = ? AND user_id = ?", *cardID, uid).Scan(ctx)
+	q := s.db.NewSelect().Model(card).Where("id = ? AND user_id = ?", *cardID, uid)
+	if allowTrashed {
+		q = q.WhereAllWithDeleted()
+	}
+	err := q.Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, shared.NewError(shared.ErrValidation, "la tarjeta indicada no existe")
 	}
@@ -516,7 +526,7 @@ func (s *FinanceService) CreateExpense(
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID)
+	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, false)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
@@ -524,7 +534,7 @@ func (s *FinanceService) CreateExpense(
 		if _, err := tx.NewInsert().Model(ex).Returning("*").Exec(ctx); err != nil {
 			return err
 		}
-		return generateInstallments(ctx, tx, ex, billingDay, 0)
+		return generateInstallments(ctx, tx, ex, billingDay)
 	})
 	if err != nil {
 		return ExpenseResult{Error: internalErr(err)}
@@ -542,27 +552,37 @@ func (s *FinanceService) UpdateExpense(
 		return ExpenseResult{Error: aerr}
 	}
 	ex.ID = id
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID)
+	old := new(Expense)
+	err := s.db.NewSelect().Model(old).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExpenseResult{Error: shared.NewError(shared.ErrNotFound, "gasto no encontrado")}
+	}
+	if err != nil {
+		return ExpenseResult{Error: internalErr(err)}
+	}
+	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, sameCard(old.CardID, cardID))
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		// Preserve how many installments were already paid, then regenerate.
-		paidCount, err := tx.NewSelect().Model((*Installment)(nil)).
-			Where("expense_id = ? AND user_id = ? AND status = ?", id, uid, StatusPagado).Count(ctx)
-		if err != nil {
-			return err
-		}
+	oldBillingDay, aerr := s.billingDayFor(ctx, uid, old.CardID, true)
+	if aerr != nil {
+		oldBillingDay = 0 // the old card row is gone: its expense was never on a known cutoff
+	}
+	// The cuota-1 month the old and new inputs lead to. When they agree, the edit
+	// did not move the purchase, and the month it already has is kept — which may
+	// come from a card statement rather than from the date.
+	placement := placementChange{
+		before: periodOf(old.Date.UTC(), oldBillingDay),
+		after:  periodOf(ex.Date, billingDay),
+	}
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model(ex).
 			Column("date", "description", "category", "merchant", "card_id", "kind", "installment_amount", "installments_total").
 			WherePK().Where("user_id = ?", uid).Exec(ctx)
 		if aerr := requireOne(res, err, "gasto no encontrado"); aerr != nil {
 			return aerr
 		}
-		if _, err := tx.NewDelete().Model((*Installment)(nil)).Where("expense_id = ? AND user_id = ?", id, uid).Exec(ctx); err != nil {
-			return err
-		}
-		if err := generateInstallments(ctx, tx, ex, billingDay, paidCount); err != nil {
+		if err := replanInstallments(ctx, tx, ex, placement); err != nil {
 			return err
 		}
 		return tx.NewSelect().Model(ex).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
@@ -571,6 +591,87 @@ func (s *FinanceService) UpdateExpense(
 		return ExpenseResult{Error: appErr(err)}
 	}
 	return ExpenseResult{Data: ex}
+}
+
+// sameCard reports whether two optional card ids name the same card (or none).
+func sameCard(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// placementChange is the cuota-1 month derived from an expense's date and card
+// cutoff before and after an edit.
+type placementChange struct{ before, after string }
+
+func (p placementChange) moved() bool { return p.before != p.after }
+
+// replanInstallments adapts an edited expense's cuotas in place, matched by
+// number, instead of regenerating them. Ids stay stable (card statement lines
+// link to them). A paid cuota records money already paid, so an edit never
+// rewrites it: the new amount applies to pending cuotas only, and an edit that
+// would drop a paid cuota or move the plan to other months is refused until the
+// user unmarks it.
+func replanInstallments(ctx context.Context, tx bun.Tx, ex *Expense, placement placementChange) error {
+	var insts []Installment
+	if err := tx.NewSelect().Model(&insts).
+		Where("expense_id = ? AND user_id = ?", ex.ID, ex.UserID).Order("number ASC").Scan(ctx); err != nil {
+		return fmt.Errorf("loading installments: %w", err)
+	}
+	byNumber := make(map[int]*Installment, len(insts))
+	lastPaid := 0
+	for i := range insts {
+		byNumber[insts[i].Number] = &insts[i]
+		if insts[i].Status == StatusPagado {
+			lastPaid = max(lastPaid, insts[i].Number)
+		}
+	}
+
+	total := ex.InstallmentsTotal
+	if lastPaid > total {
+		return shared.NewError(shared.ErrValidation, fmt.Sprintf(
+			"la cuota %d ya está pagada: desmárcala antes de dejar el gasto en %d cuota(s)", lastPaid, total))
+	}
+	first := placement.after
+	if current, ok := byNumber[1]; ok && !placement.moved() {
+		first = current.Period
+	}
+	if lastPaid > 0 && byNumber[1] != nil && first != byNumber[1].Period {
+		return shared.NewError(shared.ErrValidation,
+			"el cambio mueve las cuotas a otros meses y hay cuotas pagadas: desmárcalas para moverlo")
+	}
+
+	for n := 1; n <= total; n++ {
+		period := addMonths(first, n-1)
+		inst, ok := byNumber[n]
+		switch {
+		case !ok:
+			row := &Installment{
+				UserID: ex.UserID, ExpenseID: ex.ID, Number: n, Total: total,
+				Period: period, Amount: ex.InstallmentAmount, Status: StatusPendiente,
+			}
+			if _, err := tx.NewInsert().Model(row).Exec(ctx); err != nil {
+				return fmt.Errorf("adding cuota %d: %w", n, err)
+			}
+		case inst.Status == StatusPagado:
+			if _, err := tx.NewUpdate().Model(inst).Set("total = ?", total).WherePK().Exec(ctx); err != nil {
+				return fmt.Errorf("updating paid cuota %d: %w", n, err)
+			}
+		default:
+			if _, err := tx.NewUpdate().Model(inst).
+				Set("total = ?", total).Set("period = ?", period).Set("amount = ?", ex.InstallmentAmount).
+				WherePK().Exec(ctx); err != nil {
+				return fmt.Errorf("updating cuota %d: %w", n, err)
+			}
+		}
+	}
+	// Only pending cuotas can be past the new total (checked above).
+	if _, err := tx.NewDelete().Model((*Installment)(nil)).
+		Where("expense_id = ? AND user_id = ? AND number > ?", ex.ID, ex.UserID, total).Exec(ctx); err != nil {
+		return fmt.Errorf("dropping cuotas past %d: %w", total, err)
+	}
+	return nil
 }
 
 // DeleteExpense soft-deletes the expense. Its installments stay physically
@@ -611,6 +712,10 @@ func validateExpense(
 		if installmentsTotal < 1 {
 			return nil, shared.NewError(shared.ErrValidation, "las cuotas totales deben ser al menos 1")
 		}
+		if installmentsTotal > maxInstallments {
+			return nil, shared.NewError(shared.ErrValidation,
+				fmt.Sprintf("las cuotas totales no pueden ser más de %d", maxInstallments))
+		}
 	default:
 		return nil, shared.NewError(shared.ErrValidation, "tipo inválido (use 'unico' o 'cuotas')")
 	}
@@ -627,15 +732,20 @@ func validateExpense(
 	}, nil
 }
 
-// generateInstallments creates one row per cuota. The first paidCount cuotas are
-// marked pagado (used to preserve progress across an edit).
-func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDay, paidCount int) error {
-	return generateInstallmentsFrom(ctx, tx, ex, billingDay, "", paidCount)
+// maxInstallments is a sanity ceiling, not a bank rule: Chilean issuers cap
+// purchases at about 48 cuotas commercially (no legal cap), and consumer loans
+// entered as cuotas run longer, so this only stops typos such as 1200.
+const maxInstallments = 120
+
+// generateInstallments creates one pending row per cuota for a new expense.
+func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDay int) error {
+	return generateInstallmentsFrom(ctx, tx, ex, billingDay, "", 0)
 }
 
 // generateInstallmentsFrom is generateInstallments with the first cuota's
-// period fixed by the caller (a card statement knows it); "" derives it from
-// the purchase date and the card's billing day.
+// period fixed by the caller (a card statement knows it; "" derives it from the
+// purchase date and the card's billing day) and the first paidCount cuotas
+// marked pagado (a statement's cuota n means cuotas 1..n-1 were already billed).
 func generateInstallmentsFrom(ctx context.Context, tx bun.Tx, ex *Expense, billingDay int, firstPeriod string, paidCount int) error {
 	total := ex.InstallmentsTotal
 	if ex.Kind == KindUnico {
@@ -668,8 +778,13 @@ func generateInstallmentsFrom(ctx context.Context, tx bun.Tx, ex *Expense, billi
 	return err
 }
 
+// SetInstallmentPaid marks (or unmarks) one cuota. Cuotas of an expense in the
+// trash are frozen with it, so restoring brings them back exactly as they were.
 func (s *FinanceService) SetInstallmentPaid(ctx context.Context, id int64, paid bool) OpResult {
-	q := s.db.NewUpdate().Model((*Installment)(nil)).Where("id = ? AND user_id = ?", id, s.uid())
+	uid := s.uid()
+	q := s.db.NewUpdate().Model((*Installment)(nil)).
+		Where("id = ? AND user_id = ?", id, uid).
+		Where("expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)", uid)
 	if paid {
 		q = q.Set("status = ?", StatusPagado).Set("paid_at = ?", time.Now())
 	} else {
@@ -835,7 +950,7 @@ func (s *FinanceService) CreateFixedExpense(
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "el monto debe ser mayor a 0")}
 	}
 	uid := s.uid()
-	if _, aerr := s.billingDayFor(ctx, uid, cardID); aerr != nil {
+	if _, aerr := s.billingDayFor(ctx, uid, cardID, false); aerr != nil {
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{
@@ -867,11 +982,15 @@ func (s *FinanceService) UpdateFixedExpense(
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "la descripción es obligatoria")}
 	}
 	uid := s.uid()
-	if _, aerr := s.billingDayFor(ctx, uid, cardID); aerr != nil {
+	old, err := ownFixedExpense(ctx, s.db, uid, id)
+	if err != nil {
+		return FixedExpenseResult{Error: appErr(err)}
+	}
+	if _, aerr := s.billingDayFor(ctx, uid, cardID, sameCard(old.CardID, cardID)); aerr != nil {
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{ID: id, Description: desc, Category: strings.TrimSpace(category), CardID: cardID}
-	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model(fe).
 			Column("description", "category", "card_id").WherePK().Where("user_id = ?", uid).Exec(ctx)
 		if aerr := requireOne(res, err, "gasto fijo no encontrado"); aerr != nil {
@@ -885,22 +1004,38 @@ func (s *FinanceService) UpdateFixedExpense(
 	return FixedExpenseResult{Data: fe}
 }
 
-// ownFixedExpense fails with NotFound unless the (non-deleted) fixed expense id
-// belongs to uid. The amount/payment tables carry no user_id of their own, so
-// every write to them must pass through this check first.
-func ownFixedExpense(ctx context.Context, db bun.IDB, uid, id int64) error {
-	ok, err := db.NewSelect().Model((*FixedExpense)(nil)).Where("id = ? AND user_id = ?", id, uid).Exists(ctx)
-	if err != nil {
-		return err
+// ownFixedExpense returns the (non-deleted) fixed expense id if it belongs to uid,
+// or fails with NotFound. The amount/payment tables carry no user_id of their
+// own, so every write to them must pass through this check first.
+func ownFixedExpense(ctx context.Context, db bun.IDB, uid, id int64) (*FixedExpense, error) {
+	fe := new(FixedExpense)
+	err := db.NewSelect().Model(fe).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, shared.NewError(shared.ErrNotFound, "gasto fijo no encontrado")
 	}
-	if !ok {
-		return shared.NewError(shared.ErrNotFound, "gasto fijo no encontrado")
+	if err != nil {
+		return nil, fmt.Errorf("loading fixed expense: %w", err)
+	}
+	return fe, nil
+}
+
+// requireActiveIn fails unless the fixed expense bills in period: a payment or an
+// amount change outside [start, end] would never show up anywhere.
+func requireActiveIn(fe *FixedExpense, period, action string) error {
+	if period < fe.StartPeriod {
+		return shared.NewError(shared.ErrValidation,
+			fmt.Sprintf("no se puede %s en %s: el gasto fijo empieza en %s", action, period, fe.StartPeriod))
+	}
+	if fe.EndPeriod != "" && period > fe.EndPeriod {
+		return shared.NewError(shared.ErrValidation,
+			fmt.Sprintf("no se puede %s en %s: el gasto fijo terminó en %s", action, period, fe.EndPeriod))
 	}
 	return nil
 }
 
 // SetFixedExpenseAmount sets the amount effective from `fromPeriod` onward without
-// touching earlier months (the "edit this month onward" semantics).
+// touching earlier months (the "edit this month onward" semantics). fromPeriod
+// must fall while the fixed expense bills.
 func (s *FinanceService) SetFixedExpenseAmount(ctx context.Context, id int64, fromPeriod, amount string) OpResult {
 	if !validPeriod(fromPeriod) {
 		return OpResult{Error: invalidPeriod()}
@@ -914,11 +1049,15 @@ func (s *FinanceService) SetFixedExpenseAmount(ctx context.Context, id int64, fr
 	}
 	uid := s.uid()
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if err := ownFixedExpense(ctx, tx, uid, id); err != nil {
+		fe, err := ownFixedExpense(ctx, tx, uid, id)
+		if err != nil {
+			return err
+		}
+		if err := requireActiveIn(fe, fromPeriod, "cambiar el monto"); err != nil {
 			return err
 		}
 		row := &FixedExpenseAmount{FixedExpenseID: id, EffectiveFrom: fromPeriod, Amount: amt}
-		_, err := tx.NewInsert().Model(row).
+		_, err = tx.NewInsert().Model(row).
 			On("CONFLICT (fixed_expense_id, effective_from) DO UPDATE").
 			Set("amount = EXCLUDED.amount").Exec(ctx)
 		return err
@@ -930,14 +1069,30 @@ func (s *FinanceService) SetFixedExpenseAmount(ctx context.Context, id int64, fr
 }
 
 // EndFixedExpense cancels a fixed expense starting at `fromPeriod`: the last billed
-// month becomes the month right before it. Earlier months stay intact.
+// month becomes the month right before it. Earlier months stay intact. It must
+// have billed at least once: ending it at its first month would leave a row
+// that never bills (deleting it is the way to do that).
 func (s *FinanceService) EndFixedExpense(ctx context.Context, id int64, fromPeriod string) OpResult {
 	if !validPeriod(fromPeriod) {
 		return OpResult{Error: invalidPeriod()}
 	}
-	res, err := s.db.NewUpdate().Model((*FixedExpense)(nil)).
-		Set("end_period = ?", addMonths(fromPeriod, -1)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx)
-	return OpResult{Error: requireOne(res, err, "gasto fijo no encontrado")}
+	uid := s.uid()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		fe, err := ownFixedExpense(ctx, tx, uid, id)
+		if err != nil {
+			return err
+		}
+		if fromPeriod <= fe.StartPeriod {
+			return shared.NewError(shared.ErrValidation, fmt.Sprintf(
+				"el gasto fijo empieza en %s: cancélalo desde un mes posterior, o elimínalo", fe.StartPeriod))
+		}
+		_, err = tx.NewUpdate().Model(fe).Set("end_period = ?", addMonths(fromPeriod, -1)).WherePK().Exec(ctx)
+		return err
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
 }
 
 // DeleteFixedExpense soft-deletes the fixed expense. Its amount/payment history
@@ -951,25 +1106,31 @@ func (s *FinanceService) RestoreFixedExpense(ctx context.Context, id int64) OpRe
 	return s.restore(ctx, (*FixedExpense)(nil), id, "gasto fijo no encontrado", "")
 }
 
-// SetFixedExpensePaid marks (or unmarks) a fixed expense as paid for a single month.
+// SetFixedExpensePaid marks (or unmarks) a fixed expense as paid for a single
+// month. Marking needs a month it bills in; unmarking is always allowed, so a
+// stray payment can be cleared.
 func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, period string, paid bool) OpResult {
 	if !validPeriod(period) {
 		return OpResult{Error: invalidPeriod()}
 	}
 	uid := s.uid()
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if err := ownFixedExpense(ctx, tx, uid, id); err != nil {
+		fe, err := ownFixedExpense(ctx, tx, uid, id)
+		if err != nil {
 			return err
 		}
 		if paid {
+			if err := requireActiveIn(fe, period, "marcarlo pagado"); err != nil {
+				return err
+			}
 			now := time.Now()
 			row := &FixedExpensePayment{FixedExpenseID: id, Period: period, PaidAt: &now}
-			_, err := tx.NewInsert().Model(row).
+			_, err = tx.NewInsert().Model(row).
 				On("CONFLICT (fixed_expense_id, period) DO UPDATE").
 				Set("paid_at = EXCLUDED.paid_at").Exec(ctx)
 			return err
 		}
-		_, err := tx.NewDelete().Model((*FixedExpensePayment)(nil)).
+		_, err = tx.NewDelete().Model((*FixedExpensePayment)(nil)).
 			Where("fixed_expense_id = ? AND period = ?", id, period).Exec(ctx)
 		return err
 	})
