@@ -168,6 +168,14 @@ folder that went missing, e.g. an unsynced cloud folder), the runner refuses to 
 backups exist (`backup.ErrFreshDatabase`), so an empty DB never replaces them. `ApplyDBFolder` requires
 an absolute path, compares with `os.SameFile`, and refuses a folder that already holds a DB.
 
+Drive calls treat only a real 404, or an item in Drive's trash (emptied after 30 days), as "missing"
+(`isGone`); any other failure aborts the upload, where it used to create a duplicate folder or file
+on every network hiccup. A refresh token Google no longer honors (`invalid_grant`: revoked, or
+expired after 7 days while the OAuth app is in "Testing") drops the token and returns
+`drive.ErrReconnect`, so Ajustes shows Drive disconnected. The token is a 0600 file written atomically
+(temp + rename), not a keychain item: Windows caps credential blobs at 2560 bytes, too close to a
+token's size, and go-keyring's macOS items are readable by any process of the same user anyway.
+
 ## 5. Configuration
 
 config.toml is the source of truth. Environment variables override individual keys at runtime (useful for CI/testing).
@@ -208,7 +216,22 @@ emitted events. `mailsync` is the reference user: a single-concurrency worker ru
 (queued by `SyncNow` and by an auto-sync loop owned by the service) and reports each outcome with
 `application.Get().Event.Emit("mailsync:done", SyncEvent)`, which the frontend receives through
 `onMailSyncDone` (`services/mailsync.ts`, `Events.On` from `@wailsio/runtime`). The finance methods
-are fast DB calls and don't use it.
+are fast DB calls and don't use it. A task that panics is recovered into a logged error (`runTask`):
+tasks read untrusted input (bank emails through MIME/HTML parsing), and an unrecovered panic would
+kill the app on every launch with the first auto-sync.
+
+Mailbox syncs are bounded: `open` ties the connection to the context right after dialing, so a
+server that stalls after the TLS handshake cannot hang LOGIN/SELECT (and with them the test button,
+the worker and shutdown). After 3 consecutive rejected logins an account leaves auto-sync (repeated
+failed logins can lock a mailbox or trip provider alerts) until the user saves new settings, syncs
+by hand or restarts; mailboxes of profiles in the trash are never read.
+
+Startup (`main.go`): `application.New` runs before the database is opened, with `SingleInstance`
+(a second launch focuses the running window and exits before touching the DB), `Logger:
+slog.Default()` (release builds otherwise drop Wails' own log, including recovered binding panics)
+and a `PanicHandler` that logs the stack. Services are added with `app.RegisterService` once the DB
+is ready; the binding generator still finds all of them. A DB that cannot be opened or migrated is
+reported in a native error dialog (`exitWithDialog`) instead of the app silently vanishing.
 
 ## 10. Adding a New Domain
 

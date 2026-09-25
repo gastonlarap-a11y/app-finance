@@ -70,7 +70,18 @@ var bodySection = &imap.FetchItemBodySection{Peek: true}
 type session struct {
 	client *imapclient.Client
 	folder *imap.SelectData
+	stop   func() bool // detaches the close-on-cancel hook
 }
+
+// close releases the connection; the Close error is irrelevant once done.
+func (s *session) close() {
+	s.stop()
+	_ = s.client.Close()
+}
+
+// errServerTimeout reports a server that accepted the connection but did not
+// answer LOGIN or SELECT before the deadline.
+var errServerTimeout = shared.NewError(shared.ErrValidation, "el servidor de correo no respondió a tiempo")
 
 func (s *Service) open(ctx context.Context, acc *MailAccount) (*session, error) {
 	password, err := s.secrets.Get(acc.secretKey())
@@ -84,16 +95,31 @@ func (s *Service) open(ctx context.Context, acc *MailAccount) (*session, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Login(acc.Username, password).Wait(); err != nil {
-		_ = c.Close() // the login error is the one worth reporting
-		return nil, loginError(err)
+	// imapclient commands take no context: closing the connection is what
+	// unblocks them. Tie it to ctx from the very first command, so a server
+	// that stalls after the TLS handshake cannot hang LOGIN or SELECT (and with
+	// them the test button, the sync worker and the app's shutdown).
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() }) // Close error is irrelevant once cancelled
+	fail := func(appErr *shared.AppError) (*session, error) {
+		stop()
+		_ = c.Close() // the command's error is the one worth reporting
+		if ctx.Err() != nil {
+			return nil, errServerTimeout
+		}
+		return nil, appErr
 	}
+	if err := c.Login(acc.Username, password).Wait(); err != nil {
+		if ctx.Err() == nil {
+			s.noteAuthFailure(acc.ID)
+		}
+		return fail(loginError(err))
+	}
+	s.authFailures.Delete(acc.ID)
 	folder, err := c.Select(acc.Folder, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
-		_ = c.Close() // the select error is the one worth reporting
-		return nil, shared.NewError(shared.ErrValidation, fmt.Sprintf("no se pudo abrir la carpeta %q: %v", acc.Folder, err))
+		return fail(shared.NewError(shared.ErrValidation, fmt.Sprintf("no se pudo abrir la carpeta %q: %v", acc.Folder, err)))
 	}
-	return &session{client: c, folder: folder}, nil
+	return &session{client: c, folder: folder, stop: stop}, nil
 }
 
 // gmailAppPasswordAlert is how Gmail rejects an account's regular password
@@ -163,10 +189,7 @@ func (s *Service) syncAccount(ctx context.Context, acc *MailAccount) (SyncSummar
 	if err != nil {
 		return SyncSummary{}, err
 	}
-	defer sess.client.Close()
-	// imapclient commands take no context: closing the connection unblocks them.
-	stop := context.AfterFunc(ctx, func() { _ = sess.client.Close() }) // Close error is irrelevant once cancelled
-	defer stop()
+	defer sess.close()
 
 	resumable := acc.UIDValidity == sess.folder.UIDValidity && acc.LastUID > 0
 	found, err := sess.client.UIDSearch(searchCriteria(acc, resumable), nil).Wait()
