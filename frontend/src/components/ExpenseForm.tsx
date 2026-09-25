@@ -266,6 +266,10 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
                   {c.name}
                 </option>
               ))}
+              {/* The expense's card went to the trash: keep it selectable so saving
+                  does not silently move the expense off it (the backend accepts
+                  keeping it, not charging new ones to it). */}
+              {cardId !== '' && !selectedCard && <option value={cardId}>Tarjeta eliminada</option>}
             </Select>
           </Field>
           <Field label="Fecha de compra">
@@ -286,6 +290,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
           {isCuotas
             ? 'La cuota se factura cada mes (según el día de corte de la tarjeta) hasta completar el total.'
             : 'Pago único: se carga una sola vez en el mes de la compra.'}
+          {target.mode === 'edit' && ' Las cuotas ya pagadas no cambian: el nuevo monto se aplica a las pendientes.'}
         </p>
 
         {importItem && (

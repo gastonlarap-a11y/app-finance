@@ -136,9 +136,14 @@ func (s *FinanceService) AddSavingsContribution(ctx context.Context, goalID int6
 }
 
 // DeleteSavingsContribution removes a contribution for good (a mistyped entry
-// is simply re-added; contributions have no trash of their own).
+// is simply re-added; contributions have no trash of their own). Contributions
+// of a goal in the trash ride along with it and stay untouched until restored.
 func (s *FinanceService) DeleteSavingsContribution(ctx context.Context, id int64) OpResult {
-	res, err := s.db.NewDelete().Model((*SavingsContribution)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx)
+	uid := s.uid()
+	res, err := s.db.NewDelete().Model((*SavingsContribution)(nil)).
+		Where("id = ? AND user_id = ?", id, uid).
+		Where("goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)", uid).
+		Exec(ctx)
 	return OpResult{Error: requireOne(res, err, "aporte no encontrado")}
 }
 

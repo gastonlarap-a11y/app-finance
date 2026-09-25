@@ -437,7 +437,7 @@ func (s *FinanceService) ConfirmImportItem(
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID)
+	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, false)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}

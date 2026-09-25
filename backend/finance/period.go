@@ -39,8 +39,22 @@ func monthsBetween(a, b string) int {
 // currentPeriod is today's YYYY-MM.
 func currentPeriod() string { return time.Now().Format(periodLayout) }
 
-// validPeriod reports whether s parses as YYYY-MM.
+// The years a date or period may fall in. Periods are compared as strings, which
+// only orders correctly while every year has exactly four digits; the bounds keep
+// typos like 0226 or 9999 out, and even the last cuota of the longest plan
+// (maxInstallments) started in maxYear stays four-digit.
+const (
+	minYear = 2000
+	maxYear = 2099
+)
+
+// inYearRange reports whether t falls inside [minYear, maxYear].
+func inYearRange(t time.Time) bool {
+	return t.Year() >= minYear && t.Year() <= maxYear
+}
+
+// validPeriod reports whether s parses as YYYY-MM inside the supported years.
 func validPeriod(s string) bool {
-	_, err := time.Parse(periodLayout, s)
-	return err == nil
+	t, err := time.Parse(periodLayout, s)
+	return err == nil && inYearRange(t)
 }

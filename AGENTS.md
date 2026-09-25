@@ -108,13 +108,21 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `effective_from` onward; resolve with `latestAsOf`/`resolveAsOf`, sum ranges with `sumAsOf`
   (`backend/finance/fixedexpense.go`, mirrored in `frontend/src/engine/finance/fixedexpense.ts`).
 - **Soft delete** (bun `soft_delete`) on cards/categories/incomes/expenses/fixed_expenses/users;
-  deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore.
+  deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore. Children of a
+  trashed parent are frozen (no paying its cuotas, no deleting its contributions); an edit may keep
+  a trashed card a row already has (`billingDayFor(…, allowTrashed)`), nothing new may use it.
+- **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —
+  `replanInstallments` adapts them by number (stable ids: statement lines link to them), applies a
+  new amount to pending cuotas only, keeps the cuota-1 month while the date/card lead to the same
+  billing month (it may come from a card statement), and refuses dropping or moving paid cuotas.
+  Input ranges: years 2000–2099 (`minYear`/`maxYear`), up to 120 cuotas (`maxInstallments`).
 - **Migrations**: embedded SQL run on startup; register each domain's `embed.FS` in
   `backend/shared/db/migrator.go`; the `YYYYMMDDNNN` filename prefix sets global order. SQLite can
   add columns but not change/drop them — rebuild + copy instead. Use the `db-migration` skill.
   New files are `*.tx.up.sql` (one transaction); a migration is recorded only on success,
-  `main.go` snapshots the DB to `<backups>/pre-migrate/` first, and a DB with migrations this
-  binary does not know is refused (`db.ErrNewerSchema`).
+  `main.go` snapshots the DB to `<backups>/pre-migrate/` first, and a DB with unknown migrations
+  newer than this binary's latest is refused (`db.ErrNewerSchema`; older unknown ones are retired
+  and ignored). Never delete or rename an applied migration file.
 - **SQLite connection (invariant)**: open it only through `db.Open`/`db.DSN` (tests:
   `dbtest.OpenMigrated`). The driver is modernc, which honors only `_pragma=…` DSN keys; `db.Open`
   fails if `foreign_keys` is not 1. Journal stays DELETE (no WAL): the DB may live in a synced folder.
