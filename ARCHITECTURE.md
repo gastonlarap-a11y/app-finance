@@ -331,15 +331,34 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   `mailsync` sets and the web's `web_prefs` table are each ignored by the other side).
 - **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
   (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`). Import validates the file's
-  bytes first (`engine/db/dbfile.ts`), then reopens the imported database to report what it held
-  (`ImportSummary`) before the mandatory page reload. **No `window.confirm`/`alert` anywhere in this
+  bytes first (`engine/db/dbfile.ts`), then **proves the file in memory before OPFS is touched**
+  (`engine/db/importCheck.ts`: `sqlite3_deserialize` into `:memory:`, `PRAGMA integrity_check`, the
+  App Finance tables, the newer-schema guard, the migrations run on that copy); only then it swaps
+  the stored file, keeping the previous bytes and restoring them if the swap fails
+  (sqlite-wasm's own `importDb` checks just the header and overwrites first). The result
+  (`ImportSummary`) shows before the mandatory page reload. Export hands the file to the Share Sheet;
+  when Safari refuses it because the tap was spent while the worker exported (`share()` needs a live
+  user activation), the button turns into «Compartir respaldo» and its own tap shares the ready file.
+  Ajustes shows whether the browser granted persistent storage (`navigator.storage.persist()`, asked
+  at startup; WebKit grants it on its own heuristics, installing to the home screen being the
+  documented signal) and when a backup last left this device. **No `window.confirm`/`alert` anywhere in this
   flow** and **no `accept` on the file input**: Safari suppresses native dialogs without a live user
   activation, and iPadOS greys out `.db`/`.sqlite` files when `accept` is set (no system UTI owns
   those extensions). Both turned a failed restore into a screen that just looked empty.
 - **Tests**: `npm test` (vitest) runs the engine against the same sqlite-wasm build in Node
   (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
 - **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
-  `base: /app-finance/`) to GitHub Pages on pushes to `main`.
+  `base: /app-finance/`) to GitHub Pages on pushes to `main`. The service worker registers in
+  `prompt` mode from `main.tsx` (`injectRegister: false`, so the desktop bundle never imports the
+  PWA's virtual module): a new deploy waits for the user's «Actualizar» in `WebUpdateBanner`
+  (`lib/pwaUpdate.ts`) instead of swapping files under an open page, and a lazy chunk that fails to
+  load (`vite:preloadError`) reloads once.
+- **One tab owns the database**: opfs-sahpool admits a single connection, so `main.tsx` takes the
+  `app-finance-db` Web Lock (`acquireDbLock`) before the engine starts; a second tab or window shows
+  "La app ya está abierta" instead of failing inside SQLite. The worker client races every call
+  against the worker's `error`/`messageerror` events, so a worker that cannot load (a chunk a new
+  deploy no longer serves) turns into an error with a reload button, not an endless spinner.
+  `Fatal` screens always offer «Recargar»: an installed PWA has no browser reload.
 
 ## 18. Import inbox (bank emails & statements)
 
@@ -408,4 +427,5 @@ Constraints, all verified on macOS with the real bundle and the real updater cod
 - The app refuses to self-update when it cannot write next to itself (read-only folder, mounted
   `.dmg`), runs translocated (not moved to Aplicaciones) or is a `wails3 dev` build.
 - Windows installs per user (`INSTALL_SCOPE: user`) so the exe can be replaced without UAC.
-- The PWA (web build) updates through its service worker; `services/web/updates.ts` is a stub.
+- The PWA (web build) updates through its service worker (prompted, see §17);
+  `services/web/updates.ts` is a stub.

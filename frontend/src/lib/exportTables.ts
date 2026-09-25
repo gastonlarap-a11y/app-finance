@@ -92,9 +92,22 @@ export function searchTable(items: ExpenseHit[]): ExportTable {
 // separator (',' is their decimal mark), CRLF, UTF-8 BOM so accents survive
 // Excel, and RFC 4180 quoting. Money stays a plain decimal string.
 export function toCsv(t: ExportTable): string {
-  const quote = (v: string) => (/[";\r\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v)
-  const lines = [t.columns.map((c) => quote(c.title)), ...t.rows.map((r) => r.map(quote))]
+  const quote = (v: string) => (/[";\r\n\t]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v)
+  const cell = (v: string) => quote(neutralizeFormula(v))
+  const lines = [t.columns.map((c) => cell(c.title)), ...t.rows.map((r) => r.map(cell))]
   return '﻿' + lines.map((l) => l.join(';')).join('\r\n') + '\r\n'
+}
+
+// Characters that make a spreadsheet read a cell as a formula (OWASP CSV
+// Injection), including their full-width forms. Bank descriptors are
+// third-party text, so a merchant named "=HYPERLINK(…)" must stay text.
+const FORMULA_START = /^[=+\-@\t\r\n＝＋－＠]/
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/
+
+// neutralizeFormula prefixes a formula-looking cell with a quote, as OWASP
+// recommends; plain numbers (money, including negatives) stay numeric.
+export function neutralizeFormula(v: string): string {
+  return FORMULA_START.test(v) && !PLAIN_NUMBER.test(v) ? `'${v}` : v
 }
 
 // exportBasename builds a filesystem-friendly name: "app-finance-mes-2026-09".

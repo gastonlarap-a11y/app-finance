@@ -34,19 +34,43 @@ export function formatAmount(v: string, currency: string): string {
   return `${s} ${currency}`
 }
 
-// Live thousands-separator masking for money <input>s (es-CL: '.' as separator).
-// Keeps a clean digit-only string as the "real" value (what's sent to the
-// backend); the input's displayed value is the same digits reformatted.
-const groupFmt = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 })
+// Live thousands-separator masking for money <input>s (es-CL: '.' groups
+// thousands, ',' marks decimals). The "real" value is a whole-peso digit
+// string (what's sent to the backend: CLP has no minor unit); the input shows
+// the same digits grouped. All string math: Number() loses digits past 2^53.
 
-export function formatThousands(digits: string): string {
-  const clean = digits.replace(/\D/g, '')
-  if (clean === '') return ''
-  return groupFmt.format(Number(clean))
+// roundDigits rounds "<int>" + fraction digits half-up to whole pesos.
+function roundDigits(int: string, fraction: string): string {
+  const whole = int.replace(/^0+(?=\d)/, '') || '0'
+  if (!/^[5-9]/.test(fraction)) return whole
+  // Add one to the digit string, carrying.
+  const out = whole.split('')
+  let i = out.length - 1
+  while (i >= 0 && out[i] === '9') out[i--] = '0'
+  if (i < 0) out.unshift('1')
+  else out[i] = String(Number(out[i]) + 1)
+  return out.join('')
 }
 
-export function parseThousands(formatted: string): string {
-  return formatted.replace(/\D/g, '')
+// formatThousands groups a value's whole pesos: '1234567' → '1.234.567'. A
+// stored decimal ('15000.5', dot as decimal point) is shown rounded, never as
+// if its decimals were more thousands.
+export function formatThousands(value: string): string {
+  const decimal = /^(\d+)\.(\d+)$/.exec(value)
+  const digits = decimal ? roundDigits(decimal[1] ?? '', decimal[2] ?? '') : value.replace(/\D/g, '')
+  if (digits === '') return ''
+  return (digits.replace(/^0+(?=\d)/, '') || '0').replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+}
+
+// parseThousands reads what the user typed or pasted, in es-CL format:
+// '1.234.567' → '1234567', and '1.234,50' → '1235' (rounded to whole pesos,
+// where stripping every non-digit used to give 123450).
+export function parseThousands(typed: string): string {
+  const comma = typed.indexOf(',')
+  const int = (comma < 0 ? typed : typed.slice(0, comma)).replace(/\D/g, '')
+  const fraction = comma < 0 ? '' : typed.slice(comma + 1).replace(/\D/g, '')
+  if (int === '' && fraction === '') return ''
+  return roundDigits(int, fraction)
 }
 
 export function currentPeriod(): string {

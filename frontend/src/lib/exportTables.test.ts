@@ -20,6 +20,30 @@ describe('toCsv', () => {
       '﻿Descripción;Monto\r\n"Pan; leche";1500\r\n"Dice ""hola""";9007199254740993\r\n"Multi\nlínea";\r\n',
     )
   })
+
+  it('neutraliza celdas que una planilla leería como fórmula (OWASP), sin tocar números', () => {
+    const t: ExportTable = {
+      sheet: 'x',
+      columns: [
+        { title: 'Descripción', kind: 'text' },
+        { title: 'Monto', kind: 'money' },
+      ],
+      rows: [
+        ['=HYPERLINK("http://x")', '-5000'],
+        ['+56 9 1234', '15000.5'],
+        ['@SUM(A1)', '0'],
+        ['－1+1', '1'],
+        ['\tTAB', '2'],
+      ],
+    }
+    expect(toCsv(t).split('\r\n').slice(1, 6)).toEqual([
+      `"'=HYPERLINK(""http://x"")";-5000`,
+      `'+56 9 1234;15000.5`,
+      `'@SUM(A1);0`,
+      `'－1+1;1`,
+      `"'\tTAB";2`,
+    ])
+  })
 })
 
 describe('exportBasename', () => {
