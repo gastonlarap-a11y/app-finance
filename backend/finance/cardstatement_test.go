@@ -290,6 +290,21 @@ func TestDeleteCardStatement(t *testing.T) {
 	if r := s.GetCardStatement(ctx, got.StatementID); r.Error == nil || r.Error.Code != shared.ErrNotFound {
 		t.Fatalf("GetCardStatement after delete = %+v, want NOT_FOUND", r.Error)
 	}
+	// ON DELETE CASCADE takes the lines and the schedule along, and SET NULL
+	// unhooks the staged items from the lines that are gone.
+	for _, q := range []string{
+		"SELECT count(*) FROM card_statement_lines WHERE statement_id = ?",
+		"SELECT count(*) FROM card_statement_schedule WHERE statement_id = ?",
+	} {
+		var n int
+		if err := s.db.NewRaw(q, got.StatementID).Scan(ctx, &n); err != nil || n != 0 {
+			t.Fatalf("%s = %d (err %v), want 0 after the cascade", q, n, err)
+		}
+	}
+	var linked int
+	if err := s.db.NewRaw("SELECT count(*) FROM import_items WHERE statement_line_id IS NOT NULL").Scan(ctx, &linked); err != nil || linked != 0 {
+		t.Fatalf("items still linked to deleted lines = %d (err %v), want 0", linked, err)
+	}
 	// No card nor prior expense here, so all 6 non-payment lines were staged.
 	if n := len(mustList(t, s, ImportPendiente)); n != 6 {
 		t.Fatalf("pending after delete = %d, want the 6 staged items kept", n)

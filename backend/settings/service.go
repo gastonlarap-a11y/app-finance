@@ -6,6 +6,7 @@ package settings
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/backup"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/config"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/db"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/drive"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/prefs"
 )
@@ -69,14 +71,23 @@ func (s *Service) ChooseDBFolder(ctx context.Context) ChooseFolderResult {
 }
 
 // ApplyDBFolder copies the current DB into the chosen folder and persists it as the
-// new DB location (applied on next launch — the live DB is not hot-swapped).
+// new DB location (applied on next launch — the live DB is not hot-swapped). It
+// never replaces a database already in that folder: it could be this profile's
+// data from another computer, and there is no way back from overwriting it.
 func (s *Service) ApplyDBFolder(ctx context.Context, path string) ApplyFolderResult {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ApplyFolderResult{Error: shared.NewError(shared.ErrValidation, "ruta vacía")}
 	}
+	if !filepath.IsAbs(path) {
+		return ApplyFolderResult{Error: shared.NewError(shared.ErrValidation, "la carpeta debe ser una ruta absoluta")}
+	}
 	dest := filepath.Join(path, s.cfg.DBFilename)
-	sameAsCurrent := filepath.Clean(dest) == filepath.Clean(s.cfg.DBPath())
+	sameAsCurrent := sameFile(dest, s.cfg.DBPath())
+	if !sameAsCurrent && db.Exists(dest) {
+		return ApplyFolderResult{Error: shared.NewError(shared.ErrConflict,
+			"ya hay una base de datos en esa carpeta: muévela o elige otra carpeta para no reemplazarla")}
+	}
 
 	if !sameAsCurrent {
 		if err := backup.Snapshot(ctx, s.db, dest); err != nil {
@@ -89,6 +100,18 @@ func (s *Service) ApplyDBFolder(ctx context.Context, path string) ApplyFolderRes
 		return ApplyFolderResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	return ApplyFolderResult{Path: path, NeedsRestart: !sameAsCurrent}
+}
+
+// sameFile reports whether a and b name the same file. os.SameFile sees through
+// case-insensitive file systems (APFS, NTFS) and symlinks, where comparing the
+// path strings would miss that the live DB is the destination.
+func sameFile(a, b string) bool {
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(fa, fb)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // ConnectDrive runs the visual OAuth login (opens the browser) and caches the

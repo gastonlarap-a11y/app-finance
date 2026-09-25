@@ -112,6 +112,12 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Migrations**: embedded SQL run on startup; register each domain's `embed.FS` in
   `backend/shared/db/migrator.go`; the `YYYYMMDDNNN` filename prefix sets global order. SQLite can
   add columns but not change/drop them — rebuild + copy instead. Use the `db-migration` skill.
+  New files are `*.tx.up.sql` (one transaction); a migration is recorded only on success,
+  `main.go` snapshots the DB to `<backups>/pre-migrate/` first, and a DB with migrations this
+  binary does not know is refused (`db.ErrNewerSchema`).
+- **SQLite connection (invariant)**: open it only through `db.Open`/`db.DSN` (tests:
+  `dbtest.OpenMigrated`). The driver is modernc, which honors only `_pragma=…` DSN keys; `db.Open`
+  fails if `foreign_keys` is not 1. Journal stays DELETE (no WAL): the DB may live in a synced folder.
 - **Shared packages** under `backend/shared/`: `config`, `prefs` (user prefs that override config),
   `db`, `logger`, `errors.go` (`AppError`), `windowstate`, `background` (goroutine pool), `backup`,
   `drive`, `types` (Decimal). The `settings` domain owns DB-folder selection, Google Drive OAuth

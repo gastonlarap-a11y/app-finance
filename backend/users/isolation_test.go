@@ -1,34 +1,19 @@
 package users_test
 
 import (
-	"database/sql"
-	"path/filepath"
 	"testing"
 
 	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/dialect/sqlitedialect"
-	"github.com/uptrace/bun/driver/sqliteshim"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/finance"
-	"github.com/gastonlarap-a11y/app-finance/backend/shared/db"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/db/dbtest"
 	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
 // openMigrated opens a fresh temp SQLite DB and runs all real migrations on it.
 func openMigrated(t *testing.T) *bun.DB {
 	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "test.db") + "?_journal=WAL&_foreign_keys=on"
-	sqldb, err := sql.Open(sqliteshim.ShimName, dsn)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	sqldb.SetMaxOpenConns(1)
-	bdb := bun.NewDB(sqldb, sqlitedialect.New())
-	if err := db.RunMigrations(t.Context(), bdb); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
-	t.Cleanup(func() { bdb.Close() })
-	return bdb
+	return dbtest.OpenMigrated(t)
 }
 
 // TestUserIsolation verifies that each profile only sees its own finance data and
