@@ -374,8 +374,17 @@ expense until the user confirms it:
   **reconciles** across source families: a statement line matching an unmatched alert email (same
   amount/currency, compatible last digits, ±1 day) is stored `conciliado` so a purchase is never
   reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
-  `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`) and a live
-  expense that looks like the same purchase (±2 days, cuota or total).
+  `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`), a live
+  expense that looks like the same purchase (±2 days, cuota or total), and a fixed expense whose
+  unpaid month the charge looks like the bill of (`fixedmatch.go`, Actual Budget's schedule model:
+  a significant word of the name must match, the amount only within ±7.5 %, because a fixed
+  amount is an estimate). `LinkImportItemToFixed` marks that month paid and, for a CLP charge,
+  makes the bank's real amount that month's amount only (an override at the month, the plan
+  restored the month after). The item's `kind` is fixed at staging and every confirm path checks
+  it: an abono never becomes an expense, nor a charge an income. A USD item needs a whole-peso
+  amount other than its USD figure (CLP has no minor unit, ISO 4217). A confirmed item whose
+  expense, income or fixed expense went to the trash can be reopened (`RestoreImportItem`,
+  `reopenable` in the view); an expense takes the link of one item only.
 - **Statements (PDF, desktop + web)**: parsed in the frontend only (`frontend/src/lib/statements/`),
   then staged with `StageImport`. `pdfText.ts` is the only pdf.js module (dynamic import; its worker
   is precached by the PWA). Parsers work on positioned runs: **rows are rebuilt from y coordinates**
@@ -393,10 +402,13 @@ expense until the user confirms it:
   movement by section `pago|compra|voluntario|cargo|abono`, cuota n/N and the bank's exact cuota)
   and `card_statement_schedule` (the bank's coming months). In one transaction it links a cuota n
   that continues an app expense (same card, N, cuota, date ±1) to that installment, reconciles the
-  statement's payments with the cartola's `card_payment` items (both directions; the USD payment
-  also teaches the CLP/USD rate → `suggestedAmountClp`), and stages the rest: purchases keep
-  `installment_number`/`first_period` so `ConfirmImportItem` places cuota 1 in the right month and
-  marks the earlier ones paid; credits stage as `kind = abono` → `ConfirmImportItemAsIncome`. The
+  statement's payments with the cartola's `card_payment` items (both directions; pending or already
+  discarded, since a discarded payment is the same bank fact; the USD payment also teaches the
+  CLP/USD rate → `suggestedAmountClp`), and stages the rest: every purchase and fee keeps
+  `first_period` (cuota 1's month; the statement's own month for a one-payment purchase or a fee)
+  so `ConfirmImportItem` bills it in the month the bank did and marks earlier cuotas paid; credits,
+  and negative lines of any charge section (reversals, refunded fees), stage as `kind = abono` →
+  `ConfirmImportItemAsIncome`. The
   parser cross-checks the bank's totals (sections, A+B+C+D, credit used, USD debt) into warnings;
   its fixture (`itau/testdata/cardStatementRuns.ts`) is synthetic text on the real geometry.
 - **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,

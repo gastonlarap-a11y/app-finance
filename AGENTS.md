@@ -90,7 +90,10 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
   `finance.StageCandidates`/`stageItems` into `import_items` and become expenses (or, for bank
   credits, extra incomes) only when the user confirms them (`ConfirmImportItem`/`LinkImportItem`/
-  `ConfirmImportItemAsIncome`). Never create expenses straight from a parser. Credit-card
+  `ConfirmImportItemAsIncome`), or mark a fixed expense's month paid (`LinkImportItemToFixed`).
+  Never create expenses straight from a parser. An item's `kind` (gasto | abono) is fixed when
+  staged — `lineCandidate` turns negative charge lines into abono — and every confirm path checks
+  it (`requireKind`); items in another currency need a whole-peso amount (`requirePesos`). Credit-card
   statements are stored whole (`ImportCardStatement` → `card_statements` + lines + schedule) and
   feed the inbox from the same path. Statement
   parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); email

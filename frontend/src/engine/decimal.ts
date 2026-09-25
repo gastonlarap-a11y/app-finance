@@ -96,6 +96,11 @@ export class Money {
     return this.v.isNegative()
   }
 
+  // isInteger mirrors shopspring's IsInteger (a whole amount, e.g. CLP).
+  isInteger(): boolean {
+    return this.v.isInteger()
+  }
+
   toString(): string {
     return this.v.toString()
   }
