@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type SubmitEvent } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import {
   FinanceService,
@@ -14,14 +14,14 @@ import { refreshAtom, tabAtom } from '@/atoms/finance'
 import { MailSyncService } from '@/services/mailsync'
 import { IS_WEB } from '@/lib/platform'
 import { syncStatusText } from './MailSettings'
-import { failed } from '@/lib/result'
+import { errMsg, failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { perInstallment } from '@/lib/money'
-import { useQuery } from '@/lib/useQuery'
-import { formatCLP, formatDate } from '@/lib/format'
+import { errorText, useQuery } from '@/lib/useQuery'
+import { formatAmount, formatCLP, formatDate } from '@/lib/format'
 import { ExpenseForm } from './ExpenseForm'
 import { StatementImport } from './StatementImport'
-import { Button, Empty, QueryError, Section, Spinner } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
 
 const STATUSES: { id: ImportStatus; label: string }[] = [
   { id: 'pendiente', label: 'Por revisar' },
@@ -45,15 +45,22 @@ const SOURCE_LABEL: Record<string, string> = {
   pdf_card: 'Estado de cuenta TC',
 }
 
+const isCredit = (it: ImportItemView) => it.kind === 'abono'
+
 // ready reports whether an item can be confirmed in bulk as suggested: a rule
-// already names its merchant, nothing looks like a duplicate, and it carries
-// no double-counting warning.
+// already names its merchant, nothing looks like a duplicate, it is not a card
+// payment (double counting), and it is a CLP expense (credits become income
+// and USD amounts need a reviewed CLP value).
 function ready(it: ImportItemView): boolean {
-  return it.rulePattern !== '' && it.duplicateExpenseId == null && it.hint === ''
+  return (
+    it.rulePattern !== '' && it.duplicateExpenseId == null && it.hint !== 'card_payment' && !isCredit(it) && it.currency === 'CLP'
+  )
 }
 
 function confirmAsSuggested(it: ImportItemView) {
   const cuotas = it.installmentsTotal > 1
+  // A card statement knows the bank's exact cuota (which may not be total/N).
+  const cuota = it.installmentAmount !== '' ? it.installmentAmount : perInstallment(it.amount, it.installmentsTotal)
   return FinanceService.ConfirmImportItem(
     it.id,
     it.date,
@@ -62,7 +69,7 @@ function confirmAsSuggested(it: ImportItemView) {
     it.suggestedMerchant,
     it.cardId,
     cuotas ? KIND_CUOTAS : KIND_UNICO,
-    cuotas ? perInstallment(it.amount, it.installmentsTotal) : it.amount,
+    cuotas ? cuota : it.amount,
     it.installmentsTotal,
     '', // the rule that suggested these values already exists
   )
@@ -91,6 +98,7 @@ export function ImportInboxView() {
   const reload = () => bump((n) => n + 1)
   const [status, setStatus] = useState<ImportStatus>('pendiente')
   const [confirming, setConfirming] = useState<ImportItemView | null>(null)
+  const [asIncome, setAsIncome] = useState<ImportItemView | null>(null)
   const [busyId, setBusyId] = useState<number | 'bulk' | null>(null)
 
   const query = useQuery(`${status}:${refresh}`, async () => {
@@ -184,7 +192,7 @@ export function ImportInboxView() {
                 item={it}
                 cards={cards}
                 busy={busyId !== null}
-                onConfirm={() => setConfirming(it)}
+                onConfirm={() => (isCredit(it) ? setAsIncome(it) : setConfirming(it))}
                 onDiscard={() => run(it.id, () => FinanceService.DiscardImportItem(it.id))}
                 onRestore={() => run(it.id, () => FinanceService.RestoreImportItem(it.id))}
                 onLink={(expenseId) => run(it.id, () => FinanceService.LinkImportItem(it.id, expenseId))}
@@ -206,7 +214,74 @@ export function ImportInboxView() {
           onSaved={reload}
         />
       )}
+      {asIncome && <IncomeConfirmForm item={asIncome} onClose={() => setAsIncome(null)} onSaved={reload} />}
     </div>
+  )
+}
+
+// IncomeConfirmForm records a bank credit (cashback, points redemption) as an
+// extra income of the month the user picks — by default the credit's month.
+function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; onClose: () => void; onSaved: () => void }) {
+  const [description, setDescription] = useState(item.description)
+  const [period, setPeriod] = useState(item.date.slice(0, 7))
+  const [amount, setAmount] = useState(item.currency === 'CLP' ? item.amount : item.suggestedAmountClp)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault()
+    setError(null)
+    setBusy(true)
+    try {
+      const res = await FinanceService.ConfirmImportItemAsIncome(item.id, period, description, amount)
+      const msg = errMsg(res)
+      if (msg) {
+        setError(msg)
+        return
+      }
+      notify('Registrado como ingreso extra.', 'success')
+      onSaved()
+      onClose()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Registrar como ingreso extra" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4" aria-describedby={error ? 'income-form-error' : undefined}>
+        <p className="rounded bg-surface px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-800">
+          Abono del banco: <span className="font-mono text-slate-100">{item.description}</span> ·{' '}
+          <span className="tabular-nums">{formatAmount(item.amount, item.currency)}</span>. Suma a los ingresos del mes, no descuenta gastos.
+        </p>
+        <Field label="Descripción">
+          <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} required />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Mes">
+            <input className={inputCls} type="month" value={period} onChange={(e) => setPeriod(e.target.value)} required />
+          </Field>
+          <Field label="Monto (pesos)">
+            <MoneyInput value={amount} onChange={setAmount} required />
+          </Field>
+        </div>
+        {error && (
+          <p id="income-form-error" role="alert" className="rounded bg-danger/10 px-3 py-2 text-sm text-red-200">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Guardando…' : 'Registrar ingreso'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -286,10 +361,14 @@ function ImportRow({
           <span>{formatDate(it.date)}</span>
           <Badge>{SOURCE_LABEL[it.source] ?? it.source}</Badge>
           {cardLabel && <Badge>{cardLabel}</Badge>}
-          {it.installmentsTotal > 1 && <Badge>{it.installmentsTotal} cuotas</Badge>}
+          {it.installmentsTotal > 1 && (
+            <Badge>
+              {it.installmentNumber > 1 ? `Cuota ${it.installmentNumber} de ${it.installmentsTotal}` : `${it.installmentsTotal} cuotas`}
+            </Badge>
+          )}
           {it.currency !== 'CLP' && <Badge tone="warn">{it.currency}</Badge>}
+          {isCredit(it) && <Badge>Abono del banco: se registra como ingreso</Badge>}
           {it.hint === 'card_payment' && <Badge tone="warn">⚠ Pago de tarjeta: sus compras ya se cuentan aparte</Badge>}
-          {it.hint === 'transfer' && <Badge tone="warn">⚠ Transferencia: ¿es un gasto?</Badge>}
         </div>
         <div className="truncate font-mono text-sm text-slate-100" title={it.description}>
           {it.description}
@@ -315,14 +394,20 @@ function ImportRow({
         )}
       </div>
       <div className="flex flex-col items-end gap-2">
-        <span className="font-semibold tabular-nums">{formatCLP(it.amount)}</span>
+        <span className={`font-semibold tabular-nums ${isCredit(it) ? 'text-success' : ''}`}>
+          {isCredit(it) && '+'}
+          {formatAmount(it.amount, it.currency)}
+        </span>
+        {it.currency !== 'CLP' && it.suggestedAmountClp !== '' && (
+          <span className="text-xs tabular-nums text-slate-400">≈ {formatCLP(it.suggestedAmountClp)}</span>
+        )}
         {it.status === 'pendiente' && (
           <div className="flex gap-2">
             <Button variant="ghost" disabled={busy} onClick={onDiscard}>
               Descartar
             </Button>
             <Button disabled={busy} onClick={onConfirm}>
-              Confirmar
+              {isCredit(it) ? 'Registrar como ingreso' : 'Confirmar'}
             </Button>
           </div>
         )}

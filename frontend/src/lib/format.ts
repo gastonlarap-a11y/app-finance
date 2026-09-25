@@ -18,6 +18,22 @@ export function formatCLP(v: string | number | null | undefined): string {
   return clp.format(DECIMAL_RE.test(s) ? (s as Intl.StringNumericLiteral) : 0)
 }
 
+const usd = new Intl.NumberFormat('es-CL', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+// formatAmount formats a decimal string in its currency: CLP as formatCLP,
+// USD with cents ("US$20,00"), anything else as the bare number and its code.
+export function formatAmount(v: string, currency: string): string {
+  if (currency === 'CLP' || currency === '') return formatCLP(v)
+  const s = v.trim()
+  if (currency === 'USD') return usd.format(DECIMAL_RE.test(s) ? (s as Intl.StringNumericLiteral) : 0)
+  return `${s} ${currency}`
+}
+
 // Live thousands-separator masking for money <input>s (es-CL: '.' as separator).
 // Keeps a clean digit-only string as the "real" value (what's sent to the
 // backend); the input's displayed value is the same digits reformatted.

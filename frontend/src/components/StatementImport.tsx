@@ -1,25 +1,72 @@
 import { useId, useRef, useState } from 'react'
-import { FinanceService, type StageSummary } from '@/services/finance'
+import { FinanceService, type CardStatementImport, type StageSummary } from '@/services/finance'
+import type { DetectedStatement } from '@/lib/statements/detect'
 import { errorText } from '@/lib/useQuery'
 import { Button } from './ui'
 
 // Outcome of one "Importar PDF" run, shown until dismissed or replaced.
 type Outcome =
-  | { kind: 'done'; file: string; format: string; summary: StageSummary; notes: string[]; warnings: string[] }
+  | { kind: 'done'; file: string; format: string; results: string[]; notes: string[]; warnings: string[] }
   | { kind: 'error'; file: string; message: string }
 
 // readStatement loads pdf.js and the parsers on demand (they are large and only
-// needed here) and turns the file into a batch ready for StageImport.
-async function readStatement(file: File) {
+// needed here) and recognizes the document.
+async function readStatement(data: ArrayBuffer): Promise<DetectedStatement> {
   const [{ extractRuns }, { parseStatement }] = await Promise.all([
     import('@/lib/statements/pdfText'),
     import('@/lib/statements/detect'),
   ])
-  return parseStatement(await extractRuns(await file.arrayBuffer()))
+  return parseStatement(await extractRuns(data))
+}
+
+// fileHash fingerprints the PDF (SHA-256, hex) so a statement records which
+// file it came from; '' where Web Crypto is unavailable (insecure context).
+async function fileHash(data: ArrayBuffer): Promise<string> {
+  if (!globalThis.crypto?.subtle) return ''
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
+}
+
+function stagedText(s: StageSummary, reconciledWith: string): string {
+  return (
+    `${plural(s.added, 'movimiento nuevo', 'movimientos nuevos')} por revisar` +
+    (s.duplicates > 0 ? `, ${plural(s.duplicates, 'ya estaba', 'ya estaban')}` : '') +
+    (s.reconciled > 0 ? `, ${plural(s.reconciled, 'conciliado', 'conciliados')} con ${reconciledWith}` : '')
+  )
+}
+
+function cardStatementText(label: string, r: CardStatementImport): string {
+  if (r.alreadyImported) return `${label}: ya estaba importado.`
+  return (
+    `${label}: ${stagedText(r, 'otras fuentes')}` +
+    (r.linkedInstallments > 0 ? `, ${plural(r.linkedInstallments, 'cuota enlazada', 'cuotas enlazadas')} a gastos que ya tenías` : '') +
+    (r.paymentsMatched > 0 ? `, ${plural(r.paymentsMatched, 'pago conciliado', 'pagos conciliados')} con la cartola` : '') +
+    '.'
+  )
+}
+
+// importParsed sends what was read to the backend: a cartola's movements to
+// the inbox, each card statement whole. Returns one line per result, or the
+// first business error.
+async function importParsed(parsed: DetectedStatement, data: ArrayBuffer): Promise<{ results: string[] } | { error: string }> {
+  if (parsed.kind === 'batch') {
+    const res = await FinanceService.StageImport(parsed.batch)
+    if (res.error || !res.data) return { error: res.error?.message ?? 'No se pudo importar.' }
+    return { results: [`${parsed.format}: ${stagedText(res.data, 'alertas de correo')}.`] }
+  }
+  const hash = await fileHash(data)
+  const results: string[] = []
+  for (const st of parsed.statements) {
+    const res = await FinanceService.ImportCardStatement({ ...st, fileHash: hash })
+    const label = `Estado ${st.kind} ••${st.cardLastDigits}`
+    if (res.error || !res.data) return { error: `${label}: ${res.error?.message ?? 'no se pudo importar.'}` }
+    results.push(cardStatementText(label, res.data))
+  }
+  return { results }
 }
 
 // StatementImport reads a bank statement PDF and stages its movements in the
@@ -34,13 +81,15 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
   async function importFile(file: File) {
     setBusy(true)
     try {
-      const parsed = await readStatement(file)
-      const res = await FinanceService.StageImport(parsed.batch)
-      if (res.error || !res.data) {
-        setOutcome({ kind: 'error', file: file.name, message: res.error?.message ?? 'No se pudo importar.' })
+      const data = await file.arrayBuffer()
+      // pdf.js may transfer (detach) the buffer it reads: hand it a copy.
+      const parsed = await readStatement(data.slice(0))
+      const res = await importParsed(parsed, data)
+      if ('error' in res) {
+        setOutcome({ kind: 'error', file: file.name, message: res.error })
         return
       }
-      setOutcome({ kind: 'done', file: file.name, format: parsed.format, summary: res.data, notes: parsed.notes, warnings: parsed.warnings })
+      setOutcome({ kind: 'done', file: file.name, format: parsed.format, results: res.results, notes: parsed.notes, warnings: parsed.warnings })
       onImported()
     } catch (err) {
       setOutcome({ kind: 'error', file: file.name, message: errorText(err) })
@@ -70,7 +119,9 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
         <Button onClick={() => input.current?.click()} disabled={busy}>
           {busy ? 'Leyendo PDF…' : 'Importar estado de cuenta (PDF)'}
         </Button>
-        <span className="text-xs text-slate-500">Cartola de cuenta corriente Itaú. Reimportar el mismo PDF no duplica movimientos.</span>
+        <span className="text-xs text-slate-500">
+          Cartola de cuenta corriente o estado de cuenta de tarjeta de crédito Itaú. Reimportar el mismo PDF no duplica movimientos.
+        </span>
       </div>
 
       {outcome && (
@@ -85,11 +136,11 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
                 <p className="text-red-200">{outcome.message}</p>
               ) : (
                 <>
-                  <p className="text-slate-300">
-                    {outcome.format}: {plural(outcome.summary.added, 'movimiento nuevo', 'movimientos nuevos')} por revisar
-                    {outcome.summary.duplicates > 0 && <>, {plural(outcome.summary.duplicates, 'ya estaba', 'ya estaban')}</>}
-                    {outcome.summary.reconciled > 0 && <>, {plural(outcome.summary.reconciled, 'conciliado', 'conciliados')} con alertas de correo</>}.
-                  </p>
+                  {outcome.results.map((r) => (
+                    <p key={r} className="text-slate-300">
+                      {r}
+                    </p>
+                  ))}
                   {outcome.warnings.map((w) => (
                     <p key={w} className="text-amber-200">
                       ⚠ {w}

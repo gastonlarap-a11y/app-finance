@@ -20,6 +20,7 @@ import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
 import { TrendPanel } from './TrendPanel'
+import { StatementBanner } from './CardStatements'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -186,6 +187,8 @@ export function MonthView() {
         />
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
+
+      <StatementBanner period={period} refresh={refresh} />
 
       <div className="grid gap-5 lg:grid-cols-4">
         <div className="lg:col-span-3">

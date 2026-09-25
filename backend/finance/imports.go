@@ -12,6 +12,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
 
 const (
@@ -51,48 +52,81 @@ func StageCandidates(ctx context.Context, db bun.IDB, uid int64, batch ImportBat
 	}
 	var sum StageSummary
 	err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		for i := range items {
-			item := &items[i]
-			exists, err := tx.NewSelect().Model((*ImportItem)(nil)).
-				Where("user_id = ? AND external_key = ?", uid, item.ExternalKey).Exists(ctx)
-			if err != nil {
-				return fmt.Errorf("checking import key: %w", err)
-			}
-			if exists {
-				sum.Duplicates++
-				continue
-			}
-			match, err := findReconcileMatch(ctx, tx, uid, item)
-			if err != nil {
-				return err
-			}
-			if match != nil {
-				item.Status = ImportConciliado
-				item.MatchedItemID = &match.ID
-			}
-			if _, err := tx.NewInsert().Model(item).Returning("*").Exec(ctx); err != nil {
-				return fmt.Errorf("inserting import item: %w", err)
-			}
-			if match == nil {
-				sum.Added++
-				continue
-			}
-			sum.Reconciled++
-			// A statement knows the installment count an alert may not carry.
-			if item.InstallmentsTotal > 1 && match.InstallmentsTotal == 1 {
-				if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).
-					Set("installments_total = ?", item.InstallmentsTotal).
-					Where("id = ? AND user_id = ?", match.ID, uid).Exec(ctx); err != nil {
-					return fmt.Errorf("updating matched installments: %w", err)
-				}
-			}
-		}
-		return nil
+		var err error
+		_, sum, err = stageItems(ctx, tx, uid, items)
+		return err
 	})
 	if err != nil {
 		return StageSummary{}, err
 	}
 	return sum, nil
+}
+
+// stageItems inserts validated items inside the caller's transaction and
+// returns, per item, the id of the inbox row that now represents it (the new
+// row, or the existing one for a duplicate) — card statements link their lines
+// to those rows.
+func stageItems(ctx context.Context, tx bun.Tx, uid int64, items []ImportItem) ([]int64, StageSummary, error) {
+	var sum StageSummary
+	ids := make([]int64, len(items))
+	for i := range items {
+		item := &items[i]
+		existing := new(ImportItem)
+		err := tx.NewSelect().Model(existing).Column("id").
+			Where("user_id = ? AND external_key = ?", uid, item.ExternalKey).Scan(ctx)
+		if err == nil {
+			ids[i] = existing.ID
+			sum.Duplicates++
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, sum, fmt.Errorf("checking import key: %w", err)
+		}
+		reconciled, err := reconcile(ctx, tx, uid, item)
+		if err != nil {
+			return nil, sum, err
+		}
+		if _, err := tx.NewInsert().Model(item).Returning("*").Exec(ctx); err != nil {
+			return nil, sum, fmt.Errorf("inserting import item: %w", err)
+		}
+		ids[i] = item.ID
+		if reconciled {
+			sum.Reconciled++
+		} else {
+			sum.Added++
+		}
+	}
+	return ids, sum, nil
+}
+
+// reconcile marks item conciliado when the inbox or a card statement already
+// accounts for it: a card-bill payment in the cartola that a statement lists
+// as a payment, or the other-family sighting of the same purchase.
+func reconcile(ctx context.Context, tx bun.Tx, uid int64, item *ImportItem) (bool, error) {
+	if item.Hint == HintCardPayment {
+		line, err := matchPaymentLine(ctx, tx, uid, item)
+		if err != nil || line == nil {
+			return false, err
+		}
+		item.Status = ImportConciliado
+		item.StatementLineID = &line.ID
+		return true, nil
+	}
+	match, err := findReconcileMatch(ctx, tx, uid, item)
+	if err != nil || match == nil {
+		return false, err
+	}
+	item.Status = ImportConciliado
+	item.MatchedItemID = &match.ID
+	// A statement knows the installment count an alert may not carry.
+	if item.InstallmentsTotal > 1 && match.InstallmentsTotal == 1 {
+		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).
+			Set("installments_total = ?", item.InstallmentsTotal).
+			Where("id = ? AND user_id = ?", match.ID, uid).Exec(ctx); err != nil {
+			return false, fmt.Errorf("updating matched installments: %w", err)
+		}
+	}
+	return true, nil
 }
 
 // findReconcileMatch looks for the other-family sighting of item that nothing
@@ -188,14 +222,42 @@ func validateCandidate(c ImportCandidate) (ImportItem, *shared.AppError) {
 	if currency == "" {
 		currency = "CLP"
 	}
+	kind := c.Kind
+	switch kind {
+	case "":
+		kind = ImportKindExpense
+	case ImportKindExpense, ImportKindCredit:
+	default:
+		return ImportItem{}, shared.NewError(shared.ErrValidation, "tipo de movimiento inválido: "+c.Kind)
+	}
+	total := max(c.InstallmentsTotal, 1)
+	number := max(c.InstallmentNumber, 1)
+	if number > total {
+		return ImportItem{}, shared.NewError(shared.ErrValidation, fmt.Sprintf("cuota %d de %d inválida", number, total))
+	}
+	cuota := ""
+	if strings.TrimSpace(c.InstallmentAmount) != "" {
+		v, aerr := parseAmount(c.InstallmentAmount)
+		if aerr != nil {
+			return ImportItem{}, aerr
+		}
+		cuota = v.String()
+	}
+	if c.FirstPeriod != "" && !validPeriod(c.FirstPeriod) {
+		return ImportItem{}, shared.NewError(shared.ErrValidation, "período de la primera cuota inválido: "+c.FirstPeriod)
+	}
 	return ImportItem{
 		Date:              date.Format(dateLayout),
 		Description:       desc,
 		Amount:            amt,
 		Currency:          currency,
 		CardLastDigits:    digits,
-		InstallmentsTotal: max(c.InstallmentsTotal, 1),
+		InstallmentsTotal: total,
 		Hint:              c.Hint,
+		Kind:              kind,
+		InstallmentNumber: number,
+		InstallmentAmount: cuota,
+		FirstPeriod:       c.FirstPeriod,
 	}, nil
 }
 
@@ -246,6 +308,10 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 	if err != nil {
 		return nil, err
 	}
+	fx, err := latestFxRate(ctx, s.db, uid)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]ImportItemView, 0, len(items))
 	for _, it := range items {
@@ -256,7 +322,8 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		if r, ok := ruleFor(rules, it.Description); ok {
 			v.RulePattern, v.SuggestedMerchant, v.SuggestedCategory = r.Pattern, r.Merchant, r.Category
 		}
-		if it.Status == ImportPendiente {
+		v.SuggestedAmountClp = suggestClp(it, fx)
+		if it.Status == ImportPendiente && it.Kind != ImportKindCredit && it.Currency == "CLP" {
 			dup, err := s.findDuplicateExpense(ctx, uid, it, v.CardID)
 			if err != nil {
 				return nil, err
@@ -276,6 +343,19 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// suggestClp converts a USD item at the given CLP-per-USD rate, rounded to
+// whole pesos; "" for CLP items or without a known rate.
+func suggestClp(it ImportItem, fx string) string {
+	if it.Currency != "USD" || fx == "" {
+		return ""
+	}
+	rate, err := types.New(fx)
+	if err != nil {
+		return ""
+	}
+	return it.Amount.Decimal.Mul(rate.Decimal).Round(0).String()
 }
 
 // cardsByLastDigits maps last digits to the one live card that has them;
@@ -362,13 +442,20 @@ func (s *FinanceService) ConfirmImportItem(
 		return ExpenseResult{Error: aerr}
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := loadPendingItem(ctx, tx, uid, id); err != nil {
+		item, err := loadPendingItem(ctx, tx, uid, id)
+		if err != nil {
 			return err
 		}
 		if _, err := tx.NewInsert().Model(ex).Returning("*").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting expense: %w", err)
 		}
-		if err := generateInstallments(ctx, tx, ex, billingDay, 0); err != nil {
+		// A statement cuota n/N places the purchase exactly: cuota 1 was billed
+		// n-1 months before the statement, and those earlier cuotas are paid.
+		first, paid := "", 0
+		if item.FirstPeriod != "" && ex.Kind == KindCuotas && ex.InstallmentsTotal == item.InstallmentsTotal {
+			first, paid = item.FirstPeriod, item.InstallmentNumber-1
+		}
+		if err := generateInstallmentsFrom(ctx, tx, ex, billingDay, first, paid); err != nil {
 			return fmt.Errorf("generating installments: %w", err)
 		}
 		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).

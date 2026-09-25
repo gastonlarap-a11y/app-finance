@@ -3,10 +3,20 @@
 // (sqlite-wasm) instead of the Go backend. Every query filters by the active
 // user id (session.active()), mirroring the desktop invariant.
 import type {
+  AppError,
   BudgetStatus,
   Card,
   CardDebt,
   CardResult,
+  CardStatement,
+  CardStatementDetailResult,
+  CardStatementImport,
+  CardStatementImportResult,
+  CardStatementInput,
+  CardStatementLine,
+  CardStatementLineView,
+  CardStatementView,
+  CardStatementsResult,
   CategoryBudgetView,
   CategoryBudgetsResult,
   CategoryResult,
@@ -30,6 +40,7 @@ import type {
   ImportItemView,
   ImportItemsResult,
   Income,
+  IncomeResult,
   MerchantResult,
   MerchantRule,
   MonthlySummary,
@@ -76,17 +87,29 @@ import {
   ImportConciliado,
   ImportConfirmado,
   ImportDescartado,
+  ImportKindCredit,
+  ImportKindExpense,
   ImportPendiente,
   ImportSourceEmail,
   ImportSourcePDFAccount,
   ImportSourcePDFCard,
   KindCuotas,
   KindUnico,
+  LineCharge,
+  LineCredit,
+  LinePayment,
+  LinePurchase,
+  LineVoluntary,
   SourceCuota,
   SourceFijo,
+  StatementInternational,
+  StatementNational,
   StatusPagado,
   StatusPendiente,
   rowToCard,
+  rowToCardStatement,
+  rowToCardStatementLine,
+  rowToScheduleEntry,
   rowToCategory,
   rowToExpense,
   rowToFixedExpense,
@@ -102,7 +125,7 @@ import {
   rowToSettings,
   type FixedExpenseAmountRow,
 } from '@/engine/finance/models'
-import { asNumber, asString, type SqlDb, type SqlValue } from '@/engine/db/types'
+import { asNumber, asString, type SqlDb, type SqlRow, type SqlValue } from '@/engine/db/types'
 
 // compareStrings is Go's strings.Compare: byte-wise, locale-independent, so the
 // engine orders ties exactly like the desktop backend.
@@ -307,12 +330,17 @@ interface StagedItem {
   cardLastDigits: string
   installmentsTotal: number
   hint: string
+  kind: string
+  installmentNumber: number
+  installmentAmount: string
+  firstPeriod: string
+  statementLineId: number | null
 }
 
 // validateCandidate mirrors the Go helper of the same name.
 function validateCandidate(
   c: ImportCandidate,
-): { item?: Omit<StagedItem, 'source' | 'issuer' | 'externalKey'>; error?: ReturnType<typeof newError> } {
+): { item?: Omit<StagedItem, 'source' | 'issuer' | 'externalKey' | 'statementLineId'>; error?: ReturnType<typeof newError> } {
   const description = c.description.trim()
   if (description === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
   const date = c.date.trim()
@@ -326,6 +354,23 @@ function validateCandidate(
     return { error: newError(ErrValidation, 'pista inválida: ' + c.hint) }
   }
   const currency = c.currency.trim().toUpperCase()
+  const kind = c.kind ?? ''
+  if (![ImportKindExpense, ImportKindCredit, ''].includes(kind)) {
+    return { error: newError(ErrValidation, 'tipo de movimiento inválido: ' + kind) }
+  }
+  const total = Math.max(c.installmentsTotal, 1)
+  const number = Math.max(c.installmentNumber ?? 0, 1)
+  if (number > total) return { error: newError(ErrValidation, `cuota ${number} de ${total} inválida`) }
+  let cuota = ''
+  if ((c.installmentAmount ?? '').trim() !== '') {
+    const v = amountOrError(c.installmentAmount ?? '')
+    if (v.error || !v.amount) return { error: v.error ?? invalidAmountError(c.installmentAmount ?? '') }
+    cuota = v.amount.toString()
+  }
+  const firstPeriod = c.firstPeriod ?? ''
+  if (firstPeriod !== '' && !validPeriod(firstPeriod)) {
+    return { error: newError(ErrValidation, 'período de la primera cuota inválido: ' + firstPeriod) }
+  }
   return {
     item: {
       date,
@@ -333,8 +378,12 @@ function validateCandidate(
       amount: parsed.amount,
       currency: currency === '' ? 'CLP' : currency,
       cardLastDigits: digits.digits,
-      installmentsTotal: Math.max(c.installmentsTotal, 1),
+      installmentsTotal: total,
       hint: c.hint,
+      kind: kind === '' ? ImportKindExpense : kind,
+      installmentNumber: number,
+      installmentAmount: cuota,
+      firstPeriod,
     },
   }
 }
@@ -369,7 +418,7 @@ function validateBatch(batch: ImportBatch): { items?: StagedItem[]; error?: Retu
     ].join('|')
     const ordinal = ordinals.get(base) ?? 0
     ordinals.set(base, ordinal + 1)
-    items.push({ ...v.item, source: batch.source, issuer, externalKey: `${base}|${ordinal}` })
+    items.push({ ...v.item, source: batch.source, issuer, externalKey: `${base}|${ordinal}`, statementLineId: null })
   }
   return { items }
 }
@@ -396,6 +445,241 @@ function validateRulePattern(pattern: string): { pattern: string; error?: Return
     return { pattern: '', error: newError(ErrValidation, 'el patrón de la regla no tiene palabras válidas') }
   }
   return { pattern: norm }
+}
+
+// TxAbort carries a business error out of db.transaction so the transaction
+// rolls back — the engine's equivalent of returning an *AppError from RunInTx.
+class TxAbort extends Error {
+  constructor(readonly appError: AppError) {
+    super(appError.message)
+  }
+}
+
+// ---------- card statements (mirror of backend/finance/cardstatement.go) ----------
+
+// paymentWindowDays: a card payment may be posted a few days apart in the
+// cartola and in the statement.
+const paymentWindowDays = 5
+
+type StatementRow = Omit<CardStatement, 'id' | 'cardId' | 'fxRate' | 'importedAt'>
+type StatementLineRow = Omit<CardStatementLine, 'id' | 'statementId' | 'importItemId' | 'installmentId'>
+
+// StatementFields collects field errors so the first one is reported with its
+// name (a parser bug must be easy to locate). JSON.stringify stands in for Go's %q.
+class StatementFields {
+  error: AppError | null = null
+
+  money(name: string, s: string): string {
+    const t = s.trim()
+    if (t === '' || this.error) return '0'
+    try {
+      return Money.fromString(t).toString()
+    } catch {
+      this.error = newError(ErrValidation, `${name}: monto inválido ${JSON.stringify(t)}`)
+      return '0'
+    }
+  }
+
+  rate(name: string, s: string): string {
+    const t = s.trim()
+    if (t === '' || this.error) return ''
+    try {
+      return Money.fromString(t).toString()
+    } catch {
+      this.error = newError(ErrValidation, `${name}: tasa inválida ${JSON.stringify(t)}`)
+      return ''
+    }
+  }
+
+  date(name: string, s: string, required: boolean): string {
+    const t = s.trim()
+    if (this.error || (t === '' && !required)) return t
+    if (!validImportDate(t)) {
+      this.error = newError(ErrValidation, `${name}: fecha inválida (use YYYY-MM-DD) ${JSON.stringify(t)}`)
+    }
+    return t
+  }
+}
+
+function validSection(s: string): boolean {
+  return [LinePayment, LinePurchase, LineVoluntary, LineCharge, LineCredit].includes(s)
+}
+
+interface ValidatedStatement {
+  statement: StatementRow
+  lines: StatementLineRow[]
+  schedule: { period: string; amount: string }[]
+}
+
+// validateStatement mirrors the Go helper: turns the parser's input into rows
+// ready to insert, reporting the first invalid field by name.
+function validateStatement(
+  userId: number,
+  input: CardStatementInput,
+): { value?: ValidatedStatement; error?: AppError } {
+  const f = new StatementFields()
+  if (input.kind !== StatementNational && input.kind !== StatementInternational) {
+    return { error: newError(ErrValidation, 'tipo de estado de cuenta inválido: ' + input.kind) }
+  }
+  const digits = validateLastDigits(input.cardLastDigits)
+  if (digits.error) return { error: digits.error }
+  if (digits.digits === '') return { error: newError(ErrValidation, 'faltan los últimos 4 dígitos de la tarjeta') }
+  const issuer = input.issuer.trim().toLowerCase()
+  const currency = input.currency.trim().toUpperCase()
+  if (issuer === '' || currency === '') {
+    return { error: newError(ErrValidation, 'faltan el emisor o la moneda del estado de cuenta') }
+  }
+  // Field order matches the Go struct literal, so both report the same first error.
+  const statement: StatementRow = {
+    userId,
+    issuer,
+    kind: input.kind,
+    currency,
+    cardLastDigits: digits.digits,
+    period: '',
+    statementDate: f.date('fecha del estado', input.statementDate, true),
+    periodFrom: f.date('período desde', input.periodFrom, false),
+    periodTo: f.date('período hasta', input.periodTo, false),
+    dueDate: f.date('pagar hasta', input.dueDate, false),
+    previousPeriodFrom: f.date('período anterior desde', input.previousPeriodFrom, false),
+    previousPeriodTo: f.date('período anterior hasta', input.previousPeriodTo, false),
+    nextPeriodFrom: f.date('próximo período desde', input.nextPeriodFrom, false),
+    nextPeriodTo: f.date('próximo período hasta', input.nextPeriodTo, false),
+    creditLimit: f.money('cupo total', input.creditLimit),
+    creditUsed: f.money('cupo utilizado', input.creditUsed),
+    creditAvailable: f.money('cupo disponible', input.creditAvailable),
+    cashLimit: f.money('cupo avance', input.cashLimit),
+    cashUsed: f.money('avance utilizado', input.cashUsed),
+    cashAvailable: f.money('avance disponible', input.cashAvailable),
+    previousBalanceStart: f.money('saldo inicio período anterior', input.previousBalanceStart),
+    previousBilled: f.money('facturado período anterior', input.previousBilled),
+    previousPaid: f.money('pagado período anterior', input.previousPaid),
+    previousBalanceEnd: f.money('saldo final período anterior', input.previousBalanceEnd),
+    transferFromNational: f.money('traspaso deuda nacional', input.transferFromNational),
+    totalOperations: f.money('total operaciones', input.totalOperations),
+    voluntaryProducts: f.money('productos voluntarios', input.voluntaryProducts),
+    chargesNet: f.money('cargos y abonos', input.chargesNet),
+    totalBilled: f.money('total facturado', input.totalBilled),
+    minimumPayment: f.money('monto mínimo', input.minimumPayment),
+    prepaymentCost: f.money('costo prepago', input.prepaymentCost),
+    automaticCharge: f.money('cargo automático', input.automaticCharge),
+    unbilledBalance: f.money('deuda no facturada', input.unbilledBalance),
+    rateRevolving: f.rate('tasa rotativo', input.rateRevolving),
+    rateInstallments: f.rate('tasa compra en cuotas', input.rateInstallments),
+    rateCashAdvance: f.rate('tasa avance', input.rateCashAdvance),
+    caeRevolving: f.rate('CAE rotativo', input.caeRevolving),
+    caeInstallments: f.rate('CAE compra en cuotas', input.caeInstallments),
+    caeCashAdvance: f.rate('CAE avance', input.caeCashAdvance),
+    caePrepayment: f.rate('CAE prepago', input.caePrepayment),
+    lateInterestRate: f.rate('interés moratorio', input.lateInterestRate),
+    fileHash: input.fileHash.trim(),
+  }
+  // The billed period is the month the statement closes, the same month
+  // periodOf assigns to purchases made before the card's cutoff.
+  const closing = statement.periodTo !== '' ? statement.periodTo : statement.statementDate
+  if (!f.error) statement.period = closing.slice(0, 7)
+
+  const lines: StatementLineRow[] = []
+  for (const [i, l] of input.lines.entries()) {
+    const name = `movimiento ${i + 1}`
+    if (!validSection(l.section)) {
+      return { error: newError(ErrValidation, `${name}: sección inválida ${JSON.stringify(l.section)}`) }
+    }
+    const description = l.description.trim()
+    if (description === '') return { error: newError(ErrValidation, name + ': falta la descripción') }
+    const total = Math.max(l.installmentsTotal, 1)
+    const number = Math.max(l.installmentNumber, 1)
+    if (number > total) return { error: newError(ErrValidation, `${name}: cuota ${number} de ${total} inválida`) }
+    const origin = l.originAmount.trim() !== '' ? f.money(name + ' monto origen', l.originAmount) : ''
+    lines.push({
+      userId,
+      position: i + 1,
+      section: l.section,
+      place: l.place.trim(),
+      city: l.city.trim(),
+      country: l.country.trim(),
+      operationDate: f.date(name + ' fecha', l.operationDate, true),
+      reference: l.reference.trim(),
+      description,
+      interestRate: f.rate(name + ' tasa', l.interestRate),
+      operationAmount: f.money(name + ' monto operación', l.operationAmount),
+      totalAmount: f.money(name + ' monto total', l.totalAmount),
+      installmentNumber: number,
+      installmentsTotal: total,
+      installmentAmount: f.money(name + ' cargo del mes', l.installmentAmount),
+      originAmount: origin,
+    })
+  }
+  const schedule: { period: string; amount: string }[] = []
+  for (const e of input.schedule) {
+    if (!validPeriod(e.period)) return { error: newError(ErrValidation, 'calendario: período inválido ' + e.period) }
+    schedule.push({ period: e.period, amount: f.money('calendario ' + e.period, e.amount) })
+  }
+  if (f.error) return { error: f.error }
+  return { value: { statement, lines, schedule } }
+}
+
+// lineCandidate is the inbox candidate for a staged line. Purchases keep the
+// purchase total as amount and the bank's cuota apart; the key uses the
+// reference and total (not the cuota number), so the same purchase seen in
+// next month's statement is recognized as already in the inbox.
+function lineCandidate(st: CardStatement, l: CardStatementLine): ImportCandidate {
+  const c: ImportCandidate = {
+    date: l.operationDate,
+    description: l.description,
+    amount: '',
+    currency: st.currency,
+    cardLastDigits: st.cardLastDigits,
+    account: st.kind,
+    reference: l.reference,
+    installmentsTotal: l.installmentsTotal,
+    installmentNumber: l.installmentNumber,
+    hint: HintNone,
+  }
+  const charged = Money.fromString(l.installmentAmount).abs()
+  switch (l.section) {
+    case LineCredit:
+      c.kind = ImportKindCredit
+      c.amount = charged.toString()
+      break
+    case LinePurchase:
+    case LineVoluntary: {
+      let total = Money.fromString(l.operationAmount).abs()
+      // USD lines carry only the charged amount.
+      if (st.kind === StatementInternational || total.isZero()) total = charged
+      c.amount = total.toString()
+      if (l.installmentsTotal > 1) {
+        c.installmentAmount = charged.toString()
+        c.firstPeriod = addMonths(st.period, -(l.installmentNumber - 1))
+      }
+      break
+    }
+    default: // cargo
+      c.amount = charged.toString()
+  }
+  return c
+}
+
+// isInternationalPayment tells a cartola's payment of the USD card debt
+// ("PAGO DEUDA INTER. TC CTA CLP") from the national one.
+function isInternationalPayment(description: string): boolean {
+  return description.toUpperCase().includes('INTER')
+}
+
+// suggestClp converts a USD item at the given CLP-per-USD rate, rounded to
+// whole pesos; '' for CLP items or without a known rate.
+function suggestClp(it: ImportItem, fx: string): string {
+  if (it.currency !== 'USD' || fx === '') return ''
+  try {
+    return Money.fromString(it.amount).times(Money.fromString(fx)).round(0).toString()
+  } catch {
+    return ''
+  }
+}
+
+// snakeCase maps a model field to its column (creditLimit → credit_limit).
+function snakeCase(field: string): string {
+  return field.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase())
 }
 
 export function createFinanceService(db: SqlDb, session: ActiveSession): FinanceServiceContract {
@@ -492,11 +776,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
   }
 
-  // generateInstallments creates one row per cuota; the first paidCount are
+  // generateInstallments creates one row per cuota starting at firstPeriod ('' =
+  // derived from the date and the card's cutoff); the first paidCount are
   // marked pagado (preserves progress across an edit).
-  function generateInstallments(expenseId: number, ex: ValidatedExpense, billingDay: number, paidCount: number): void {
+  function generateInstallments(
+    expenseId: number,
+    ex: ValidatedExpense,
+    billingDay: number,
+    paidCount: number,
+    firstPeriod = '',
+  ): void {
     const total = ex.kind === KindUnico ? 1 : ex.installmentsTotal
-    const first = periodOf(ex.date.parts, billingDay)
+    const first = firstPeriod !== '' ? firstPeriod : periodOf(ex.date.parts, billingDay)
     const now = nowIso()
     for (let i = 0; i < total; i++) {
       const paid = i < paidCount
@@ -519,7 +810,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // insertExpense writes a validated expense and its installments; callers wrap
   // it in their transaction (CreateExpense, ConfirmImportItem).
-  function insertExpense(ex: ValidatedExpense, billingDay: number): Expense {
+  function insertExpense(ex: ValidatedExpense, billingDay: number, firstPeriod = '', paidCount = 0): Expense {
     const row = db.query(
       `INSERT INTO expenses (user_id, date, description, category, merchant, card_id, kind, installment_amount, installments_total, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
@@ -538,7 +829,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     )[0]
     if (!row) throw new Error('INSERT expenses RETURNING produced no row')
     const created = rowToExpense(row)
-    generateInstallments(created.id, ex, billingDay, 0)
+    generateInstallments(created.id, ex, billingDay, paidCount, firstPeriod)
     return created
   }
 
@@ -627,6 +918,330 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       db.exec('UPDATE import_items SET status = ? WHERE id = ? AND user_id = ?', [to, id, uid()])
       return {}
     })
+  }
+
+  // stageItems mirrors the Go helper: inserts validated items inside the
+  // caller's transaction and returns, per item, the id of the inbox row that
+  // now represents it (the new row, or the existing one for a duplicate).
+  function stageItems(items: StagedItem[]): { ids: number[]; sum: StageSummary } {
+    const sum: StageSummary = { added: 0, duplicates: 0, reconciled: 0 }
+    const ids: number[] = []
+    for (const item of items) {
+      const existing = db.query('SELECT id FROM import_items WHERE user_id = ? AND external_key = ?', [
+        uid(),
+        item.externalKey,
+      ])[0]
+      if (existing) {
+        ids.push(asNumber(existing.id))
+        sum.duplicates++
+        continue
+      }
+      const rec = reconcile(item)
+      const row = db.query(
+        `INSERT INTO import_items (user_id, source, issuer, external_key, date, description, amount, currency,
+         card_last_digits, installments_total, hint, status, matched_item_id, created_at,
+         kind, statement_line_id, installment_number, installment_amount, first_period)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        [
+          uid(),
+          item.source,
+          item.issuer,
+          item.externalKey,
+          item.date,
+          item.description,
+          item.amount.toString(),
+          item.currency,
+          item.cardLastDigits,
+          item.installmentsTotal,
+          item.hint,
+          rec ? ImportConciliado : ImportPendiente,
+          rec?.matchedItemId ?? null,
+          nowIso(),
+          item.kind,
+          rec ? rec.statementLineId : item.statementLineId,
+          item.installmentNumber,
+          item.installmentAmount,
+          item.firstPeriod,
+        ],
+      )[0]
+      if (!row) throw new Error('INSERT import_items RETURNING produced no row')
+      ids.push(asNumber(row.id))
+      if (rec) sum.reconciled++
+      else sum.added++
+    }
+    return { ids, sum }
+  }
+
+  // reconcile mirrors the Go helper: what already accounts for the item — the
+  // statement payment line of a cartola card payment, or the other-family
+  // sighting of the same purchase. null = nothing (the item stays pendiente).
+  function reconcile(item: StagedItem): { matchedItemId: number | null; statementLineId: number | null } | null {
+    if (item.hint === HintCardPayment) {
+      const line = matchPaymentLine(item)
+      return line ? { matchedItemId: null, statementLineId: line.id } : null
+    }
+    const match = findReconcileMatch(item)
+    if (!match) return null
+    // A statement knows the installment count an alert may not carry.
+    if (item.installmentsTotal > 1 && match.installmentsTotal === 1) {
+      db.exec('UPDATE import_items SET installments_total = ? WHERE id = ? AND user_id = ?', [
+        item.installmentsTotal,
+        match.id,
+        uid(),
+      ])
+    }
+    return { matchedItemId: match.id, statementLineId: item.statementLineId }
+  }
+
+  // ---------- card statement helpers ----------
+
+  // insertReturning inserts a model-shaped record (camelCase fields → snake_case
+  // columns) and returns the stored row.
+  function insertReturning(table: string, values: Record<string, SqlValue>): SqlRow {
+    const cols = Object.keys(values)
+    const row = db.query(
+      `INSERT INTO ${table} (${cols.map(snakeCase).join(', ')}) VALUES (${cols.map(() => '?').join(', ')}) RETURNING *`,
+      cols.map((c) => values[c] ?? null),
+    )[0]
+    if (!row) throw new Error(`INSERT ${table} RETURNING produced no row`)
+    return row
+  }
+
+  // cardByDigits returns the user's one live card with those last digits, or null.
+  function cardByDigits(digits: string): Card | null {
+    const rows = db.query('SELECT * FROM cards WHERE user_id = ? AND last_digits = ? AND deleted_at IS NULL', [
+      uid(),
+      digits,
+    ])
+    const only = rows[0]
+    return rows.length === 1 && only ? rowToCard(only) : null
+  }
+
+  // continuedInstallment finds the app installment a statement cuota bills: the
+  // cuota number n of a live expense on the same card (when known) with the same
+  // cuota count and amount, bought within reconcileWindowDays of the line.
+  function continuedInstallment(card: Card | null, l: CardStatementLine): number | null {
+    const params: SqlValue[] = [
+      uid(),
+      l.installmentsTotal,
+      Money.fromString(l.installmentAmount).abs().toString(),
+      l.operationDate,
+      reconcileWindowDays,
+    ]
+    let cardFilter = ''
+    if (card) {
+      cardFilter = 'AND card_id = ?'
+      params.push(card.id)
+    }
+    params.push(l.operationDate)
+    const expenses = db.query(
+      `SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL AND installments_total = ? AND installment_amount = ?
+       AND ABS(julianday(substr(date, 1, 10)) - julianday(?)) <= ? ${cardFilter}
+       ORDER BY ABS(julianday(substr(date, 1, 10)) - julianday(?)) ASC, id ASC`,
+      params,
+    )
+    for (const ex of expenses) {
+      const inst = db.query(
+        `SELECT id FROM installments WHERE expense_id = ? AND user_id = ? AND number = ?
+         AND id NOT IN (SELECT installment_id FROM card_statement_lines WHERE user_id = ? AND installment_id IS NOT NULL)`,
+        [asNumber(ex.id), uid(), l.installmentNumber, uid()],
+      )[0]
+      if (inst) return asNumber(inst.id)
+    }
+    return null
+  }
+
+  // learnFxRate stores the CLP-per-USD rate implied by paying `usd` with `clp`.
+  function learnFxRate(statementId: number, clp: Money, usd: Money): void {
+    if (usd.isZero()) return
+    db.exec('UPDATE card_statements SET fx_rate = ? WHERE id = ?', [clp.div(usd).round(4).toString(), statementId])
+  }
+
+  // latestFxRate is the most recent CLP-per-USD rate learned for the user, or ''.
+  function latestFxRate(): string {
+    const row = db.query(
+      `SELECT fx_rate FROM card_statements WHERE user_id = ? AND fx_rate <> ''
+       ORDER BY statement_date DESC, id DESC LIMIT 1`,
+      [uid()],
+    )[0]
+    return row ? asString(row.fx_rate) : ''
+  }
+
+  // reconcilePaymentLine marks as conciliado the cartola card-payment item that
+  // a statement payment line accounts for, and learns the USD rate from an
+  // international one. Returns how many items it matched.
+  function reconcilePaymentLine(st: CardStatement, l: CardStatementLine): number {
+    const paid = Money.fromString(l.installmentAmount).abs()
+    const international = st.kind === StatementInternational
+    const rows = db.query(
+      `SELECT * FROM import_items WHERE user_id = ? AND status = ? AND hint = ? AND statement_line_id IS NULL
+       AND ABS(julianday(date) - julianday(?)) <= ?
+       AND ${international ? 'description LIKE ?' : 'amount = ?'}
+       ORDER BY ABS(julianday(date) - julianday(?)) ASC, id ASC`,
+      [
+        uid(),
+        ImportPendiente,
+        HintCardPayment,
+        l.operationDate,
+        paymentWindowDays,
+        international ? '%INTER%' : paid.toString(),
+        l.operationDate,
+      ],
+    )
+    for (const r of rows) {
+      const it = rowToImportItem(r)
+      if (st.kind === StatementNational && isInternationalPayment(it.description)) continue
+      db.exec('UPDATE import_items SET status = ?, statement_line_id = ? WHERE id = ? AND user_id = ?', [
+        ImportConciliado,
+        l.id,
+        it.id,
+        uid(),
+      ])
+      if (international) learnFxRate(st.id, Money.fromString(it.amount), paid)
+      return 1
+    }
+    return 0
+  }
+
+  // matchPaymentLine is the other direction: a cartola card payment staged
+  // after the statement that lists it.
+  function matchPaymentLine(item: StagedItem): CardStatementLine | null {
+    const international = isInternationalPayment(item.description)
+    const params: SqlValue[] = [uid(), LinePayment, item.date, paymentWindowDays, uid()]
+    let kindFilter = 'AND cs.kind = ?'
+    if (international) {
+      params.push(StatementInternational)
+    } else {
+      kindFilter += ' AND csl.installment_amount = ?'
+      params.push(StatementNational, item.amount.neg().toString())
+    }
+    params.push(item.date)
+    const row = db.query(
+      `SELECT csl.* FROM card_statement_lines AS csl JOIN card_statements AS cs ON cs.id = csl.statement_id
+       WHERE csl.user_id = ? AND csl.section = ?
+       AND ABS(julianday(csl.operation_date) - julianday(?)) <= ?
+       AND csl.id NOT IN (SELECT statement_line_id FROM import_items WHERE user_id = ? AND statement_line_id IS NOT NULL)
+       ${kindFilter}
+       ORDER BY ABS(julianday(csl.operation_date) - julianday(?)) ASC, csl.id ASC LIMIT 1`,
+      params,
+    )[0]
+    if (!row) return null
+    const line = rowToCardStatementLine(row)
+    if (international) learnFxRate(line.statementId, item.amount, Money.fromString(line.installmentAmount).abs())
+    return line
+  }
+
+  // feedInbox links, reconciles and stages the statement's lines (see
+  // ImportCardStatement). Throws TxAbort on an invalid candidate.
+  function feedInbox(st: CardStatement, card: Card | null, lines: CardStatementLine[], out: CardStatementImport): void {
+    const candidates: ImportCandidate[] = []
+    const staged: CardStatementLine[] = []
+    for (const l of lines) {
+      if (l.section === LinePayment) {
+        out.paymentsMatched += reconcilePaymentLine(st, l)
+        continue
+      }
+      if (l.section === LinePurchase || l.section === LineVoluntary) {
+        const instId = continuedInstallment(card, l)
+        if (instId != null) {
+          db.exec('UPDATE card_statement_lines SET installment_id = ? WHERE id = ?', [instId, l.id])
+          out.linkedInstallments++
+          continue
+        }
+      }
+      candidates.push(lineCandidate(st, l))
+      staged.push(l)
+    }
+    if (candidates.length === 0) return
+    const v = validateBatch({ source: ImportSourcePDFCard, issuer: st.issuer, items: candidates })
+    if (v.error || !v.items) throw new TxAbort(v.error ?? newError(ErrValidation, 'lote inválido'))
+    const items = v.items.map((it, k) => ({ ...it, statementLineId: staged[k]?.id ?? null }))
+    const { ids, sum } = stageItems(items)
+    out.added = sum.added
+    out.duplicates = sum.duplicates
+    out.reconciled = sum.reconciled
+    ids.forEach((id, k) => {
+      db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [id, staged[k]?.id ?? null])
+    })
+  }
+
+  // statementView adds the bank-vs-app comparison. bankCharges is what the app
+  // should have as expenses on the card for the period (purchases, products and
+  // charges billed this month); credits are income, payments move money.
+  async function statementView(
+    st: CardStatement,
+    cardByID: Map<number, Card>,
+    appByPeriod: Map<string, Map<number, string>>,
+  ): Promise<CardStatementView> {
+    let bankCharges = Money.zero()
+    let bankCredits = Money.zero()
+    for (const r of db.query('SELECT * FROM card_statement_lines WHERE statement_id = ? AND user_id = ?', [st.id, uid()])) {
+      const l = rowToCardStatementLine(r)
+      const amount = Money.fromString(l.installmentAmount)
+      if (l.section === LinePurchase || l.section === LineVoluntary || l.section === LineCharge) {
+        bankCharges = bankCharges.add(amount)
+      } else if (l.section === LineCredit) {
+        bankCredits = bankCredits.add(amount.abs())
+      }
+    }
+    const pending = db.query(
+      `SELECT COUNT(*) AS n FROM import_items WHERE user_id = ? AND status = ?
+       AND statement_line_id IN (SELECT id FROM card_statement_lines WHERE statement_id = ?)`,
+      [uid(), ImportPendiente, st.id],
+    )[0]
+    const v: CardStatementView = {
+      ...st,
+      cardName: '',
+      bankCharges: bankCharges.toString(),
+      bankCredits: bankCredits.toString(),
+      appCharges: null,
+      pendingItems: asNumber(pending?.n),
+    }
+    if (st.cardId == null) return v
+    v.cardName = cardByID.get(st.cardId)?.name ?? ''
+    if (st.currency !== 'CLP') return v // the app keeps CLP only: USD lines are compared in the inbox
+    let byCard = appByPeriod.get(st.period)
+    if (!byCard) {
+      const res = await service.MonthlySummary(st.period)
+      if (res.error || !res.data) throw new Error(`summarizing ${st.period}: ${res.error?.message ?? 'no data'}`)
+      byCard = new Map(res.data.porTarjeta.map((d) => [d.card.id, d.gastoMes]))
+      appByPeriod.set(st.period, byCard)
+    }
+    v.appCharges = byCard.get(st.cardId) ?? '0'
+    return v
+  }
+
+  // lineView says what became of a line: the app expense its cuota continues,
+  // its inbox item's status, and for a points redemption the purchase it pays.
+  function lineView(l: CardStatementLine, all: CardStatementLine[]): CardStatementLineView {
+    const v: CardStatementLineView = { ...l, itemStatus: '', expenseId: null, expenseDescription: '', redeemedPurchase: '' }
+    let expenseId: number | null = null
+    if (l.installmentId != null) {
+      const inst = db.query('SELECT expense_id FROM installments WHERE id = ? AND user_id = ?', [l.installmentId, uid()])[0]
+      if (inst) expenseId = asNumber(inst.expense_id)
+    }
+    if (l.importItemId != null) {
+      const row = db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [l.importItemId, uid()])[0]
+      if (row) {
+        const it = rowToImportItem(row)
+        v.itemStatus = it.status
+        if (it.expenseId != null) expenseId = it.expenseId
+      }
+    }
+    if (expenseId != null) {
+      const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseId, uid()])[0]
+      if (row) {
+        const ex = rowToExpense(row)
+        v.expenseId = ex.id
+        v.expenseDescription = ex.description
+      }
+    }
+    if (l.section === LineCredit) {
+      const credit = Money.fromString(l.installmentAmount).abs()
+      const redeemed = all.find((p) => p.section === LinePurchase && Money.fromString(p.installmentAmount).cmp(credit) === 0)
+      if (redeemed) v.redeemedPurchase = redeemed.description
+    }
+    return v
   }
 
   interface LoadedFixed {
@@ -2038,55 +2653,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const v = validateBatch(batch)
       if (v.error || !v.items) return { error: v.error ?? newError(ErrValidation, 'lote inválido') }
       const items = v.items
-      return db.transaction((): StageResult => {
-        const sum: StageSummary = { added: 0, duplicates: 0, reconciled: 0 }
-        for (const item of items) {
-          const exists = db.query('SELECT 1 FROM import_items WHERE user_id = ? AND external_key = ?', [
-            uid(),
-            item.externalKey,
-          ])
-          if (exists.length > 0) {
-            sum.duplicates++
-            continue
-          }
-          const match = findReconcileMatch(item)
-          db.exec(
-            `INSERT INTO import_items (user_id, source, issuer, external_key, date, description, amount, currency,
-             card_last_digits, installments_total, hint, status, matched_item_id, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              uid(),
-              item.source,
-              item.issuer,
-              item.externalKey,
-              item.date,
-              item.description,
-              item.amount.toString(),
-              item.currency,
-              item.cardLastDigits,
-              item.installmentsTotal,
-              item.hint,
-              match ? ImportConciliado : ImportPendiente,
-              match ? match.id : null,
-              nowIso(),
-            ],
-          )
-          if (!match) {
-            sum.added++
-            continue
-          }
-          sum.reconciled++
-          // A statement knows the installment count an alert may not carry.
-          if (item.installmentsTotal > 1 && match.installmentsTotal === 1) {
-            db.exec('UPDATE import_items SET installments_total = ? WHERE id = ? AND user_id = ?', [
-              item.installmentsTotal,
-              match.id,
-              uid(),
-            ])
-          }
-        }
-        return { data: sum }
-      })
+      return db.transaction((): StageResult => ({ data: stageItems(items).sum }))
     },
 
     async ListImportItems(status: string): Promise<ImportItemsResult> {
@@ -2099,10 +2666,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         .map(rowToImportItem)
       const cardByDigits = cardsByLastDigits(listCardsActive())
       const rules = listMerchantRules()
+      const fx = latestFxRate()
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
-        const dup = it.status === ImportPendiente ? findDuplicateExpense(it, card?.id ?? null) : null
+        const reviewable = it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
+        const dup = reviewable ? findDuplicateExpense(it, card?.id ?? null) : null
         const matchedRow =
           it.matchedItemId != null
             ? db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [it.matchedItemId, uid()])[0]
@@ -2120,6 +2689,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           duplicateDescription: dup?.description ?? '',
           matchedSource: matched?.source ?? '',
           matchedDate: matched?.date ?? '',
+          suggestedAmountClp: suggestClp(it, fx),
         }
       })
       return { data }
@@ -2146,8 +2716,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (billing.error) return { error: billing.error }
       return db.transaction((): ExpenseResult => {
         const pending = loadPendingItem(id)
-        if (pending.error) return { error: pending.error }
-        const created = insertExpense(ex, billing.day)
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const item = pending.item
+        // A statement cuota n/N places the purchase exactly: cuota 1 was billed
+        // n-1 months before the statement, and those earlier cuotas are paid.
+        const placed =
+          item.firstPeriod !== '' && ex.kind === KindCuotas && ex.installmentsTotal === item.installmentsTotal
+        const created = placed
+          ? insertExpense(ex, billing.day, item.firstPeriod, item.installmentNumber - 1)
+          : insertExpense(ex, billing.day)
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           created.id,
@@ -2199,6 +2776,123 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     async DeleteMerchantRule(id: number): Promise<OpResult> {
       db.exec('DELETE FROM merchant_rules WHERE id = ? AND user_id = ?', [id, uid()])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'regla no encontrada') }
+      return {}
+    },
+
+    async ConfirmImportItemAsIncome(
+      id: number,
+      period: string,
+      description: string,
+      amount: string,
+    ): Promise<IncomeResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const desc = description.trim()
+      if (desc === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+      const amt = parsed.amount
+      return db.transaction((): IncomeResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error) return { error: pending.error }
+        const inc = rowToIncome(
+          insertReturning('incomes', {
+            userId: uid(),
+            period,
+            description: desc,
+            amount: amt.toString(),
+            createdAt: nowIso(),
+          }),
+        )
+        db.exec('UPDATE import_items SET status = ?, income_id = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          inc.id,
+          id,
+          uid(),
+        ])
+        return { data: inc }
+      })
+    },
+
+    // ---------- card statements ----------
+
+    async ImportCardStatement(input: CardStatementInput): Promise<CardStatementImportResult> {
+      const v = validateStatement(uid(), input)
+      if (v.error || !v.value) return { error: v.error ?? newError(ErrValidation, 'estado de cuenta inválido') }
+      const { statement, lines, schedule } = v.value
+      try {
+        return db.transaction((): CardStatementImportResult => {
+          const out: CardStatementImport = {
+            statementId: 0,
+            alreadyImported: false,
+            added: 0,
+            duplicates: 0,
+            reconciled: 0,
+            linkedInstallments: 0,
+            paymentsMatched: 0,
+          }
+          const existing = db.query(
+            'SELECT id FROM card_statements WHERE user_id = ? AND card_last_digits = ? AND kind = ? AND statement_date = ?',
+            [uid(), statement.cardLastDigits, statement.kind, statement.statementDate],
+          )[0]
+          if (existing) {
+            out.statementId = asNumber(existing.id)
+            out.alreadyImported = true
+            return { data: out }
+          }
+          const card = cardByDigits(statement.cardLastDigits)
+          const st = rowToCardStatement(
+            insertReturning('card_statements', {
+              ...statement,
+              cardId: card?.id ?? null,
+              fxRate: '',
+              importedAt: nowIso(),
+            }),
+          )
+          out.statementId = st.id
+          for (const e of schedule) insertReturning('card_statement_schedule', { statementId: st.id, ...e })
+          const stored = lines.map((l) => rowToCardStatementLine(insertReturning('card_statement_lines', { ...l, statementId: st.id })))
+          feedInbox(st, card, stored, out)
+          return { data: out }
+        })
+      } catch (err) {
+        if (err instanceof TxAbort) return { error: err.appError }
+        throw err
+      }
+    },
+
+    async ListCardStatements(period: string): Promise<CardStatementsResult> {
+      if (period !== '' && !validPeriod(period)) return { error: invalidPeriodError() }
+      const where = period !== '' ? 'AND period = ?' : ''
+      const params: SqlValue[] = period !== '' ? [uid(), period] : [uid()]
+      const sts = db
+        .query(`SELECT * FROM card_statements WHERE user_id = ? ${where} ORDER BY statement_date DESC, kind ASC, id DESC`, params)
+        .map(rowToCardStatement)
+      const cardByID = cardMapAll()
+      const appByPeriod = new Map<string, Map<number, string>>()
+      const data: CardStatementView[] = []
+      for (const st of sts) data.push(await statementView(st, cardByID, appByPeriod))
+      return { data }
+    },
+
+    async GetCardStatement(id: number): Promise<CardStatementDetailResult> {
+      const row = db.query('SELECT * FROM card_statements WHERE id = ? AND user_id = ?', [id, uid()])[0]
+      if (!row) return { error: newError(ErrNotFound, 'estado de cuenta no encontrado') }
+      const statement = await statementView(rowToCardStatement(row), cardMapAll(), new Map())
+      const schedule = db
+        .query('SELECT * FROM card_statement_schedule WHERE statement_id = ? ORDER BY period ASC', [id])
+        .map(rowToScheduleEntry)
+      const lines = db
+        .query('SELECT * FROM card_statement_lines WHERE statement_id = ? AND user_id = ? ORDER BY position ASC', [id, uid()])
+        .map(rowToCardStatementLine)
+      return { data: { statement, lines: lines.map((l) => lineView(l, lines)), schedule } }
+    },
+
+    // DeleteCardStatement forgets a statement (to re-import it after a parser
+    // fix). Its inbox items and linked expenses stay.
+    async DeleteCardStatement(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM card_statements WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'estado de cuenta no encontrado') }
       return {}
     },
 
