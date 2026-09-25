@@ -6,6 +6,7 @@ import { UsersService } from '@/services/users'
 import { notify } from '@/lib/notify'
 import { IS_WEB } from '@/lib/platform'
 import { UpdateBanner } from '@/components/UpdateNotice'
+import { WebUpdateBanner } from '@/components/WebUpdateBanner'
 import { currentPeriod, periodLabel, shiftPeriod, yearOf } from '@/lib/format'
 import { MonthView } from '@/components/MonthView'
 import { ImportInboxView, PendingImportsBadge } from '@/components/ImportInboxView'
@@ -155,7 +156,7 @@ function App() {
         </div>
       </header>
 
-      {!IS_WEB && <UpdateBanner />}
+      {IS_WEB ? <WebUpdateBanner /> : <UpdateBanner />}
 
       <main className="mx-auto max-w-[1536px] px-6 py-6">
         {tab === 'mes' && <MonthView />}

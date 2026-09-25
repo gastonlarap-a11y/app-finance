@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { splitStatements } from '@/engine/db/splitStatements'
 import { migrationFiles } from '@/engine/db/migrations'
 import { createTestDb } from '@/engine/testing/db'
-import { runMigrations } from '@/engine/db/migrator'
+import { NewerSchemaError, runMigrations } from '@/engine/db/migrator'
 import { asString } from '@/engine/db/types'
 
 describe('splitStatements', () => {
@@ -55,6 +55,18 @@ describe('runMigrations', () => {
     // Segunda pasada: no-op (igual que RunMigrations en cada arranque desktop).
     expect(runMigrations(db)).toBe(0)
     expect(db.query('SELECT COUNT(*) AS n FROM bun_migrations')[0]?.n).toBe(rows.length)
+  })
+
+  it('rechaza sin escribir una base de una versión más nueva, e ignora migraciones retiradas', async () => {
+    const db = await createTestDb()
+    // Retiradas (template) o sólo de escritorio: anteriores a la última conocida.
+    db.exec("INSERT INTO bun_migrations (name, group_id) VALUES ('20260628001', 1), ('20260924017', 1)")
+    expect(runMigrations(db)).toBe(0)
+
+    db.exec("INSERT INTO bun_migrations (name, group_id) VALUES ('99991231999', 99)")
+    const before = db.query('SELECT COUNT(*) AS n FROM bun_migrations')[0]?.n
+    expect(() => runMigrations(db)).toThrow(NewerSchemaError)
+    expect(db.query('SELECT COUNT(*) AS n FROM bun_migrations')[0]?.n).toBe(before)
   })
 
   it('deja el esquema utilizable (tablas y seed)', async () => {

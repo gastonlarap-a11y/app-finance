@@ -141,6 +141,9 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   shared type contract is `frontend/src/services/contract.ts`. The engine reuses the SAME
   `backend/*/migrations/*.up.sql` files, so exported `.sqlite` files are interchangeable
   desktop⇄web. Deploy: `.github/workflows/deploy-web.yml` → GitHub Pages. See `ARCHITECTURE.md` §17.
+  Web invariants: a .db import is proven in memory (`engine/db/importCheck.ts`) before it replaces
+  OPFS, and the previous file is restored on failure; one tab owns the DB (`acquireDbLock`, Web
+  Locks); the service worker is `prompt` mode, registered only in `main.tsx`'s web branch.
 
 ## Conventions
 

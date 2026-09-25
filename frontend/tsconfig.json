@@ -13,7 +13,7 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
     "paths": { "@/*": ["./src/*"] },
-    "types": ["vite/client"],
+    "types": ["vite/client", "vite-plugin-pwa/vanillajs"],
     "skipLibCheck": true
   },
   "include": ["src"]

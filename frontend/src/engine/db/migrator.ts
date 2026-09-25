@@ -22,12 +22,35 @@ const INIT_STATEMENTS = [
   )`,
 ]
 
+// NewerSchemaError mirrors db.ErrNewerSchema: the database was migrated by a
+// newer version of the app, so this engine's queries may not match its schema.
+export class NewerSchemaError extends Error {
+  constructor(readonly names: string[]) {
+    super(
+      'La base de datos es de una versión más nueva de la app. Actualiza la app (recarga la página) antes de abrirla.',
+    )
+    this.name = 'NewerSchemaError'
+  }
+}
+
+// newerThanKnown mirrors the Go helper: applied migrations this engine does not
+// know that sort after its latest one. Older unknown ones are retired or belong
+// to the desktop only (window state, mail accounts) and say nothing about age.
+function newerThanKnown(applied: Iterable<string>, files: MigrationFile[]): string[] {
+  const known = new Set(files.map((f) => f.name))
+  const latest = files.reduce((max, f) => (f.name > max ? f.name : max), '')
+  return [...applied].filter((name) => !known.has(name) && name > latest)
+}
+
 // runMigrations is idempotent and safe to call on every startup, exactly like
-// db.RunMigrations in main.go. Returns how many migrations were applied.
+// db.RunMigrations in main.go. Returns how many migrations were applied. Throws
+// NewerSchemaError, before writing anything, on a database from a newer app.
 export function runMigrations(db: SqlDb, files: MigrationFile[] = migrationFiles()): number {
   for (const stmt of INIT_STATEMENTS) db.exec(stmt)
 
   const applied = new Set(db.query('SELECT name FROM bun_migrations').map((r) => asString(r.name)))
+  const newer = newerThanKnown(applied, files)
+  if (newer.length > 0) throw new NewerSchemaError(newer)
   const pending = files.filter((f) => !applied.has(f.name))
   if (pending.length === 0) return 0
 

@@ -12,9 +12,16 @@ import { useRef, useState, type ReactNode } from 'react'
 import { exportDb, importDb, type ImportSummary } from '@/services/web/settings'
 import { validateSqliteFile } from '@/engine/db/dbfile'
 import { backupFilename, shareOrDownload } from '@/lib/exportFile'
+import { useQuery } from '@/lib/useQuery'
 import { Button, Modal, Section } from './ui'
 
-type ExportState = { kind: 'idle' } | { kind: 'running' } | { kind: 'failed'; message: string }
+type ExportState =
+  | { kind: 'idle' }
+  | { kind: 'running' }
+  // The file is ready but Safari refused the Share Sheet (the tap was spent
+  // while the worker exported); the next tap shares this blob right away.
+  | { kind: 'ready'; blob: Blob }
+  | { kind: 'failed'; message: string }
 
 type ImportState =
   | { kind: 'idle' }
@@ -27,23 +34,97 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-async function runExport(setState: (s: ExportState) => void) {
-  setState({ kind: 'running' })
+// LAST_EXPORT_KEY remembers, per device, when a backup last left the app: the
+// data lives only here, so "never" or "months ago" deserves a nudge.
+const LAST_EXPORT_KEY = 'app-finance:last-export'
+
+function lastExport(): Date | null {
   try {
-    await shareOrDownload(await exportDb(), backupFilename())
-    setState({ kind: 'idle' })
+    const v = localStorage.getItem(LAST_EXPORT_KEY)
+    return v ? new Date(v) : null
+  } catch {
+    return null // storage blocked: the reminder is a convenience only
+  }
+}
+
+function rememberExport(): void {
+  try {
+    localStorage.setItem(LAST_EXPORT_KEY, new Date().toISOString())
+  } catch {
+    // storage blocked: the reminder is a convenience only
+  }
+}
+
+async function handOff(blob: Blob, setState: (s: ExportState) => void) {
+  const outcome = await shareOrDownload(blob, backupFilename())
+  if (outcome === 'needs-tap') {
+    setState({ kind: 'ready', blob })
+    return
+  }
+  if (outcome !== 'canceled') rememberExport()
+  setState({ kind: 'idle' })
+}
+
+async function runExport(state: ExportState, setState: (s: ExportState) => void) {
+  try {
+    if (state.kind === 'ready') {
+      await handOff(state.blob, setState) // this tap is live: share at once
+      return
+    }
+    setState({ kind: 'running' })
+    await handOff(await exportDb(), setState)
   } catch (err) {
     setState({ kind: 'failed', message: message(err) })
   }
+}
+
+function exportLabel(state: ExportState): string {
+  if (state.kind === 'running') return 'Exportando…'
+  if (state.kind === 'ready') return '⬇ Compartir respaldo'
+  return '⬇ Exportar datos'
 }
 
 // Compact header control (replaces the Drive BackupControl on web).
 export function WebExportControl() {
   const [state, setState] = useState<ExportState>({ kind: 'idle' })
   return (
-    <Button variant="ghost" onClick={() => void runExport(setState)} disabled={state.kind === 'running'}>
-      {state.kind === 'running' ? 'Exportando…' : '⬇ Exportar datos'}
-    </Button>
+    <span className="inline-flex items-center gap-2">
+      <Button variant="ghost" onClick={() => void runExport(state, setState)} disabled={state.kind === 'running'}>
+        {exportLabel(state)}
+      </Button>
+      {state.kind === 'failed' && (
+        <span role="alert" className="text-xs text-red-300">
+          No se pudo exportar: {state.message}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// StorageStatus tells whether the browser promised to keep the data. WebKit
+// grants persistence on its own heuristics (installing to the home screen is
+// the documented signal) and may evict a plain tab's storage after 7 days
+// without use, so the advice depends on it.
+function StorageStatus() {
+  const query = useQuery('storage-persisted', async () =>
+    typeof navigator.storage?.persisted === 'function' ? navigator.storage.persisted() : false,
+  )
+  const last = lastExport()
+  return (
+    <div className="mt-2 space-y-1 text-sm text-slate-400">
+      {query.data === true && <p>El navegador guarda tus datos de forma persistente.</p>}
+      {query.data === false && (
+        <p className="text-amber-300">
+          El navegador podría borrar tus datos si no usas la app por un tiempo. Instálala (Compartir →
+          «Añadir a pantalla de inicio») y exporta respaldos seguido.
+        </p>
+      )}
+      <p>
+        {last
+          ? `Último respaldo exportado desde este dispositivo: ${last.toLocaleDateString('es-CL')}.`
+          : 'Aún no exportas un respaldo desde este dispositivo.'}
+      </p>
+    </div>
   )
 }
 
@@ -117,12 +198,13 @@ export function WebSettingsView() {
           Para no perder nada si cambias de dispositivo o borras la app, exporta un respaldo cada
           cierto tiempo y guárdalo en Archivos, iCloud o donde prefieras.
         </p>
+        <StorageStatus />
       </Section>
 
       <Section title="Respaldo">
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={() => void runExport(setExportState)} disabled={exportState.kind === 'running'}>
-            {exportState.kind === 'running' ? 'Exportando…' : '⬇ Exportar datos'}
+          <Button onClick={() => void runExport(exportState, setExportState)} disabled={exportState.kind === 'running'}>
+            {exportLabel(exportState)}
           </Button>
           <Button variant="ghost" onClick={() => fileRef.current?.click()} disabled={busy}>
             {state.kind === 'running' ? 'Importando…' : '⬆ Importar respaldo'}
@@ -143,7 +225,17 @@ export function WebSettingsView() {
         </div>
 
         {exportState.kind === 'failed' && <Notice tone="error">No se pudo exportar: {exportState.message}</Notice>}
-        {state.kind === 'failed' && <Notice tone="error">No se pudo importar: {state.message}</Notice>}
+        {exportState.kind === 'ready' && (
+          <Notice tone="warn">El respaldo está listo: toca «Compartir respaldo» para guardarlo.</Notice>
+        )}
+        {state.kind === 'failed' && (
+          <Notice tone="error">
+            No se pudo importar: {state.message}{' '}
+            <button type="button" className="underline" onClick={() => window.location.reload()}>
+              Recargar
+            </button>
+          </Notice>
+        )}
         {state.kind === 'done' && <ImportResult summary={state.summary} />}
 
         <p className="mt-3 text-xs text-slate-500">

@@ -48,7 +48,11 @@ export default defineConfig(({ mode }) => {
               },
             } satisfies PluginOption,
             VitePWA({
-              registerType: 'autoUpdate',
+              // 'prompt': a new deploy waits for the user's "Actualizar" (see
+              // src/lib/pwaUpdate.ts) instead of swapping files under an open
+              // page; main.tsx registers the worker, so no script is injected.
+              registerType: 'prompt',
+              injectRegister: false,
               manifest: {
                 name: 'App Finance',
                 short_name: 'App Finance',
