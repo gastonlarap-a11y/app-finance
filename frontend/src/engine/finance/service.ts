@@ -705,6 +705,12 @@ function suggestClp(it: ImportItem, fx: string): string {
   }
 }
 
+// duplicateReviewable mirrors the Go helper: a pending CLP charge gets a "did
+// you already enter it?" suggestion.
+function duplicateReviewable(it: ImportItem): boolean {
+  return it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
+}
+
 // clpAmountOf mirrors the Go helper: the item's amount in pesos (its own for a
 // CLP item, the suggested conversion for a USD one), or null when unknown.
 function clpAmountOf(it: ImportItem, suggestedClp: string): Money | null {
@@ -1009,32 +1015,57 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       .map(rowToMerchantRule)
   }
 
-  // findDuplicateExpense mirrors the Go helper: a live expense not yet linked to
-  // an import item, within duplicateWindowDays, whose cuota or total equals the
-  // amount and, when the item's card is known, on that card.
-  function findDuplicateExpense(item: ImportItem, cardId: number | null): Expense | null {
-    const params: SqlValue[] = [uid(), item.date, duplicateWindowDays, uid()]
-    let cardFilter = ''
-    if (cardId != null) {
-      cardFilter = 'AND card_id = ?'
-      params.push(cardId)
-    }
-    params.push(item.date)
+  // matchedItemsOf loads, in one query, the items the listed ones were
+  // reconciled with (mirrors Go's matchedItems).
+  function matchedItemsOf(items: ImportItem[]): Map<number, ImportItem> {
+    const ids: SqlValue[] = items.flatMap((it) => (it.matchedItemId != null ? [it.matchedItemId] : []))
+    if (ids.length === 0) return new Map()
     const rows = db.query(
-      `SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL
-       AND ABS(julianday(substr(date, 1, 10)) - julianday(?)) <= ?
-       AND id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)
-       ${cardFilter}
-       ORDER BY ABS(julianday(substr(date, 1, 10)) - julianday(?)) ASC, id ASC`,
-      params,
+      `SELECT * FROM import_items WHERE user_id = ? AND id IN (${ids.map(() => '?').join(', ')})`,
+      [uid(), ...ids],
     )
-    const amount = Money.fromString(item.amount)
-    for (const r of rows) {
-      const ex = rowToExpense(r)
-      const cuota = Money.fromString(ex.installmentAmount)
-      if (cuota.cmp(amount) === 0 || cuota.mulInt(ex.installmentsTotal).cmp(amount) === 0) return ex
+    return new Map(rows.map(rowToImportItem).map((m) => [m.id, m]))
+  }
+
+  // duplicateFinder mirrors Go's duplicateCandidates + find: the live, unlinked
+  // expenses dated near any listed item are loaded in one query (a string range
+  // on the YYYY-MM-DD prefix both date formats share), then each item picks the
+  // one that looks like the same purchase — within duplicateWindowDays, cuota
+  // or total equal to its amount, on its card when known; closest date wins,
+  // then the oldest expense.
+  function duplicateFinder(items: ImportItem[]): (item: ImportItem, cardId: number | null) => Expense | null {
+    const days = (ymd: string) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000
+    const reviewable = items.filter(duplicateReviewable).map((it) => it.date)
+    if (reviewable.length === 0) return () => null
+    const shift = (ymd: string, n: number) => new Date((days(ymd) + n) * 86_400_000).toISOString().slice(0, 10)
+    const from = shift(reviewable.reduce((a, b) => (b < a ? b : a)), -duplicateWindowDays)
+    const to = shift(reviewable.reduce((a, b) => (b > a ? b : a)), duplicateWindowDays + 1)
+    const cands = db
+      .query(
+        `SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL AND date >= ? AND date < ?
+         AND id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)
+         ORDER BY id ASC`,
+        [uid(), from, to, uid()],
+      )
+      .map(rowToExpense)
+    return (item, cardId) => {
+      const amount = Money.fromString(item.amount)
+      const day = days(item.date)
+      let best: Expense | null = null
+      let bestGap = 0
+      for (const ex of cands) {
+        if (cardId != null && ex.cardId !== cardId) continue
+        const gap = Math.abs(days(ex.date.slice(0, 10)) - day)
+        if (gap > duplicateWindowDays) continue
+        const cuota = Money.fromString(ex.installmentAmount)
+        if (cuota.cmp(amount) !== 0 && cuota.mulInt(ex.installmentsTotal).cmp(amount) !== 0) continue
+        if (best === null || gap < bestGap) {
+          best = ex
+          bestGap = gap
+        }
+      }
+      return best
     }
-    return null
   }
 
   // loadPendingItem: NotFound when the item does not exist for the user,
@@ -1309,15 +1340,47 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   // statementView adds the bank-vs-app comparison. bankCharges is what the app
   // should have as expenses on the card for the period (purchases, products and
   // charges billed this month); credits are income, payments move money.
-  async function statementView(
-    st: CardStatement,
-    cardByID: Map<number, Card>,
-    appByPeriod: Map<string, Map<number, string>>,
-  ): Promise<CardStatementView> {
+  // StatementsContext mirrors Go's statementsContext: what statementView needs
+  // beyond the statement, loaded once for a whole list.
+  interface StatementsContext {
+    cardByID: Map<number, Card>
+    lines: Map<number, CardStatementLine[]> // statement id → lines
+    pending: Map<number, number> // statement id → pending inbox items
+    appByPeriod: Map<string, Map<number, Money>> // period → card → app charges (lazy)
+  }
+
+  // statementsContext loads every listed statement's lines and pending counts in
+  // two queries, instead of two per statement.
+  function statementsContext(sts: CardStatement[]): StatementsContext {
+    const ctx: StatementsContext = { cardByID: cardMapAll(), lines: new Map(), pending: new Map(), appByPeriod: new Map() }
+    if (sts.length === 0) return ctx
+    const ids: SqlValue[] = sts.map((st) => st.id)
+    const placeholders = ids.map(() => '?').join(', ')
+    for (const r of db.query(
+      `SELECT * FROM card_statement_lines WHERE user_id = ? AND statement_id IN (${placeholders})`,
+      [uid(), ...ids],
+    )) {
+      const l = rowToCardStatementLine(r)
+      const list = ctx.lines.get(l.statementId)
+      if (list) list.push(l)
+      else ctx.lines.set(l.statementId, [l])
+    }
+    for (const r of db.query(
+      `SELECT csl.statement_id, COUNT(*) AS n FROM import_items AS ii
+       JOIN card_statement_lines AS csl ON csl.id = ii.statement_line_id
+       WHERE ii.user_id = ? AND ii.status = ? AND csl.statement_id IN (${placeholders})
+       GROUP BY csl.statement_id`,
+      [uid(), ImportPendiente, ...ids],
+    )) {
+      ctx.pending.set(asNumber(r.statement_id), asNumber(r.n))
+    }
+    return ctx
+  }
+
+  function statementView(st: CardStatement, sc: StatementsContext): CardStatementView {
     let bankCharges = Money.zero()
     let bankCredits = Money.zero()
-    for (const r of db.query('SELECT * FROM card_statement_lines WHERE statement_id = ? AND user_id = ?', [st.id, uid()])) {
-      const l = rowToCardStatementLine(r)
+    for (const l of sc.lines.get(st.id) ?? []) {
       const amount = Money.fromString(l.installmentAmount)
       if (l.section === LinePurchase || l.section === LineVoluntary || l.section === LineCharge) {
         bankCharges = bankCharges.add(amount)
@@ -1325,31 +1388,44 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         bankCredits = bankCredits.add(amount.abs())
       }
     }
-    const pending = db.query(
-      `SELECT COUNT(*) AS n FROM import_items WHERE user_id = ? AND status = ?
-       AND statement_line_id IN (SELECT id FROM card_statement_lines WHERE statement_id = ?)`,
-      [uid(), ImportPendiente, st.id],
-    )[0]
     const v: CardStatementView = {
       ...st,
       cardName: '',
       bankCharges: bankCharges.toString(),
       bankCredits: bankCredits.toString(),
       appCharges: null,
-      pendingItems: asNumber(pending?.n),
+      pendingItems: sc.pending.get(st.id) ?? 0,
     }
     if (st.cardId == null) return v
-    v.cardName = cardByID.get(st.cardId)?.name ?? ''
+    const card = sc.cardByID.get(st.cardId)
+    v.cardName = card?.name ?? ''
     if (st.currency !== 'CLP') return v // the app keeps CLP only: USD lines are compared in the inbox
-    let byCard = appByPeriod.get(st.period)
+    let byCard = sc.appByPeriod.get(st.period)
     if (!byCard) {
-      const res = await service.MonthlySummary(st.period)
-      if (res.error || !res.data) throw new Error(`summarizing ${st.period}: ${res.error?.message ?? 'no data'}`)
-      byCard = new Map(res.data.porTarjeta.map((d) => [d.card.id, d.gastoMes]))
-      appByPeriod.set(st.period, byCard)
+      byCard = cardChargesIn(st.period)
+      sc.appByPeriod.set(st.period, byCard)
     }
-    v.appCharges = byCard.get(st.cardId) ?? '0'
+    // MonthlySummary's per-card totals cover live cards only, as in Go.
+    v.appCharges = (card && card.deletedAt == null ? (byCard.get(st.cardId) ?? Money.zero()) : Money.zero()).toString()
     return v
+  }
+
+  // cardChargesIn mirrors the Go helper: what the app bills to each card in
+  // `period` (live cuotas + fixed expenses), without a whole MonthlySummary.
+  function cardChargesIn(period: string): Map<number, Money> {
+    const out = new Map<number, Money>()
+    const add = (cardId: number, amount: Money) => out.set(cardId, (out.get(cardId) ?? Money.zero()).add(amount))
+    for (const r of db.query(
+      `SELECT e.card_id, i.amount FROM installments AS i JOIN expenses AS e ON e.id = i.expense_id
+       WHERE i.user_id = ? AND i.period = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL`,
+      [uid(), period],
+    )) {
+      add(asNumber(r.card_id), Money.fromString(asString(r.amount)))
+    }
+    for (const mv of fixedChargesFor(period)) {
+      if (mv.cardId != null) add(mv.cardId, Money.fromString(mv.amount))
+    }
+    return out
   }
 
   // lineView says what became of a line: the app expense its cuota continues,
@@ -1567,24 +1643,29 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // cumulativeBalanceBefore: Σ salaries + Σ extras − Σ gastos for every period
   // strictly before `period`, summed with Money (never SQL SUM over TEXT).
-  function cumulativeBalanceBefore(period: string): Money {
+  // sumAmounts mirrors the Go helper: adds up the amount column of a query,
+  // as decimals (never SQLite's float SUM over TEXT).
+  function sumAmounts(sql: string, params: SqlValue[]): Money {
     let total = Money.zero()
-    for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period < ?', [uid(), period])) {
-      total = total.add(Money.fromString(rowToPeriodSalary(r).amount))
-    }
-    for (const r of db.query(
-      'SELECT * FROM incomes WHERE user_id = ? AND period < ? AND deleted_at IS NULL',
-      [uid(), period],
-    )) {
-      total = total.add(Money.fromString(rowToIncome(r).amount))
-    }
-    for (const r of db.query(
-      `SELECT * FROM installments WHERE user_id = ? AND period < ?
-       AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
-      [uid(), period],
-    )) {
-      total = total.sub(Money.fromString(rowToInstallment(r).amount))
-    }
+    for (const r of db.query(sql, params)) total = total.add(Money.fromString(asString(r.amount)))
+    return total
+  }
+
+  // cumulativeBalanceBefore reads only amounts: it walks the whole history on
+  // every summary (mirrors Go).
+  function cumulativeBalanceBefore(period: string): Money {
+    const user = uid()
+    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period < ?', [user, period])
+    total = total.add(
+      sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period < ? AND deleted_at IS NULL', [user, period]),
+    )
+    total = total.sub(
+      sumAmounts(
+        `SELECT amount FROM installments WHERE user_id = ? AND period < ?
+         AND expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)`,
+        [user, period, user],
+      ),
+    )
     // Savings contributions left the account too.
     return total.sub(sumFixedBefore(period)).sub(sumContributions('period < ?', [period]))
   }
@@ -1719,17 +1800,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   }
 
   // pendingByCard sums all pending installments grouped by their expense's card.
+  // pendingByCard mirrors Go: card and amount only, over every pending cuota.
   function pendingByCard(): Map<number, Money> {
-    const pend = db
-      .query('SELECT * FROM installments WHERE user_id = ? AND status = ?', [uid(), StatusPendiente])
-      .map(rowToInstallment)
-    const exById = expenseMapActive(pend.map((i) => i.expenseId))
     const out = new Map<number, Money>()
-    for (const inst of pend) {
-      const ex = exById.get(inst.expenseId)
-      if (ex && ex.cardId != null) {
-        out.set(ex.cardId, (out.get(ex.cardId) ?? Money.zero()).add(Money.fromString(inst.amount)))
-      }
+    for (const r of db.query(
+      `SELECT e.card_id, i.amount FROM installments AS i JOIN expenses AS e ON e.id = i.expense_id
+       WHERE i.user_id = ? AND i.status = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL`,
+      [uid(), StatusPendiente],
+    )) {
+      const cardId = asNumber(r.card_id)
+      out.set(cardId, (out.get(cardId) ?? Money.zero()).add(Money.fromString(asString(r.amount))))
     }
     return out
   }
@@ -2929,22 +3009,19 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const fx = latestFxRate()
       const suggestFixed = status === ImportPendiente ? fixedSuggester() : null
       const reopenable = status === ImportConfirmado ? reopenableIds() : new Set<number>()
+      const findDuplicate = duplicateFinder(items)
+      const matchedByID = matchedItemsOf(items)
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
-        const reviewable = it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
-        const dup = reviewable ? findDuplicateExpense(it, card?.id ?? null) : null
+        const dup = duplicateReviewable(it) ? findDuplicate(it, card?.id ?? null) : null
         const suggestedClp = suggestClp(it, fx)
         const fixedPeriod = billingPeriodOf(it, card?.billingDay ?? 0)
         const fixed =
           suggestFixed && it.status === ImportPendiente && it.kind === ImportKindExpense
             ? suggestFixed(it, fixedPeriod, card?.id ?? null, clpAmountOf(it, suggestedClp))
             : null
-        const matchedRow =
-          it.matchedItemId != null
-            ? db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [it.matchedItemId, uid()])[0]
-            : undefined
-        const matched = matchedRow ? rowToImportItem(matchedRow) : null
+        const matched = it.matchedItemId != null ? (matchedByID.get(it.matchedItemId) ?? null) : null
         return {
           ...it,
           cardId: card?.id ?? null,
@@ -3205,17 +3282,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const sts = db
         .query(`SELECT * FROM card_statements WHERE user_id = ? ${where} ORDER BY statement_date DESC, kind ASC, id DESC`, params)
         .map(rowToCardStatement)
-      const cardByID = cardMapAll()
-      const appByPeriod = new Map<string, Map<number, string>>()
-      const data: CardStatementView[] = []
-      for (const st of sts) data.push(await statementView(st, cardByID, appByPeriod))
-      return { data }
+      const sc = statementsContext(sts)
+      return { data: sts.map((st) => statementView(st, sc)) }
     },
 
     async GetCardStatement(id: number): Promise<CardStatementDetailResult> {
       const row = db.query('SELECT * FROM card_statements WHERE id = ? AND user_id = ?', [id, uid()])[0]
       if (!row) return { error: newError(ErrNotFound, 'estado de cuenta no encontrado') }
-      const statement = await statementView(rowToCardStatement(row), cardMapAll(), new Map())
+      const st = rowToCardStatement(row)
+      const statement = statementView(st, statementsContext([st]))
       const schedule = db
         .query('SELECT * FROM card_statement_schedule WHERE statement_id = ? ORDER BY period ASC', [id])
         .map(rowToScheduleEntry)

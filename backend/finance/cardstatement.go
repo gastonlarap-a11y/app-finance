@@ -701,14 +701,17 @@ func (s *FinanceService) listCardStatements(ctx context.Context, uid int64, peri
 	if err := q.Scan(ctx); err != nil {
 		return nil, fmt.Errorf("listing statements: %w", err)
 	}
-	cardByID, err := s.cardMapAll(ctx, uid)
-	if err != nil {
+	sc := statementsContext{appByPeriod: map[string]map[int64]types.Decimal{}}
+	var err error
+	if sc.cardByID, err = s.cardMapAll(ctx, uid); err != nil {
 		return nil, fmt.Errorf("loading cards: %w", err)
 	}
-	appByPeriod := map[string]map[int64]types.Decimal{} // period → card → app charges
+	if sc.lines, sc.pending, err = s.statementLinesAndPending(ctx, uid, sts); err != nil {
+		return nil, err
+	}
 	out := make([]CardStatementView, 0, len(sts))
 	for _, st := range sts {
-		v, err := s.statementView(ctx, uid, st, cardByID, appByPeriod)
+		v, err := s.statementView(ctx, uid, st, &sc)
 		if err != nil {
 			return nil, err
 		}
@@ -717,19 +720,59 @@ func (s *FinanceService) listCardStatements(ctx context.Context, uid int64, peri
 	return out, nil
 }
 
+// statementsContext is what statementView needs beyond the statement itself,
+// loaded once for a whole list instead of once per statement.
+type statementsContext struct {
+	cardByID    map[int64]Card
+	lines       map[int64][]CardStatementLine      // statement id → lines
+	pending     map[int64]int                      // statement id → pending inbox items
+	appByPeriod map[string]map[int64]types.Decimal // period → card → app charges (filled lazily)
+}
+
+// statementLinesAndPending loads the lines of every statement in sts and how
+// many of their inbox items are still pending, in two queries.
+func (s *FinanceService) statementLinesAndPending(ctx context.Context, uid int64, sts []CardStatement) (
+	map[int64][]CardStatementLine, map[int64]int, error,
+) {
+	lines := map[int64][]CardStatementLine{}
+	pending := map[int64]int{}
+	if len(sts) == 0 {
+		return lines, pending, nil
+	}
+	ids := make([]int64, len(sts))
+	for i, st := range sts {
+		ids[i] = st.ID
+	}
+	var all []CardStatementLine
+	if err := s.db.NewSelect().Model(&all).Where("user_id = ? AND statement_id IN (?)", uid, bun.List(ids)).Scan(ctx); err != nil {
+		return nil, nil, fmt.Errorf("loading lines: %w", err)
+	}
+	for _, l := range all {
+		lines[l.StatementID] = append(lines[l.StatementID], l)
+	}
+	var counts []struct {
+		StatementID int64 `bun:"statement_id"`
+		N           int   `bun:"n"`
+	}
+	if err := s.db.NewRaw(`
+		SELECT csl.statement_id, COUNT(*) AS n FROM import_items AS ii
+		JOIN card_statement_lines AS csl ON csl.id = ii.statement_line_id
+		WHERE ii.user_id = ? AND ii.status = ? AND csl.statement_id IN (?)
+		GROUP BY csl.statement_id`, uid, ImportPendiente, bun.List(ids)).Scan(ctx, &counts); err != nil {
+		return nil, nil, fmt.Errorf("counting pending lines: %w", err)
+	}
+	for _, c := range counts {
+		pending[c.StatementID] = c.N
+	}
+	return lines, pending, nil
+}
+
 // statementView adds the bank-vs-app comparison. BankCharges is what the app
 // should have as expenses on the card for the period (purchases, products and
 // charges billed this month); credits are income, payments move money.
-func (s *FinanceService) statementView(
-	ctx context.Context, uid int64, st CardStatement, cardByID map[int64]Card,
-	appByPeriod map[string]map[int64]types.Decimal,
-) (CardStatementView, error) {
+func (s *FinanceService) statementView(ctx context.Context, uid int64, st CardStatement, sc *statementsContext) (CardStatementView, error) {
 	v := CardStatementView{CardStatement: st, BankCharges: types.Zero(), BankCredits: types.Zero()}
-	var lines []CardStatementLine
-	if err := s.db.NewSelect().Model(&lines).Where("statement_id = ? AND user_id = ?", st.ID, uid).Scan(ctx); err != nil {
-		return v, fmt.Errorf("loading lines: %w", err)
-	}
-	for _, l := range lines {
+	for _, l := range sc.lines[st.ID] {
 		switch l.Section {
 		case LinePurchase, LineVoluntary, LineCharge:
 			v.BankCharges = v.BankCharges.Add(l.InstallmentAmount)
@@ -737,35 +780,31 @@ func (s *FinanceService) statementView(
 			v.BankCredits = v.BankCredits.Add(l.InstallmentAmount.Abs())
 		}
 	}
-	pending, err := s.db.NewSelect().Model((*ImportItem)(nil)).
-		Where("user_id = ? AND status = ?", uid, ImportPendiente).
-		Where("statement_line_id IN (SELECT id FROM card_statement_lines WHERE statement_id = ?)", st.ID).Count(ctx)
-	if err != nil {
-		return v, fmt.Errorf("counting pending lines: %w", err)
-	}
-	v.PendingItems = pending
+	v.PendingItems = sc.pending[st.ID]
 	if st.CardID == nil {
 		return v, nil
 	}
-	if c, ok := cardByID[*st.CardID]; ok {
+	c, ok := sc.cardByID[*st.CardID]
+	if ok {
 		v.CardName = c.Name
 	}
 	if st.Currency != "CLP" {
 		return v, nil // the app keeps CLP only: USD lines are compared in the inbox
 	}
-	byCard, ok := appByPeriod[st.Period]
+	byCard, ok := sc.appByPeriod[st.Period]
 	if !ok {
-		sum, err := s.monthlySummary(ctx, uid, st.Period)
-		if err != nil {
-			return v, fmt.Errorf("summarizing %s: %w", st.Period, err)
+		var err error
+		if byCard, err = s.cardChargesIn(ctx, uid, st.Period); err != nil {
+			return v, fmt.Errorf("card charges of %s: %w", st.Period, err)
 		}
-		byCard = map[int64]types.Decimal{}
-		for _, d := range sum.PorTarjeta {
-			byCard[d.Card.ID] = d.GastoMes
-		}
-		appByPeriod[st.Period] = byCard
+		sc.appByPeriod[st.Period] = byCard
 	}
-	app := byCard[*st.CardID]
+	// MonthlySummary's per-card totals cover live cards only; a card in the
+	// trash compares against zero, as before.
+	app := types.Zero()
+	if c.DeletedAt == nil {
+		app = byCard[*st.CardID]
+	}
 	v.AppCharges = &app
 	return v, nil
 }
@@ -782,11 +821,14 @@ func (s *FinanceService) GetCardStatement(ctx context.Context, id int64) CardSta
 	if err != nil {
 		return CardStatementDetailResult{Error: internalErr(err)}
 	}
-	cardByID, err := s.cardMapAll(ctx, uid)
-	if err != nil {
+	sc := statementsContext{appByPeriod: map[string]map[int64]types.Decimal{}}
+	if sc.cardByID, err = s.cardMapAll(ctx, uid); err != nil {
 		return CardStatementDetailResult{Error: internalErr(err)}
 	}
-	view, err := s.statementView(ctx, uid, *st, cardByID, map[string]map[int64]types.Decimal{})
+	if sc.lines, sc.pending, err = s.statementLinesAndPending(ctx, uid, []CardStatement{*st}); err != nil {
+		return CardStatementDetailResult{Error: internalErr(err)}
+	}
+	view, err := s.statementView(ctx, uid, *st, &sc)
 	if err != nil {
 		return CardStatementDetailResult{Error: internalErr(err)}
 	}
