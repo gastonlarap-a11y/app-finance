@@ -54,20 +54,22 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
   const [username, setUsername] = useState(state.username)
   const [password, setPassword] = useState('')
   const [folder, setFolder] = useState(state.configured ? state.folder : 'INBOX')
-  const [senderFilter, setSenderFilter] = useState(state.configured ? state.senderFilter : 'itau.cl')
+  // Itaú sends its alerts from itau@eeccvirtual.cl.
+  const [senderFilter, setSenderFilter] = useState(state.configured ? state.senderFilter : 'eeccvirtual.cl')
   const [startDate, setStartDate] = useState(state.configured ? state.startDate : isoDaysAgo(30))
   const [autoSync, setAutoSync] = useState(state.configured ? state.autoSync : true)
   const [busy, setBusy] = useState<'save' | 'test' | 'sync' | 'disconnect' | null>(null)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
 
   // run performs one action with its pending state; true when it succeeded.
+  // The state reloads either way: a failed connection test records its error.
   async function run(kind: NonNullable<typeof busy>, op: () => Promise<OpResult>, ok: string): Promise<boolean> {
     setBusy(kind)
     try {
-      if (failed(await op())) return false
-      notify(ok, 'success')
+      const succeeded = !failed(await op())
+      if (succeeded) notify(ok, 'success')
       onChanged()
-      return true
+      return succeeded
     } finally {
       setBusy(null)
     }
@@ -138,7 +140,7 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Remitente del banco">
-          <input className={inputCls} value={senderFilter} onChange={(e) => setSenderFilter(e.target.value)} required placeholder="itau.cl" />
+          <input className={inputCls} value={senderFilter} onChange={(e) => setSenderFilter(e.target.value)} required placeholder="eeccvirtual.cl" />
         </Field>
         <Field label="Carpeta">
           <input className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="INBOX" />

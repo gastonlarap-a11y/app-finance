@@ -356,6 +356,25 @@ func TestSyncWithWrongPasswordRecordsTheError(t *testing.T) {
 	if r := h.svc.TestMailConnection(t.Context()); r.Error == nil {
 		t.Fatal("TestMailConnection with a wrong password = ok")
 	}
+	if acc := h.account(t); !strings.Contains(acc.LastError, "contraseña") {
+		t.Fatalf("last error after a failed connection test = %q, want the login error", acc.LastError)
+	}
+
+	// Saving new credentials drops the stale error; a successful test keeps it clear.
+	if r := h.svc.SaveMailAccount(t.Context(), MailAccountInput{
+		Host: "imap.test", Username: testUser, Password: testPassword, SenderFilter: "banco.test", StartDate: "2026-07-01",
+	}); r.Error != nil {
+		t.Fatalf("SaveMailAccount: %v", r.Error)
+	}
+	if acc := h.account(t); acc.LastError != "" {
+		t.Fatalf("last error after saving new credentials = %q, want none", acc.LastError)
+	}
+	if r := h.svc.TestMailConnection(t.Context()); r.Error != nil {
+		t.Fatalf("TestMailConnection with the right password: %v", r.Error)
+	}
+	if acc := h.account(t); acc.LastError != "" {
+		t.Fatalf("last error after a successful test = %q, want none", acc.LastError)
+	}
 }
 
 func TestGmailAppPasswordSpacesAreDropped(t *testing.T) {

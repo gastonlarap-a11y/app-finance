@@ -26,21 +26,23 @@ func levelFromString(s string) slog.Level {
 	}
 }
 
-// Setup installs the global slog logger. Call once at startup.
-// The level is switchable at runtime via the LOG_LEVEL config key.
-func Setup(level string) {
+// Setup installs the global slog logger: console plus a rotated JSON file
+// dir/app.log. Call once at startup. The level comes from the LOG_LEVEL config
+// key. dir must be absolute: a packaged app's working directory is "/" (not
+// writable), which is why logs never went to a relative path.
+func Setup(level, dir string) {
 	lvl := levelFromString(level)
 	var handlers []slog.Handler
 	handlers = append(handlers, tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:      lvl,
 		TimeFormat: time.Kitchen,
 	}))
-	if err := os.MkdirAll("logs", 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		// Console logging still works; lumberjack retries the dir on first write.
-		fmt.Fprintf(os.Stderr, "logger: no se pudo crear logs/: %v\n", err)
+		fmt.Fprintf(os.Stderr, "logger: no se pudo crear %s: %v\n", dir, err)
 	}
 	fileWriter := &lumberjack.Logger{
-		Filename:   filepath.Join("logs", "app.log"),
+		Filename:   filepath.Join(dir, "app.log"),
 		MaxSize:    10, // MB
 		MaxBackups: 3,
 		MaxAge:     30, // days
