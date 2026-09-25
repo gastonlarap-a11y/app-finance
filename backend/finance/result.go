@@ -355,6 +355,14 @@ type ImportItemView struct {
 	// USD items: the amount in CLP at the rate implied by the last payment of
 	// the USD card debt; "" when no such payment is known yet.
 	SuggestedAmountClp string `json:"suggestedAmountClp"`
+	// A pending charge that looks like a fixed expense's monthly bill (see
+	// suggestFixed): linking it marks that month paid instead of adding an expense.
+	SuggestedFixedID          *int64 `json:"suggestedFixedId"`
+	SuggestedFixedDescription string `json:"suggestedFixedDescription"`
+	SuggestedFixedPeriod      string `json:"suggestedFixedPeriod"`
+	// A confirmed item whose expense or income went to the trash can go back
+	// to review (RestoreImportItem).
+	Reopenable bool `json:"reopenable"`
 }
 
 type ImportItemsResult struct {

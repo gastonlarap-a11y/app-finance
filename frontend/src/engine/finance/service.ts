@@ -83,6 +83,7 @@ import {
 } from '@/engine/finance/period'
 import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
+import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
 import {
   HintCardPayment,
   HintNone,
@@ -662,26 +663,27 @@ function lineCandidate(st: CardStatement, l: CardStatementLine): ImportCandidate
     installmentNumber: l.installmentNumber,
     hint: HintNone,
   }
+  // Mirrors Go: the kind is decided here, not by the sign downstream — a
+  // negative line in a charge section (a reversal, a refunded fee) is money
+  // back — and the statement fixes every purchase's billing month.
   const charged = Money.fromString(l.installmentAmount).abs()
-  switch (l.section) {
-    case LineCredit:
-      c.kind = ImportKindCredit
-      c.amount = charged.toString()
-      break
-    case LinePurchase:
-    case LineVoluntary: {
-      let total = Money.fromString(l.operationAmount).abs()
-      // USD lines carry only the charged amount.
-      if (st.kind === StatementInternational || total.isZero()) total = charged
-      c.amount = total.toString()
-      if (l.installmentsTotal > 1) {
-        c.installmentAmount = charged.toString()
-        c.firstPeriod = addMonths(st.period, -(l.installmentNumber - 1))
-      }
-      break
-    }
-    default: // cargo
-      c.amount = charged.toString()
+  const operation = Money.fromString(l.operationAmount)
+  const reversal =
+    l.section !== LineCredit && (Money.fromString(l.installmentAmount).isNegative() || operation.isNegative())
+  if (l.section === LineCredit || reversal) {
+    c.kind = ImportKindCredit
+    c.amount = (charged.isZero() ? operation.abs() : charged).toString()
+  } else if (l.section === LinePurchase || l.section === LineVoluntary) {
+    let total = operation.abs()
+    // USD lines carry only the charged amount.
+    if (st.kind === StatementInternational || total.isZero()) total = charged
+    c.amount = total.toString()
+    if (l.installmentsTotal > 1) c.installmentAmount = charged.toString()
+    c.firstPeriod = addMonths(st.period, -(l.installmentNumber - 1))
+  } else {
+    // cargo: a fee or tax billed in the statement's month
+    c.amount = charged.toString()
+    c.firstPeriod = st.period
   }
   return c
 }
@@ -701,6 +703,41 @@ function suggestClp(it: ImportItem, fx: string): string {
   } catch {
     return ''
   }
+}
+
+// clpAmountOf mirrors the Go helper: the item's amount in pesos (its own for a
+// CLP item, the suggested conversion for a USD one), or null when unknown.
+function clpAmountOf(it: ImportItem, suggestedClp: string): Money | null {
+  if (it.currency === 'CLP') return Money.fromString(it.amount)
+  return suggestedClp === '' ? null : Money.fromString(suggestedClp)
+}
+
+// billingPeriodOf mirrors the Go helper: the month the statement states, else
+// the date rolled by the card's cutoff (0 = no card).
+function billingPeriodOf(it: ImportItem, billingDay: number): string {
+  return it.firstPeriod !== '' ? it.firstPeriod : periodOf(storedDateParts(it.date), billingDay)
+}
+
+// requireKind mirrors the Go helper: a bank credit is income, never an expense
+// (and a charge is never income).
+function requireKind(item: ImportItem, kind: string): ReturnType<typeof newError> | null {
+  if (item.kind === kind) return null
+  return item.kind === ImportKindCredit
+    ? newError(ErrValidation, 'es un abono del banco: regístralo como ingreso')
+    : newError(ErrValidation, 'es un cargo del banco: regístralo como gasto')
+}
+
+// requirePesos mirrors the Go helper: an item billed in another currency needs
+// a whole-peso amount (CLP has no minor unit) that is not the foreign figure.
+function requirePesos(item: ImportItem, amount: Money): ReturnType<typeof newError> | null {
+  if (item.currency === 'CLP') return null
+  if (!amount.isInteger()) {
+    return newError(ErrValidation, 'ingresa el monto en pesos, sin decimales')
+  }
+  if (amount.cmp(Money.fromString(item.amount)) === 0) {
+    return newError(ErrValidation, `el monto es el mismo que en ${item.currency}: ingrésalo convertido a pesos`)
+  }
+  return null
 }
 
 // snakeCase maps a model field to its column (creditLimit → credit_limit).
@@ -1171,18 +1208,20 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // reconcilePaymentLine marks as conciliado the cartola card-payment item that
   // a statement payment line accounts for, and learns the USD rate from an
-  // international one. Returns how many items it matched.
+  // international one. Returns how many items it matched. A payment already
+  // discarded (it is not an expense) still counts, as in Go.
   function reconcilePaymentLine(st: CardStatement, l: CardStatementLine): number {
     const paid = Money.fromString(l.installmentAmount).abs()
     const international = st.kind === StatementInternational
     const rows = db.query(
-      `SELECT * FROM import_items WHERE user_id = ? AND status = ? AND hint = ? AND statement_line_id IS NULL
+      `SELECT * FROM import_items WHERE user_id = ? AND status IN (?, ?) AND hint = ? AND statement_line_id IS NULL
        AND ABS(julianday(date) - julianday(?)) <= ?
        AND ${international ? 'description LIKE ?' : 'amount = ?'}
        ORDER BY ABS(julianday(date) - julianday(?)) ASC, id ASC`,
       [
         uid(),
         ImportPendiente,
+        ImportDescartado,
         HintCardPayment,
         l.operationDate,
         paymentWindowDays,
@@ -1370,6 +1409,79 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
     }
     return { fixed, amountsByID }
+  }
+
+  // fixedSuggester mirrors Go's fixedIndex.suggest: the live fixed expense whose
+  // still-unpaid month the item most likely bills — same name, amount within
+  // the tolerance (closest wins), same card when both name one.
+  function fixedSuggester(): (it: ImportItem, period: string, cardId: number | null, clp: Money | null) => FixedExpense | null {
+    const { fixed, amountsByID } = loadFixed(false)
+    const paid = new Set<string>()
+    if (fixed.length > 0) {
+      const placeholders = fixed.map(() => '?').join(', ')
+      const ids: SqlValue[] = fixed.map((fe) => fe.id)
+      for (const r of db.query(
+        `SELECT fixed_expense_id, period FROM fixed_expense_payments WHERE fixed_expense_id IN (${placeholders})`,
+        ids,
+      )) {
+        paid.add(`${asNumber(r.fixed_expense_id)}|${asString(r.period)}`)
+      }
+    }
+    return (it, period, cardId, clp) => {
+      if (period === '' || clp === null || clp.isZero()) return null
+      let best: FixedExpense | null = null
+      let bestGap: Money | null = null
+      for (const fe of fixed) {
+        if (!activeIn(fe, period) || paid.has(`${fe.id}|${period}`)) continue
+        if (fe.cardId != null && cardId != null && fe.cardId !== cardId) continue
+        if (!namesMatch(fe.description, it.description)) continue
+        const gap = amountGap(clp, resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+        if (gap === null) continue
+        if (bestGap === null || gap.cmp(bestGap) < 0) {
+          best = fe
+          bestGap = gap
+        }
+      }
+      return best
+    }
+  }
+
+  // reopenableIds mirrors Go's reopenableItems: confirmed items whose every
+  // target (expense, income, fixed expense) is in the trash or gone.
+  function reopenableIds(): Set<number> {
+    const rows = db.query(
+      `SELECT ii.id FROM import_items AS ii
+       LEFT JOIN expenses AS e ON e.id = ii.expense_id
+       LEFT JOIN incomes AS inc ON inc.id = ii.income_id
+       LEFT JOIN fixed_expenses AS f ON f.id = ii.fixed_expense_id
+       WHERE ii.user_id = ? AND ii.status = ?
+         AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
+         AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
+         AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`,
+      [uid(), ImportConfirmado],
+    )
+    return new Set(rows.map((r) => asNumber(r.id)))
+  }
+
+  // applyMonthAmount mirrors the Go helper: `amount` becomes the fixed
+  // expense's amount for `period` alone (the next month keeps the plan).
+  function applyMonthAmount(fe: FixedExpense, period: string, amount: Money): void {
+    const rows = db
+      .query('SELECT * FROM fixed_expense_amounts WHERE fixed_expense_id = ?', [fe.id])
+      .map(rowToFixedExpenseAmount)
+    const planned = resolveAsOf(rows, period)
+    if (planned.cmp(amount) === 0) return
+    const next = addMonths(period, 1)
+    const upsert = (from: string, v: Money) =>
+      db.exec(
+        `INSERT INTO fixed_expense_amounts (fixed_expense_id, effective_from, amount) VALUES (?, ?, ?)
+         ON CONFLICT (fixed_expense_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
+        [fe.id, from, v.toString()],
+      )
+    if (!rows.some((r) => r.effectiveFrom === next) && (fe.endPeriod === '' || next <= fe.endPeriod)) {
+      upsert(next, resolveAsOf(rows, next))
+    }
+    upsert(period, amount)
   }
 
   // fixedChargesFor builds the movimientos for fixed expenses billed in `period`.
@@ -2815,11 +2927,19 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const cardByDigits = cardsByLastDigits(listCardsActive())
       const rules = listMerchantRules()
       const fx = latestFxRate()
+      const suggestFixed = status === ImportPendiente ? fixedSuggester() : null
+      const reopenable = status === ImportConfirmado ? reopenableIds() : new Set<number>()
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
         const reviewable = it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
         const dup = reviewable ? findDuplicateExpense(it, card?.id ?? null) : null
+        const suggestedClp = suggestClp(it, fx)
+        const fixedPeriod = billingPeriodOf(it, card?.billingDay ?? 0)
+        const fixed =
+          suggestFixed && it.status === ImportPendiente && it.kind === ImportKindExpense
+            ? suggestFixed(it, fixedPeriod, card?.id ?? null, clpAmountOf(it, suggestedClp))
+            : null
         const matchedRow =
           it.matchedItemId != null
             ? db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [it.matchedItemId, uid()])[0]
@@ -2837,7 +2957,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           duplicateDescription: dup?.description ?? '',
           matchedSource: matched?.source ?? '',
           matchedDate: matched?.date ?? '',
-          suggestedAmountClp: suggestClp(it, fx),
+          suggestedAmountClp: suggestedClp,
+          suggestedFixedId: fixed?.id ?? null,
+          suggestedFixedDescription: fixed?.description ?? '',
+          suggestedFixedPeriod: fixed ? fixedPeriod : '',
+          reopenable: reopenable.has(it.id),
         }
       })
       return { data }
@@ -2866,10 +2990,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const pending = loadPendingItem(id)
         if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
         const item = pending.item
-        // A statement cuota n/N places the purchase exactly: cuota 1 was billed
-        // n-1 months before the statement, and those earlier cuotas are paid.
-        const placed =
-          item.firstPeriod !== '' && ex.kind === KindCuotas && ex.installmentsTotal === item.installmentsTotal
+        const refused = requireKind(item, ImportKindExpense) ?? requirePesos(item, ex.installmentAmount)
+        if (refused) return { error: refused }
+        // A card statement places the purchase exactly: cuota n/N started n-1
+        // months before it (the earlier cuotas are paid), and a one-payment
+        // purchase or fee is billed in the statement's month.
+        const placed = item.firstPeriod !== '' && ex.installmentsTotal === item.installmentsTotal
         const created = placed
           ? insertExpense(ex, billing.day, item.firstPeriod, item.installmentNumber - 1)
           : insertExpense(ex, billing.day)
@@ -2893,12 +3019,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     async LinkImportItem(id: number, expenseID: number): Promise<OpResult> {
       return db.transaction((): OpResult => {
         const pending = loadPendingItem(id)
-        if (pending.error) return { error: pending.error }
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const wrongKind = requireKind(pending.item, ImportKindExpense)
+        if (wrongKind) return { error: wrongKind }
         const ok = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
           expenseID,
           uid(),
         ])
         if (ok.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        // An expense is one purchase: it takes the sighting of one item only.
+        const taken = db.query('SELECT 1 FROM import_items WHERE user_id = ? AND expense_id = ? AND id <> ?', [
+          uid(),
+          expenseID,
+          id,
+        ])
+        if (taken.length > 0) {
+          return { error: newError(ErrConflict, 'ese gasto ya está enlazado a otro movimiento del banco') }
+        }
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           expenseID,
@@ -2913,8 +3050,58 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return moveImportItem(id, ImportPendiente, ImportDescartado)
     },
 
+    async LinkImportItemToFixed(id: number, fixedID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      return db.transaction((): OpResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const item = pending.item
+        const wrongKind = requireKind(item, ImportKindExpense)
+        if (wrongKind) return { error: wrongKind }
+        const fe = ownFixedExpense(fixedID)
+        if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+        const outside = requireActiveIn(fe, period, 'enlazarlo')
+        if (outside) return { error: outside }
+        const taken = db.query(
+          'SELECT 1 FROM import_items WHERE user_id = ? AND fixed_expense_id = ? AND fixed_period = ?',
+          [uid(), fixedID, period],
+        )
+        if (taken.length > 0) {
+          return { error: newError(ErrConflict, 'ese mes del gasto fijo ya está enlazado a otro movimiento del banco') }
+        }
+        if (item.currency === 'CLP') applyMonthAmount(fe, period, Money.fromString(item.amount))
+        db.exec(
+          `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
+           ON CONFLICT (fixed_expense_id, period) DO UPDATE SET paid_at = EXCLUDED.paid_at`,
+          [fixedID, period, nowIso()],
+        )
+        db.exec(
+          'UPDATE import_items SET status = ?, fixed_expense_id = ?, fixed_period = ? WHERE id = ? AND user_id = ?',
+          [ImportConfirmado, fixedID, period, id, uid()],
+        )
+        return {}
+      })
+    },
+
+    // RestoreImportItem mirrors Go: a discarded item, or a confirmed one whose
+    // targets all went to the trash, goes back to review without its old link.
     async RestoreImportItem(id: number): Promise<OpResult> {
-      return moveImportItem(id, ImportDescartado, ImportPendiente)
+      const row = db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [id, uid()])[0]
+      if (!row) return { error: newError(ErrNotFound, 'movimiento no encontrado') }
+      if (rowToImportItem(row).status !== ImportConfirmado) return moveImportItem(id, ImportDescartado, ImportPendiente)
+      return db.transaction((): OpResult => {
+        if (!reopenableIds().has(id)) {
+          return {
+            error: newError(ErrConflict, 'el movimiento sigue registrado: elimina primero el gasto o ingreso que creó'),
+          }
+        }
+        db.exec(
+          `UPDATE import_items SET status = ?, expense_id = NULL, income_id = NULL, fixed_expense_id = NULL,
+           fixed_period = '' WHERE id = ? AND user_id = ? AND status = ?`,
+          [ImportPendiente, id, uid(), ImportConfirmado],
+        )
+        return {}
+      })
     },
 
     async ListMerchantRules(): Promise<MerchantRule[]> {
@@ -2942,7 +3129,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const amt = parsed.amount
       return db.transaction((): IncomeResult => {
         const pending = loadPendingItem(id)
-        if (pending.error) return { error: pending.error }
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const refused = requireKind(pending.item, ImportKindCredit) ?? requirePesos(pending.item, amt)
+        if (refused) return { error: refused }
         const inc = rowToIncome(
           insertReturning('incomes', {
             userId: uid(),

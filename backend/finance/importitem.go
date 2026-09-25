@@ -63,6 +63,10 @@ type ImportItem struct {
 	InstallmentAmount string `bun:"installment_amount,notnull" json:"installmentAmount"` // the bank's exact cuota; "" = unknown
 	FirstPeriod       string `bun:"first_period,notnull" json:"firstPeriod"`             // YYYY-MM of cuota 1; "" = from the date
 	IncomeID          *int64 `bun:"income_id" json:"incomeId"`
+
+	// A charge linked to a fixed expense marks that month of it as paid.
+	FixedExpenseID *int64 `bun:"fixed_expense_id" json:"fixedExpenseId"`
+	FixedPeriod    string `bun:"fixed_period,notnull" json:"fixedPeriod"` // YYYY-MM marked paid; "" = not linked
 }
 
 // Import item kinds.

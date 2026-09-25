@@ -172,6 +172,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.ConfirmImportItem(ctx, itemID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1, "").Error}
 		}},
 		{"LinkImportItem", func() finance.OpResult { return fin.LinkImportItem(ctx, itemID, expense.Data.ID) }},
+		{"LinkImportItemToFixed", func() finance.OpResult { return fin.LinkImportItemToFixed(ctx, itemID, fe.Data.ID, period) }},
 		{"DiscardImportItem", func() finance.OpResult { return fin.DiscardImportItem(ctx, itemID) }},
 		{"RestoreImportItem", func() finance.OpResult { return fin.RestoreImportItem(ctx, itemID) }},
 		{"DeleteMerchantRule", func() finance.OpResult { return fin.DeleteMerchantRule(ctx, rules[0].ID) }},
