@@ -8,32 +8,19 @@ import { wrapOo1Db } from '@/engine/db/sqlite'
 import { runMigrations } from '@/engine/db/migrator'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession, createUsersService } from '@/engine/users/service'
-import { asNullableString, asNumber } from '@/engine/db/types'
+import { inspectBackup, type ImportSummary } from '@/engine/db/importCheck'
+
+export type { ImportSummary } from '@/engine/db/importCheck'
 
 export const DB_PATH = '/app-finance.sqlite3'
-
-// ImportSummary is what the imported file actually turned out to contain. The
-// UI shows it because "imported fine but you are looking at a month the backup
-// has no data for" and "the import silently did nothing" look identical
-// otherwise.
-export interface ImportSummary {
-  users: number
-  expenses: number
-  incomes: number
-  // migrated counts migrations applied on top of the imported file (an old
-  // backup catching up with the current schema).
-  migrated: number
-  // Period range holding data, YYYY-MM, null when the file has no movements.
-  firstPeriod: string | null
-  lastPeriod: string | null
-}
 
 export interface WorkerApi {
   call(service: 'finance' | 'users', method: string, args: unknown[]): Promise<unknown>
   exportDb(): Promise<Uint8Array>
-  // importDb replaces the whole database file and reports what came in. The
-  // caller must reload the page afterwards: this worker's `ready` still holds
-  // the handle of the database that was just replaced.
+  // importDb checks the file in memory first (see inspectBackup), then replaces
+  // the whole database, restoring the previous one if anything fails, and
+  // reports what came in. The caller must reload the page afterwards (also
+  // after a failure): this worker's `ready` handle was closed for the swap.
   importDb(bytes: Uint8Array): Promise<ImportSummary>
 }
 
@@ -63,31 +50,8 @@ const ready = (async () => {
     finance: createFinanceService(db, session),
     users: createUsersService(db, session),
   }
-  return { services, poolUtil, handle }
+  return { sqlite3, services, poolUtil, handle }
 })()
-
-// summarize reads the freshly imported database. Counts ignore soft-deleted
-// rows: those live in the Papelera and would inflate a "your data is here" number.
-function summarize(db: ReturnType<typeof wrapOo1Db>, migrated: number): ImportSummary {
-  const count = (sql: string) => asNumber(db.query(sql)[0]?.n)
-  const periods = db.query(
-    `SELECT MIN(period) AS first, MAX(period) AS last FROM (
-       SELECT i.period FROM installments i
-         JOIN expenses e ON e.id = i.expense_id
-        WHERE e.deleted_at IS NULL
-       UNION ALL
-       SELECT period FROM incomes WHERE deleted_at IS NULL
-     )`,
-  )[0]
-  return {
-    users: count('SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL'),
-    expenses: count('SELECT COUNT(*) AS n FROM expenses WHERE deleted_at IS NULL'),
-    incomes: count('SELECT COUNT(*) AS n FROM incomes WHERE deleted_at IS NULL'),
-    migrated,
-    firstPeriod: asNullableString(periods?.first),
-    lastPeriod: asNullableString(periods?.last),
-  }
-}
 
 const api: WorkerApi = {
   async call(service, method, args) {
@@ -108,21 +72,33 @@ const api: WorkerApi = {
   },
 
   async importDb(bytes) {
-    const { poolUtil, handle } = await ready
-    handle.close()
-    await poolUtil.importDb(DB_PATH, bytes)
+    const { sqlite3, poolUtil, handle } = await ready
+    // Throws ImportRejected (a Spanish sentence) before OPFS is touched.
+    const summary = inspectBackup(sqlite3, bytes)
 
-    // Reopen the imported file to prove it is usable and report its contents.
-    // A backup older than the current schema catches up here, exactly like a
-    // desktop startup would. This connection is closed right after: the page
-    // reload that follows builds the real one.
-    const probe = new poolUtil.OpfsSAHPoolDb(DB_PATH)
+    const previous = await poolUtil.exportFile(DB_PATH)
+    handle.close()
     try {
-      const db = wrapOo1Db(probe)
-      db.exec('PRAGMA foreign_keys = ON')
-      return summarize(db, runMigrations(db))
-    } finally {
-      probe.close()
+      await poolUtil.importDb(DB_PATH, bytes)
+      // Reopen the stored file and bring it to the current schema, exactly
+      // like a desktop startup would. The page reload that follows builds the
+      // real connection.
+      const probe = new poolUtil.OpfsSAHPoolDb(DB_PATH)
+      try {
+        const db = wrapOo1Db(probe)
+        db.exec('PRAGMA foreign_keys = ON')
+        runMigrations(db)
+      } finally {
+        probe.close()
+      }
+      return summary
+    } catch (err) {
+      // Put the previous database back: a failed restore must not cost the
+      // user the data they had.
+      await poolUtil.importDb(DB_PATH, previous)
+      throw new Error(
+        `No se pudo importar; tus datos anteriores quedaron intactos (recarga la página): ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
   },
 }

@@ -4,15 +4,65 @@ import App from '@/App'
 import '@/index.css'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
+// Fatal replaces the app with a message. It always offers a reload: an
+// installed PWA has no browser chrome, so without the button a stuck screen
+// could only be left by killing the app.
 function Fatal({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
       <div className="max-w-md space-y-3 text-center">
         <h1 className="text-xl font-semibold">{title}</h1>
         <p className="text-sm text-slate-400">{children}</p>
+        <button
+          type="button"
+          className="rounded-base bg-primary px-4 py-2 text-sm font-medium text-white"
+          onClick={() => window.location.reload()}
+        >
+          Recargar
+        </button>
       </div>
     </div>
   )
+}
+
+function AlreadyOpen() {
+  return (
+    <Fatal title="La app ya está abierta">
+      App Finance está abierta en otra pestaña o ventana, y sólo una puede usar tus datos a la vez.
+      Ciérrala y toca «Recargar».
+    </Fatal>
+  )
+}
+
+// startWebPlatform wires what only the PWA needs. Loaded dynamically so the
+// desktop bundle never pulls the PWA's virtual module.
+async function startWebPlatform(): Promise<void> {
+  const [{ registerSW }, { announceUpdate }] = await Promise.all([
+    import('virtual:pwa-register'),
+    import('@/lib/pwaUpdate'),
+  ])
+  const updateSW = registerSW({ onNeedRefresh: () => announceUpdate(() => updateSW(true)) })
+
+  // Ask the browser to keep OPFS through storage pressure. WebKit decides on
+  // its own heuristics (installing to the home screen is the documented
+  // signal), so the answer is only shown in Ajustes, never required.
+  if (typeof navigator.storage?.persist === 'function') {
+    void navigator.storage.persist().catch(() => false) // best effort
+  }
+
+  // A lazy chunk that failed to load (e.g. after a deploy) cannot recover in
+  // place: reload once, and not in a loop if the chunk is truly gone.
+  window.addEventListener('vite:preloadError', (e) => {
+    const key = 'app-finance:preload-reload'
+    try {
+      if (sessionStorage.getItem(key)) return
+      sessionStorage.setItem(key, '1')
+    } catch {
+      return // no storage: rather show the error than risk a reload loop
+    }
+    e.preventDefault()
+    window.location.reload()
+  })
 }
 
 function UnsupportedStorage() {
@@ -57,6 +107,16 @@ async function start() {
       )
       return
     }
+    const { acquireDbLock } = await import('@/services/web/worker-client')
+    if (!(await acquireDbLock())) {
+      root.render(
+        <React.StrictMode>
+          <AlreadyOpen />
+        </React.StrictMode>,
+      )
+      return
+    }
+    await startWebPlatform()
     reportEngineFailures(root)
   }
   root.render(

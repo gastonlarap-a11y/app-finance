@@ -354,15 +354,34 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   `mailsync` sets and the web's `web_prefs` table are each ignored by the other side).
 - **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
   (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`). Import validates the file's
-  bytes first (`engine/db/dbfile.ts`), then reopens the imported database to report what it held
-  (`ImportSummary`) before the mandatory page reload. **No `window.confirm`/`alert` anywhere in this
+  bytes first (`engine/db/dbfile.ts`), then **proves the file in memory before OPFS is touched**
+  (`engine/db/importCheck.ts`: `sqlite3_deserialize` into `:memory:`, `PRAGMA integrity_check`, the
+  App Finance tables, the newer-schema guard, the migrations run on that copy); only then it swaps
+  the stored file, keeping the previous bytes and restoring them if the swap fails
+  (sqlite-wasm's own `importDb` checks just the header and overwrites first). The result
+  (`ImportSummary`) shows before the mandatory page reload. Export hands the file to the Share Sheet;
+  when Safari refuses it because the tap was spent while the worker exported (`share()` needs a live
+  user activation), the button turns into «Compartir respaldo» and its own tap shares the ready file.
+  Ajustes shows whether the browser granted persistent storage (`navigator.storage.persist()`, asked
+  at startup; WebKit grants it on its own heuristics, installing to the home screen being the
+  documented signal) and when a backup last left this device. **No `window.confirm`/`alert` anywhere in this
   flow** and **no `accept` on the file input**: Safari suppresses native dialogs without a live user
   activation, and iPadOS greys out `.db`/`.sqlite` files when `accept` is set (no system UTI owns
   those extensions). Both turned a failed restore into a screen that just looked empty.
 - **Tests**: `npm test` (vitest) runs the engine against the same sqlite-wasm build in Node
   (in-memory), including a mirror-integration suite (`engine/finance/service.test.ts`).
 - **Deploy**: `.github/workflows/deploy-web.yml` publishes `frontend/dist` (built with
-  `base: /app-finance/`) to GitHub Pages on pushes to `main`.
+  `base: /app-finance/`) to GitHub Pages on pushes to `main`. The service worker registers in
+  `prompt` mode from `main.tsx` (`injectRegister: false`, so the desktop bundle never imports the
+  PWA's virtual module): a new deploy waits for the user's «Actualizar» in `WebUpdateBanner`
+  (`lib/pwaUpdate.ts`) instead of swapping files under an open page, and a lazy chunk that fails to
+  load (`vite:preloadError`) reloads once.
+- **One tab owns the database**: opfs-sahpool admits a single connection, so `main.tsx` takes the
+  `app-finance-db` Web Lock (`acquireDbLock`) before the engine starts; a second tab or window shows
+  "La app ya está abierta" instead of failing inside SQLite. The worker client races every call
+  against the worker's `error`/`messageerror` events, so a worker that cannot load (a chunk a new
+  deploy no longer serves) turns into an error with a reload button, not an endless spinner.
+  `Fatal` screens always offer «Recargar»: an installed PWA has no browser reload.
 
 ## 18. Import inbox (bank emails & statements)
 
@@ -378,8 +397,17 @@ expense until the user confirms it:
   **reconciles** across source families: a statement line matching an unmatched alert email (same
   amount/currency, compatible last digits, ±1 day) is stored `conciliado` so a purchase is never
   reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
-  `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`) and a live
-  expense that looks like the same purchase (±2 days, cuota or total).
+  `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`), a live
+  expense that looks like the same purchase (±2 days, cuota or total), and a fixed expense whose
+  unpaid month the charge looks like the bill of (`fixedmatch.go`, Actual Budget's schedule model:
+  a significant word of the name must match, the amount only within ±7.5 %, because a fixed
+  amount is an estimate). `LinkImportItemToFixed` marks that month paid and, for a CLP charge,
+  makes the bank's real amount that month's amount only (an override at the month, the plan
+  restored the month after). The item's `kind` is fixed at staging and every confirm path checks
+  it: an abono never becomes an expense, nor a charge an income. A USD item needs a whole-peso
+  amount other than its USD figure (CLP has no minor unit, ISO 4217). A confirmed item whose
+  expense, income or fixed expense went to the trash can be reopened (`RestoreImportItem`,
+  `reopenable` in the view); an expense takes the link of one item only.
 - **Statements (PDF, desktop + web)**: parsed in the frontend only (`frontend/src/lib/statements/`),
   then staged with `StageImport`. `pdfText.ts` is the only pdf.js module (dynamic import; its worker
   is precached by the PWA). Parsers work on positioned runs: **rows are rebuilt from y coordinates**
@@ -397,10 +425,13 @@ expense until the user confirms it:
   movement by section `pago|compra|voluntario|cargo|abono`, cuota n/N and the bank's exact cuota)
   and `card_statement_schedule` (the bank's coming months). In one transaction it links a cuota n
   that continues an app expense (same card, N, cuota, date ±1) to that installment, reconciles the
-  statement's payments with the cartola's `card_payment` items (both directions; the USD payment
-  also teaches the CLP/USD rate → `suggestedAmountClp`), and stages the rest: purchases keep
-  `installment_number`/`first_period` so `ConfirmImportItem` places cuota 1 in the right month and
-  marks the earlier ones paid; credits stage as `kind = abono` → `ConfirmImportItemAsIncome`. The
+  statement's payments with the cartola's `card_payment` items (both directions; pending or already
+  discarded, since a discarded payment is the same bank fact; the USD payment also teaches the
+  CLP/USD rate → `suggestedAmountClp`), and stages the rest: every purchase and fee keeps
+  `first_period` (cuota 1's month; the statement's own month for a one-payment purchase or a fee)
+  so `ConfirmImportItem` bills it in the month the bank did and marks earlier cuotas paid; credits,
+  and negative lines of any charge section (reversals, refunded fees), stage as `kind = abono` →
+  `ConfirmImportItemAsIncome`. The
   parser cross-checks the bank's totals (sections, A+B+C+D, credit used, USD debt) into warnings;
   its fixture (`itau/testdata/cardStatementRuns.ts`) is synthetic text on the real geometry.
 - **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,
@@ -431,4 +462,5 @@ Constraints, all verified on macOS with the real bundle and the real updater cod
 - The app refuses to self-update when it cannot write next to itself (read-only folder, mounted
   `.dmg`), runs translocated (not moved to Aplicaciones) or is a `wails3 dev` build.
 - Windows installs per user (`INSTALL_SCOPE: user`) so the exe can be replaced without UAC.
-- The PWA (web build) updates through its service worker; `services/web/updates.ts` is a stub.
+- The PWA (web build) updates through its service worker (prompted, see §17);
+  `services/web/updates.ts` is a stub.

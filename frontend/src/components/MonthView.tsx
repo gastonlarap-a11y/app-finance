@@ -81,9 +81,12 @@ export function MonthView() {
   const { summary, expenses, categories, merchants } = query.data
   const stale = query.status === 'loading'
 
+  // The month comes from the rows shown, not the navigation atom: while the next
+  // month loads, the previous month's rows stay on screen (dimmed) and a tap on
+  // one must mark ITS month, not the one being loaded.
   function setPaid(m: Movimiento, paid: boolean): Promise<OpResult> {
     return m.source === SOURCE_FIJO && m.fixedId != null
-      ? FinanceService.SetFixedExpensePaid(m.fixedId, period, paid)
+      ? FinanceService.SetFixedExpensePaid(m.fixedId, summary.period, paid)
       : FinanceService.SetInstallmentPaid(m.installmentId, paid)
   }
 
@@ -197,7 +200,7 @@ export function MonthView() {
             action={
               <div className="flex items-center gap-2">
                 {summary.movimientos.length > 0 && (
-                  <ExportButton build={() => monthTable(summary)} basename={exportBasename('mes', period)} />
+                  <ExportButton build={() => monthTable(summary)} basename={exportBasename('mes', summary.period)} />
                 )}
                 <Button onClick={openNewExpense}>
                   + Agregar gasto <kbd className="ml-1 hidden rounded bg-white/15 px-1 text-xs md:inline">N</kbd>

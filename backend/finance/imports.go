@@ -312,17 +312,36 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 	if err != nil {
 		return nil, err
 	}
+	var fixed fixedIndex
+	if status == ImportPendiente {
+		if fixed, err = s.loadFixedIndex(ctx, uid); err != nil {
+			return nil, err
+		}
+	}
+	reopenable := map[int64]bool{}
+	if status == ImportConfirmado {
+		if reopenable, err = reopenableItems(ctx, s.db, uid); err != nil {
+			return nil, err
+		}
+	}
 
 	out := make([]ImportItemView, 0, len(items))
 	for _, it := range items {
-		v := ImportItemView{ImportItem: it, SuggestedPattern: suggestPattern(it.Description)}
+		v := ImportItemView{ImportItem: it, SuggestedPattern: suggestPattern(it.Description), Reopenable: reopenable[it.ID]}
+		billingDay := 0
 		if c, ok := cardByDigits[it.CardLastDigits]; ok {
-			v.CardID, v.CardName = &c.ID, c.Name
+			v.CardID, v.CardName, billingDay = &c.ID, c.Name, c.BillingDay
 		}
 		if r, ok := ruleFor(rules, it.Description); ok {
 			v.RulePattern, v.SuggestedMerchant, v.SuggestedCategory = r.Pattern, r.Merchant, r.Category
 		}
 		v.SuggestedAmountClp = suggestClp(it, fx)
+		if it.Status == ImportPendiente && it.Kind == ImportKindExpense {
+			period := billingPeriodOf(it, billingDay)
+			if fe, ok := fixed.suggest(it, period, v.CardID, clpAmountOf(it, v.SuggestedAmountClp)); ok {
+				v.SuggestedFixedID, v.SuggestedFixedDescription, v.SuggestedFixedPeriod = &fe.ID, fe.Description, period
+			}
+		}
 		if it.Status == ImportPendiente && it.Kind != ImportKindCredit && it.Currency == "CLP" {
 			dup, err := s.findDuplicateExpense(ctx, uid, it, v.CardID)
 			if err != nil {
@@ -343,6 +362,18 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// clpAmountOf is the item's amount in pesos: its own for a CLP item, the
+// suggested conversion for a USD one, zero when neither is known.
+func clpAmountOf(it ImportItem, suggestedClp string) types.Decimal {
+	if it.Currency == "CLP" {
+		return it.Amount
+	}
+	if v, err := types.New(suggestedClp); err == nil {
+		return v
+	}
+	return types.Zero()
 }
 
 // suggestClp converts a USD item at the given CLP-per-USD rate, rounded to
@@ -421,6 +452,37 @@ func loadPendingItem(ctx context.Context, db bun.IDB, uid, id int64) (*ImportIte
 	return item, nil
 }
 
+// requireKind fails unless the item is of the kind the action handles: a bank
+// credit is income, never an expense (and a charge is never income). The kind
+// is fixed when the item is staged, so the amount's sign never has to decide.
+func requireKind(item *ImportItem, kind string) error {
+	if item.Kind == kind {
+		return nil
+	}
+	if item.Kind == ImportKindCredit {
+		return shared.NewError(shared.ErrValidation, "es un abono del banco: regístralo como ingreso")
+	}
+	return shared.NewError(shared.ErrValidation, "es un cargo del banco: regístralo como gasto")
+}
+
+// requirePesos guards the amount entered for an item billed in another
+// currency: it must be a peso amount (CLP has no minor unit, ISO 4217) and not
+// the foreign figure copied as is — US$119 saved as $119 would silently
+// understate the month.
+func requirePesos(item *ImportItem, amount types.Decimal) error {
+	if item.Currency == "CLP" {
+		return nil
+	}
+	if !amount.Decimal.IsInteger() {
+		return shared.NewError(shared.ErrValidation, "ingresa el monto en pesos, sin decimales")
+	}
+	if amount.Cmp(item.Amount) == 0 {
+		return shared.NewError(shared.ErrValidation,
+			fmt.Sprintf("el monto es el mismo que en %s: ingrésalo convertido a pesos", item.Currency))
+	}
+	return nil
+}
+
 // ConfirmImportItem turns a pending item into an expense (with the values the
 // user reviewed) in one transaction. A non-empty rulePattern also saves the
 // merchant/category rule for descriptors starting with it.
@@ -446,13 +508,20 @@ func (s *FinanceService) ConfirmImportItem(
 		if err != nil {
 			return err
 		}
+		if err := requireKind(item, ImportKindExpense); err != nil {
+			return err
+		}
+		if err := requirePesos(item, ex.InstallmentAmount); err != nil {
+			return err
+		}
 		if _, err := tx.NewInsert().Model(ex).Returning("*").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting expense: %w", err)
 		}
-		// A statement cuota n/N places the purchase exactly: cuota 1 was billed
-		// n-1 months before the statement, and those earlier cuotas are paid.
+		// A card statement places the purchase exactly: cuota n/N started n-1
+		// months before it (and the earlier cuotas are paid), and a one-payment
+		// purchase or fee is billed in the statement's month.
 		first, paid := "", 0
-		if item.FirstPeriod != "" && ex.Kind == KindCuotas && ex.InstallmentsTotal == item.InstallmentsTotal {
+		if item.FirstPeriod != "" && ex.InstallmentsTotal == item.InstallmentsTotal {
 			first, paid = item.FirstPeriod, item.InstallmentNumber-1
 		}
 		if err := generateInstallmentsFrom(ctx, tx, ex, billingDay, first, paid); err != nil {
@@ -475,11 +544,16 @@ func (s *FinanceService) ConfirmImportItem(
 }
 
 // LinkImportItem marks a pending item as the bank's sighting of an expense the
-// user had already entered by hand, instead of creating a duplicate.
+// user had already entered by hand, instead of creating a duplicate. An
+// expense is one purchase: it takes the sighting of one item only.
 func (s *FinanceService) LinkImportItem(ctx context.Context, id, expenseID int64) OpResult {
 	uid := s.uid()
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := loadPendingItem(ctx, tx, uid, id); err != nil {
+		item, err := loadPendingItem(ctx, tx, uid, id)
+		if err != nil {
+			return err
+		}
+		if err := requireKind(item, ImportKindExpense); err != nil {
 			return err
 		}
 		ok, err := tx.NewSelect().Model((*Expense)(nil)).Where("id = ? AND user_id = ?", expenseID, uid).Exists(ctx)
@@ -488,6 +562,14 @@ func (s *FinanceService) LinkImportItem(ctx context.Context, id, expenseID int64
 		}
 		if !ok {
 			return shared.NewError(shared.ErrNotFound, "gasto no encontrado")
+		}
+		taken, err := tx.NewSelect().Model((*ImportItem)(nil)).
+			Where("user_id = ? AND expense_id = ? AND id <> ?", uid, expenseID, id).Exists(ctx)
+		if err != nil {
+			return fmt.Errorf("checking expense links: %w", err)
+		}
+		if taken {
+			return shared.NewError(shared.ErrConflict, "ese gasto ya está enlazado a otro movimiento del banco")
 		}
 		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportConfirmado).Set("expense_id = ?", expenseID).
@@ -506,9 +588,66 @@ func (s *FinanceService) DiscardImportItem(ctx context.Context, id int64) OpResu
 	return s.moveImportItem(ctx, id, ImportPendiente, ImportDescartado)
 }
 
-// RestoreImportItem returns a discarded item to the pending list.
+// RestoreImportItem returns an item to the pending list: a discarded one, or
+// a confirmed one whose expense, income or fixed expense went to the trash
+// (or is gone) — otherwise that bank movement could never be reviewed again.
+// Reopening forgets the link; a fixed month it marked paid stays as it is.
 func (s *FinanceService) RestoreImportItem(ctx context.Context, id int64) OpResult {
-	return s.moveImportItem(ctx, id, ImportDescartado, ImportPendiente)
+	uid := s.uid()
+	item := new(ImportItem)
+	err := s.db.NewSelect().Model(item).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "movimiento no encontrado")}
+	}
+	if err != nil {
+		return OpResult{Error: internalErr(err)}
+	}
+	if item.Status != ImportConfirmado {
+		return s.moveImportItem(ctx, id, ImportDescartado, ImportPendiente)
+	}
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		open, err := reopenableItems(ctx, tx, uid)
+		if err != nil {
+			return err
+		}
+		if !open[id] {
+			return shared.NewError(shared.ErrConflict,
+				"el movimiento sigue registrado: elimina primero el gasto o ingreso que creó")
+		}
+		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
+			Set("status = ?", ImportPendiente).
+			Set("expense_id = NULL").Set("income_id = NULL").Set("fixed_expense_id = NULL").Set("fixed_period = ''").
+			Where("id = ? AND user_id = ? AND status = ?", id, uid, ImportConfirmado).Exec(ctx)
+		return err
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
+}
+
+// reopenableItems returns the ids of uid's confirmed items that no longer
+// point at anything live: every target they had (expense, income, fixed
+// expense) is in the trash or gone.
+func reopenableItems(ctx context.Context, db bun.IDB, uid int64) (map[int64]bool, error) {
+	var ids []int64
+	err := db.NewRaw(`
+		SELECT ii.id FROM import_items AS ii
+		LEFT JOIN expenses AS e ON e.id = ii.expense_id
+		LEFT JOIN incomes AS inc ON inc.id = ii.income_id
+		LEFT JOIN fixed_expenses AS f ON f.id = ii.fixed_expense_id
+		WHERE ii.user_id = ? AND ii.status = ?
+		  AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
+		  AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
+		  AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`, uid, ImportConfirmado).Scan(ctx, &ids)
+	if err != nil {
+		return nil, fmt.Errorf("finding reopenable items: %w", err)
+	}
+	out := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
 }
 
 func (s *FinanceService) moveImportItem(ctx context.Context, id int64, from, to string) OpResult {
