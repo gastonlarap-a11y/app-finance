@@ -157,7 +157,7 @@ describe('expenses + installments', () => {
     const card = await finance.CreateCard('Vieja', '500000', 20, '')
     const other = await finance.CreateCard('Otra', '500000', 20, '')
     const ex = await finance.CreateExpense('2026-07-05', 'Zapatos', '', '', card.data!.id, 'unico', '40000', 1)
-    const fe = await finance.CreateFixedExpense('Spotify', '', card.data!.id, '2026-07', '6000')
+    const fe = await finance.CreateFixedExpense('Spotify', '', card.data!.id, '2026-07', '6000', 1, 'CLP')
     await finance.DeleteCard(card.data!.id)
     await finance.DeleteCard(other.data!.id)
 
@@ -212,7 +212,7 @@ describe('expenses + installments', () => {
 
 describe('fixed expenses', () => {
   it('effective_from: editar desde un mes no toca el pasado', async () => {
-    const fe = await finance.CreateFixedExpense('Netflix', 'Streaming', null, '2026-01', '10000')
+    const fe = await finance.CreateFixedExpense('Netflix', 'Streaming', null, '2026-01', '10000', 1, 'CLP')
     expect(fe.error).toBeUndefined()
     await finance.SetFixedExpenseAmount(fe.data!.id, '2026-05', '12000')
 
@@ -223,14 +223,14 @@ describe('fixed expenses', () => {
   })
 
   it('EndFixedExpense corta desde el mes indicado', async () => {
-    const fe = await finance.CreateFixedExpense('Gym', '', null, '2026-01', '30000')
+    const fe = await finance.CreateFixedExpense('Gym', '', null, '2026-01', '30000', 1, 'CLP')
     await finance.EndFixedExpense(fe.data!.id, '2026-04')
     expect((await finance.MonthlySummary('2026-03')).data?.movimientos).toHaveLength(1)
     expect((await finance.MonthlySummary('2026-04')).data?.movimientos).toHaveLength(0)
   })
 
   it('pago por mes es sparse', async () => {
-    const fe = await finance.CreateFixedExpense('Luz', '', null, '2026-01', '20000')
+    const fe = await finance.CreateFixedExpense('Luz', '', null, '2026-01', '20000', 1, 'CLP')
     await finance.SetFixedExpensePaid(fe.data!.id, '2026-02', true)
     expect((await finance.MonthlySummary('2026-02')).data?.movimientos[0]?.status).toBe('pagado')
     expect((await finance.MonthlySummary('2026-03')).data?.movimientos[0]?.status).toBe('pendiente')
@@ -239,7 +239,7 @@ describe('fixed expenses', () => {
   })
 
   it('pagos, montos y cancelación sólo dentro de la vigencia', async () => {
-    const fe = await finance.CreateFixedExpense('Gimnasio', '', null, '2026-03', '30000')
+    const fe = await finance.CreateFixedExpense('Gimnasio', '', null, '2026-03', '30000', 1, 'CLP')
     const id = fe.data!.id
     expect((await finance.EndFixedExpense(id, '2026-03')).error?.code).toBe('VALIDATION_ERROR')
     expect((await finance.EndFixedExpense(id, '2026-01')).error?.code).toBe('VALIDATION_ERROR')
@@ -270,7 +270,7 @@ describe('MonthlySummary', () => {
     // 3 cuotas de 30000 desde 2026-07 (compra día 10 < corte 24).
     await finance.CreateExpense('2026-07-10', 'Sofá', 'Hogar', '', card.data!.id, 'cuotas', '30000', 3)
     // Fijo de 10000 desde junio → junio pesa en el acumulado de julio.
-    await finance.CreateFixedExpense('Netflix', 'Streaming', null, '2026-06', '10000')
+    await finance.CreateFixedExpense('Netflix', 'Streaming', null, '2026-06', '10000', 1, 'CLP')
 
     const s = (await finance.MonthlySummary('2026-07')).data!
     expect(s.salary).toBe('1000000')

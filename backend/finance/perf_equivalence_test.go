@@ -17,7 +17,7 @@ func TestCardTotalsMatchTheMonthlySummary(t *testing.T) {
 	gone := s.CreateExpense(ctx, "2026-07-04", "Borrado", "", "", &a.Data.ID, KindUnico, "99000", 1)
 	mustOK(t, "trashed", gone.Error)
 	mustOK(t, "DeleteExpense", s.DeleteExpense(ctx, gone.Data.ID).Error)
-	mustOK(t, "fixed on B", s.CreateFixedExpense(ctx, "Seguro", "", &b.Data.ID, "2026-06", "12000").Error)
+	mustOK(t, "fixed on B", s.CreateFixedExpense(ctx, "Seguro", "", &b.Data.ID, "2026-06", "12000", 1, CurrencyCLP).Error)
 	paid := s.CreateExpense(ctx, "2026-06-10", "Pagado", "", "", &a.Data.ID, KindCuotas, "5000", 3)
 	mustOK(t, "paid cuotas", paid.Error)
 	first := cuotas(t, s, paid.Data.ID)[0]

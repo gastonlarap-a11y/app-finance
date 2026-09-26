@@ -47,6 +47,11 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 	if err != nil {
 		return nil, err
 	}
+	// Future months have no UF value yet: fixedCharge uses the latest known one.
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Every salary up to the horizon: the ones before `from` only seed the
 	// "last known salary" used to estimate months without one.
@@ -96,8 +101,9 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		period := addMonths(from, i)
 		fijos := types.Zero()
 		for _, fe := range fixed {
-			if fe.activeIn(period) {
-				fijos = fijos.Add(resolveAsOf(amountsByID[fe.ID], period))
+			if fe.billsIn(period) {
+				clp, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, period)
+				fijos = fijos.Add(clp)
 			}
 		}
 		salary, known := salaryByMonth[period]

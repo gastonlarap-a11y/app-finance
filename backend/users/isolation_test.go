@@ -86,7 +86,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	usr := users.NewService(bdb, session, "test-app-finance-crossuser")
 
 	const period = "2030-01"
-	fe := fin.CreateFixedExpense(ctx, "Netflix", "Servicios", nil, period, "8000")
+	fe := fin.CreateFixedExpense(ctx, "Netflix", "Servicios", nil, period, "8000", 1, finance.CurrencyCLP)
 	if fe.Error != nil {
 		t.Fatalf("CreateFixedExpense: %v", fe.Error)
 	}
@@ -152,6 +152,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	const reconciled = "2026-01"
 	if r := fin.SetReconciliation(ctx, reconciled, "123456"); r.Error != nil {
 		t.Fatalf("SetReconciliation: %v", r.Error)
+	}
+	// UF values are public data, but which months are needed depends on the profile.
+	if r := fin.CreateFixedExpense(ctx, "Arriendo", "", nil, reconciled, "10", 12, finance.CurrencyUF); r.Error != nil {
+		t.Fatalf("CreateFixedExpense UF: %v", r.Error)
+	}
+	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) == 0 || need[0] != reconciled {
+		t.Fatalf("Gastón UFMonthsNeeded = %v (err %v), want it to start at %s", need, err, reconciled)
 	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
@@ -252,6 +259,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != "" || !r.Data.Acumulado.IsZero() {
 		t.Fatalf("Camila MonthlySummary after Gastón's reconciliation = %+v, want no carried balance", r)
+	}
+	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) != 0 {
+		t.Fatalf("Camila UFMonthsNeeded = %v (err %v), want none (the UF expense is Gastón's)", need, err)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

@@ -317,6 +317,8 @@ export function rowToFixedExpense(r: SqlRow): FixedExpense {
     startPeriod: asString(r.start_period),
     // end_period is NULL in SQL for "active forever"; Go models it as "".
     endPeriod: asString(r.end_period),
+    intervalMonths: asNumber(r.interval_months),
+    currency: asString(r.currency),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

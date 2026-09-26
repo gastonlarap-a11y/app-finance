@@ -48,7 +48,7 @@ func TestRenameCategoryCascadesToFixedExpenses(t *testing.T) {
 
 	cat := s.CreateCategory(ctx, "Servicios")
 	mustOK(t, "CreateCategory", cat.Error)
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Servicios", nil, "2030-01", "30000").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Servicios", nil, "2030-01", "30000", 1, CurrencyCLP).Error)
 	mustOK(t, "UpdateCategory", s.UpdateCategory(ctx, cat.Data.ID, "Hogar").Error)
 
 	fixed, err := s.ListFixedExpenses(ctx)
@@ -64,7 +64,7 @@ func TestYearSummaryCategoryMonths(t *testing.T) {
 	// 3 cuotas de 1000 desde marzo (sin tarjeta: no rueda) + fijo de 500 desde febrero.
 	mustOK(t, "CreateExpense", s.CreateExpense(ctx, "2030-03-10", "Tele", "Hogar", "", nil, KindCuotas, "1000", 3).Error)
 	mustOK(t, "CreateExpense", s.CreateExpense(ctx, "2030-01-05", "Pan", "", "", nil, KindUnico, "200", 1).Error)
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Internet", "Hogar", nil, "2030-02", "500").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Internet", "Hogar", nil, "2030-02", "500", 1, CurrencyCLP).Error)
 
 	res := s.YearSummary(ctx, 2030)
 	mustOK(t, "YearSummary", res.Error)
@@ -165,7 +165,7 @@ func TestCommitmentsForecast(t *testing.T) {
 	mustOK(t, "SetSalary", s.SetSalary(ctx, "2030-02", "1200000").Error)
 	mustOK(t, "CreateIncome", s.CreateIncome(ctx, "2030-03", "Bono", "50000").Error)
 	mustOK(t, "CreateExpense", s.CreateExpense(ctx, "2030-01-10", "Notebook", "Tecno", "", nil, KindCuotas, "100000", 2).Error)
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Plan", "Servicios", nil, "2030-02", "20000").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Plan", "Servicios", nil, "2030-02", "20000", 1, CurrencyCLP).Error)
 
 	res := s.CommitmentsForecast(ctx, "2030-01", 3)
 	mustOK(t, "CommitmentsForecast", res.Error)

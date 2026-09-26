@@ -113,7 +113,7 @@ describe('confirm paths', () => {
 
 describe('fixed-expense bills', () => {
   it('sugiere el gasto fijo y al enlazar marca el mes pagado con el monto real', async () => {
-    const fe = await finance.CreateFixedExpense('Plan Entel', 'Servicios', null, '2026-07', '17000')
+    const fe = await finance.CreateFixedExpense('Plan Entel', 'Servicios', null, '2026-07', '17000', 1, 'CLP')
     const bill = await stageOne({ date: '2026-08-05', description: 'ENTEL PCS PAGO ENSANTIAGO C', amount: '16990' })
     expect(bill.suggestedFixedId).toBe(fe.data!.id)
     expect(bill.suggestedFixedPeriod).toBe('2026-08')

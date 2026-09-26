@@ -23,7 +23,7 @@ func wantMoney(t *testing.T, what string, got types.Decimal, want string) {
 func seedReconciliationHistory(t *testing.T, s *FinanceService) {
 	t.Helper()
 	ctx := t.Context()
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Hogar", nil, "2025-11", "10000").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Hogar", nil, "2025-11", "10000", 1, CurrencyCLP).Error)
 	goal := s.CreateSavingsGoal(ctx, "Viaje", "1000000", "")
 	mustOK(t, "CreateSavingsGoal", goal.Error)
 	mustOK(t, "AddSavingsContribution", s.AddSavingsContribution(ctx, goal.Data.ID, "2025-11", "20000").Error)

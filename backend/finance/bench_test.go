@@ -33,7 +33,7 @@ func seedHistory(b *testing.B, years int) *FinanceService {
 	}
 	first := 2027 - years
 	for i := range 8 {
-		if r := s.CreateFixedExpense(ctx, fmt.Sprintf("Fijo %d", i), "Servicios", nil, fmt.Sprintf("%d-01", first), "25000"); r.Error != nil {
+		if r := s.CreateFixedExpense(ctx, fmt.Sprintf("Fijo %d", i), "Servicios", nil, fmt.Sprintf("%d-01", first), "25000", 1, CurrencyCLP); r.Error != nil {
 			b.Fatal(r.Error)
 		}
 	}

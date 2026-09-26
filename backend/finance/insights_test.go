@@ -114,7 +114,7 @@ func TestSpendingTrend(t *testing.T) {
 	} {
 		mustOK(t, "CreateExpense", s.CreateExpense(ctx, e.date, "x", e.cat, "", nil, KindUnico, e.amount, 1).Error)
 	}
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Servicios", nil, "2030-02", "10").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "Luz", "Servicios", nil, "2030-02", "10", 1, CurrencyCLP).Error)
 
 	res := s.SpendingTrend(ctx, "2030-03", 3)
 	mustOK(t, "SpendingTrend", res.Error)
@@ -162,7 +162,7 @@ func TestDetectRecurring(t *testing.T) {
 	for _, m := range []string{"01", "02", "03"} {
 		add("2030-"+m+"-12", "Netflix", "", KindUnico, "8990", 1)
 	}
-	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "netflix", "Servicios", nil, "2030-04", "8990").Error)
+	mustOK(t, "CreateFixedExpense", s.CreateFixedExpense(ctx, "netflix", "Servicios", nil, "2030-04", "8990", 1, CurrencyCLP).Error)
 	// Gimnasio in cuotas: never a candidate (only one-off expenses count).
 	add("2030-01-13", "Gimnasio", "Gym", KindCuotas, "20000", 4)
 

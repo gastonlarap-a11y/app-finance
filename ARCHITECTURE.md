@@ -168,6 +168,20 @@ description), keeps amounts within ±15 % of the group median and suggests those
 that are not already a fixed expense; the UI converts one via `CreateFixedExpense` starting the month
 after its last charge, so nothing is counted twice.
 
+**Fixed-expense schedules and UF** (`fixedexpense.go`, `uf.go`, migration `20260926023`): a fixed
+expense bills every `interval_months` (1, 2, 3, 4, 6, 12) from its start (`billsIn`; `activeIn` is only
+its life span) and is priced in `currency` CLP or UF. Both are set at creation — changing them would
+move or re-price recorded charges. `fixedCharge` is the single rule every summary uses (month, year,
+forecast, trend, carried balance, inbox matching, trash): the amount in effect, times the UF value of
+that month when in UF, rounded half away from zero to whole pesos (`MulRound`). `uf_values(period,
+value)` holds the UF of day 1 of each month; it is public data (no `user_id`). A month without a
+value borrows the closest known one and the movimiento says so (`Estimado`, shown as "estimado").
+The backend never goes online for it: `lib/uf.ts` (shared by desktop and web) asks
+`UFMonthsNeeded`, downloads those years from mindicador.cl (free, no key, CORS `*`; allowed in the
+web CSP) and stores them with `SetUFValues`. `fixedTotal` keeps the carried balance of monthly CLP
+expenses O(amount changes) (`sumAsOf`) and walks billing months for the rest. Paying or linking a
+bank charge to a month off the schedule is refused (`requireBillsIn`).
+
 **Reconciliation / opening balance** (`reconciliation.go`, migration `20260926022`), the reconciliation
 of Actual Budget and YNAB on this app's monthly grain: `reconciliations(user_id, period, amount)` is the
 real account balance at the close of a month (may be negative). `cumulativeBalanceBefore` starts from

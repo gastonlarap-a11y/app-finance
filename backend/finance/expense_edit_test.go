@@ -153,7 +153,7 @@ func TestEditsMayKeepATrashedCard(t *testing.T) {
 	mustOK(t, "CreateCard", other.Error)
 	ex := s.CreateExpense(ctx, "2026-07-05", "Zapatos", "", "", &card.Data.ID, KindUnico, "40000", 1)
 	mustOK(t, "CreateExpense", ex.Error)
-	fe := s.CreateFixedExpense(ctx, "Spotify", "", &card.Data.ID, "2026-07", "6000")
+	fe := s.CreateFixedExpense(ctx, "Spotify", "", &card.Data.ID, "2026-07", "6000", 1, CurrencyCLP)
 	mustOK(t, "CreateFixedExpense", fe.Error)
 	mustOK(t, "DeleteCard", s.DeleteCard(ctx, card.Data.ID).Error)
 	mustOK(t, "DeleteCard", s.DeleteCard(ctx, other.Data.ID).Error)
@@ -175,7 +175,7 @@ func TestEditsMayKeepATrashedCard(t *testing.T) {
 func TestFixedExpenseMonthsMustBeActive(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)
-	fe := s.CreateFixedExpense(ctx, "Gimnasio", "", nil, "2026-03", "30000")
+	fe := s.CreateFixedExpense(ctx, "Gimnasio", "", nil, "2026-03", "30000", 1, CurrencyCLP)
 	mustOK(t, "CreateFixedExpense", fe.Error)
 	id := fe.Data.ID
 

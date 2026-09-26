@@ -44,7 +44,7 @@ func TestSoftDeleteRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("CreateExpense: %v", exRes.Error)
 	}
 
-	feRes := s.CreateFixedExpense(ctx, "Netflix", "Comida", &card.ID, period, "8000")
+	feRes := s.CreateFixedExpense(ctx, "Netflix", "Comida", &card.ID, period, "8000", 1, CurrencyCLP)
 	if feRes.Error != nil {
 		t.Fatalf("CreateFixedExpense: %v", feRes.Error)
 	}
@@ -236,7 +236,7 @@ func TestFixedExpenseHistorySurvivesDeleteRestore(t *testing.T) {
 	s := newTestService(t)
 	period := currentPeriod()
 
-	feRes := s.CreateFixedExpense(ctx, "Spotify", "Servicios", nil, period, "5000")
+	feRes := s.CreateFixedExpense(ctx, "Spotify", "Servicios", nil, period, "5000", 1, CurrencyCLP)
 	if feRes.Error != nil {
 		t.Fatalf("CreateFixedExpense: %v", feRes.Error)
 	}

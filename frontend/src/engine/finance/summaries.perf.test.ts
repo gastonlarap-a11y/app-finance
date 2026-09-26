@@ -15,7 +15,7 @@ async function seed(): Promise<FinanceServiceContract> {
   const db = await createTestDb()
   const f = createFinanceService(db, createSession(db))
   const card = (await f.CreateCard('Visa', '5000000', 24, '4321')).data!
-  for (let i = 0; i < 8; i++) await f.CreateFixedExpense(`Fijo ${i}`, 'Servicios', null, `${FIRST}-01`, '25000')
+  for (let i = 0; i < 8; i++) await f.CreateFixedExpense(`Fijo ${i}`, 'Servicios', null, `${FIRST}-01`, '25000', 1, 'CLP')
   for (let y = FIRST; y <= 2026; y++) {
     for (let m = 1; m <= 12; m++) {
       const period = `${y}-${String(m).padStart(2, '0')}`

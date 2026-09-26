@@ -113,10 +113,15 @@ func (s *FinanceService) spendingByMonth(ctx context.Context, uid int64, from, t
 	if err != nil {
 		return nil, nil, err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	for p := from; p <= to; p = addMonths(p, 1) {
 		for _, fe := range fixed {
-			if fe.activeIn(p) {
-				add(p, fe.Category, resolveAsOf(amountsByID[fe.ID], p))
+			if fe.billsIn(p) {
+				clp, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, p)
+				add(p, fe.Category, clp)
 			}
 		}
 	}

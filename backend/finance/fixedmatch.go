@@ -34,6 +34,7 @@ type fixedMonth struct {
 type fixedIndex struct {
 	fixed   []FixedExpense
 	amounts map[int64][]FixedExpenseAmount
+	uf      ufRates
 	paid    map[fixedMonth]bool
 }
 
@@ -42,7 +43,11 @@ func (s *FinanceService) loadFixedIndex(ctx context.Context, uid int64) (fixedIn
 	if err != nil {
 		return fixedIndex{}, fmt.Errorf("loading fixed expenses: %w", err)
 	}
-	ix := fixedIndex{fixed: fixed, amounts: amounts, paid: map[fixedMonth]bool{}}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return fixedIndex{}, err
+	}
+	ix := fixedIndex{fixed: fixed, amounts: amounts, uf: uf, paid: map[fixedMonth]bool{}}
 	if len(fixed) == 0 {
 		return ix, nil
 	}
@@ -85,7 +90,7 @@ func (ix fixedIndex) suggest(it ImportItem, period string, cardID *int64, clp ty
 	bestGap := decimal.Zero
 	for i := range ix.fixed {
 		fe := &ix.fixed[i]
-		if !fe.activeIn(period) || ix.paid[fixedMonth{fe.ID, period}] {
+		if !fe.billsIn(period) || ix.paid[fixedMonth{fe.ID, period}] {
 			continue
 		}
 		if fe.CardID != nil && cardID != nil && *fe.CardID != *cardID {
@@ -94,7 +99,7 @@ func (ix fixedIndex) suggest(it ImportItem, period string, cardID *int64, clp ty
 		if !namesMatch(fe.Description, it.Description) {
 			continue
 		}
-		planned := resolveAsOf(ix.amounts[fe.ID], period)
+		planned, _, _ := fixedCharge(*fe, ix.amounts[fe.ID], ix.uf, period)
 		if planned.IsZero() {
 			continue
 		}
@@ -158,7 +163,7 @@ func (s *FinanceService) LinkImportItemToFixed(ctx context.Context, id, fixedID 
 		if err != nil {
 			return err
 		}
-		if err := requireActiveIn(fe, period, "enlazarlo"); err != nil {
+		if err := requireBillsIn(fe, period, "enlazarlo"); err != nil {
 			return err
 		}
 		taken, err := tx.NewSelect().Model((*ImportItem)(nil)).
