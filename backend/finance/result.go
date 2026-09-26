@@ -167,6 +167,7 @@ type BudgetStatus struct {
 	Spent      types.Decimal `json:"spent"`
 	Remaining  types.Decimal `json:"remaining"` // negativo cuando se excede
 	Over       bool          `json:"over"`
+	Near       bool          `json:"near"` // ya gastó el 80 % o más del tope, sin excederlo
 }
 
 // CategoryBudgetView is the cap in effect for one category at a given month.
