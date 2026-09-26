@@ -872,25 +872,30 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, uid int64, period 
 	return out, nil
 }
 
-// sumFixedBefore totals every fixed-expense charge for all months strictly before
-// `period`, used to carry the running balance forward. Each amount stretch is
-// multiplied out (sumAsOf), so the cost does not grow with the months elapsed.
-func (s *FinanceService) sumFixedBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
+// sumFixedBetween totals every fixed-expense charge of the months strictly
+// between `after` ("" = from the start) and `before`, used to carry the running
+// balance forward. Each amount stretch is multiplied out (sumAsOf), so the cost
+// does not grow with the months elapsed.
+func (s *FinanceService) sumFixedBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, false)
 	if err != nil {
 		return types.Zero(), err
 	}
 	total := types.Zero()
-	last := addMonths(period, -1) // último mes a considerar (inclusive)
+	last := addMonths(before, -1) // último mes a considerar (inclusive)
 	for _, fe := range fixed {
 		if !validPeriod(fe.StartPeriod) {
 			continue
+		}
+		start := fe.StartPeriod
+		if after != "" {
+			start = max(start, addMonths(after, 1))
 		}
 		end := last
 		if fe.EndPeriod != "" {
 			end = min(end, fe.EndPeriod)
 		}
-		total = total.Add(sumAsOf(amountsByID[fe.ID], fe.StartPeriod, end))
+		total = total.Add(sumAsOf(amountsByID[fe.ID], start, end))
 	}
 	return total, nil
 }
@@ -1142,43 +1147,63 @@ func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, peri
 
 // ---------- summaries ----------
 
-// cumulativeBalanceBefore returns the running account balance left over from
-// every period strictly before `period`: Σ salaries + Σ extras − Σ gastos. This
-// is the amount that carries (positive or negative) into the given month. Sums
-// are done in Go with types.Decimal — never SQLite SUM() over TEXT columns.
-func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
+// cumulativeBalanceBefore returns the running account balance carried into
+// `period` (positive or negative), and the reconciled month it starts from ("",
+// when none). With no reconciliation it is Σ salaries + Σ extras − Σ gastos −
+// Σ ahorro of every period before `period`; with one, it is that month's real
+// closing balance plus the same flows of the months after it. Sums are done in
+// Go with types.Decimal — never SQLite SUM() over TEXT columns.
+func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64, period string) (types.Decimal, string, error) {
+	anchor, err := s.reconciliationBefore(ctx, uid, period)
+	if err != nil {
+		return types.Zero(), "", err
+	}
+	// Periods are YYYY-MM, so every one sorts after "": with no anchor the
+	// same `period > after` bound reads the whole history.
+	base, after := types.Zero(), ""
+	if anchor != nil {
+		base, after = anchor.Amount, anchor.Period
+	}
+	flows, err := s.flowsBetween(ctx, uid, after, period)
+	if err != nil {
+		return types.Zero(), "", err
+	}
+	return base.Add(flows), after, nil
+}
+
+// flowsBetween is the net of every month strictly between `after` and
+// `before`: salaries + extras − cuotas − fixed expenses − savings contributions.
+func (s *FinanceService) flowsBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	// Only the amount column is read: this runs on every summary and walks the
 	// whole history, and full rows (timestamps parsed, structs allocated) made
 	// it the bulk of MonthlySummary's cost.
 	salaries, err := sumAmounts(ctx, s.db.NewSelect().Model((*PeriodSalary)(nil)).
-		Where("user_id = ? AND period < ?", uid, period))
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("salaries before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("salaries before %s: %w", before, err)
 	}
 	incomes, err := sumAmounts(ctx, s.db.NewSelect().Model((*Income)(nil)).
-		Where("user_id = ? AND period < ?", uid, period))
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("incomes before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("incomes before %s: %w", before, err)
 	}
 	cuotas, err := sumAmounts(ctx, s.db.NewSelect().Model((*Installment)(nil)).
-		Where("user_id = ? AND period < ?", uid, period).
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before).
 		Where("expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)", uid))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("cuotas before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("cuotas before %s: %w", before, err)
 	}
-	total := salaries.Add(incomes).Sub(cuotas)
-
-	// Recurring fixed expenses charged in every month before `period`.
-	fixedTotal, err := s.sumFixedBefore(ctx, uid, period)
+	// Recurring fixed expenses charged in those months.
+	fixedTotal, err := s.sumFixedBetween(ctx, uid, after, before)
 	if err != nil {
 		return types.Zero(), err
 	}
 	// Savings contributions left the account too.
-	saved, err := s.savingsBefore(ctx, uid, period)
+	saved, err := s.savingsBetween(ctx, uid, after, before)
 	if err != nil {
 		return types.Zero(), err
 	}
-	return total.Sub(fixedTotal).Sub(saved), nil
+	return salaries.Add(incomes).Sub(cuotas).Sub(fixedTotal).Sub(saved), nil
 }
 
 func (s *FinanceService) MonthlySummary(ctx context.Context, period string) MonthlySummaryResult {
@@ -1197,7 +1222,7 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	if err != nil {
 		return nil, err
 	}
-	acumulado, err := s.cumulativeBalanceBefore(ctx, uid, period)
+	acumulado, acumuladoDesde, err := s.cumulativeBalanceBefore(ctx, uid, period)
 	if err != nil {
 		return nil, err
 	}
@@ -1241,6 +1266,8 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 		PorTarjeta:   []CardDebt{},
 		Incomes:      incomes,
 		Presupuestos: []BudgetStatus{},
+
+		AcumuladoDesde: acumuladoDesde,
 	}
 	for _, inc := range incomes {
 		sum.Extras = sum.Extras.Add(inc.Amount)
@@ -1307,6 +1334,14 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	sum.Balance = sum.Disponible.Sub(sum.Gastos).Sub(ahorro)
 	sum.Alcanza = sum.Disponible.GTE(sum.Gastos.Add(ahorro))
 	sum.PorCategoria = sortedCategoryTotals(catTotals)
+
+	recs, err := s.reconciliationsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	if closing, ok := recs[period]; ok {
+		sum.Conciliacion = &ReconciliationStatus{SaldoReal: closing, Calculado: sum.Balance, Diferencia: closing.Sub(sum.Balance)}
+	}
 
 	budgets, err := s.budgetStatuses(ctx, uid, period, catTotals)
 	if err != nil {
@@ -1422,7 +1457,12 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 	prefix := itoa4(year) + "-"
 
 	// Carry-in from every period before this year.
-	saldo, err := s.cumulativeBalanceBefore(ctx, uid, prefix+"01")
+	saldo, _, err := s.cumulativeBalanceBefore(ctx, uid, prefix+"01")
+	if err != nil {
+		return nil, err
+	}
+	// A month reconciled inside the year resets the running balance to the real one.
+	realByMonth, err := s.reconciliationsIn(ctx, uid, prefix+"01", prefix+"12")
 	if err != nil {
 		return nil, err
 	}
@@ -1501,14 +1541,19 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 		ahorro := ahorroByMonth[period]
 		balance := ingresos.Sub(gastos).Sub(ahorro)
 		saldo = saldo.Add(balance) // running account balance at month close
+		closing, conciliado := realByMonth[period]
+		if conciliado {
+			saldo = closing
+		}
 		out.Months = append(out.Months, YearMonth{
-			Period:   period,
-			Ingresos: ingresos,
-			Gastos:   gastos,
-			Ahorro:   ahorro,
-			Balance:  balance,
-			Saldo:    saldo,
-			Alcanza:  saldo.GTE(types.Zero()),
+			Period:     period,
+			Ingresos:   ingresos,
+			Gastos:     gastos,
+			Ahorro:     ahorro,
+			Balance:    balance,
+			Saldo:      saldo,
+			Alcanza:    saldo.GTE(types.Zero()),
+			Conciliado: conciliado,
 		})
 		out.TotalIngresos = out.TotalIngresos.Add(ingresos)
 		out.TotalGastos = out.TotalGastos.Add(gastos)

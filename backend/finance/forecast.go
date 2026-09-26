@@ -80,7 +80,13 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		return nil, err
 	}
 
-	saldo, err := s.cumulativeBalanceBefore(ctx, uid, from)
+	saldo, _, err := s.cumulativeBalanceBefore(ctx, uid, from)
+	if err != nil {
+		return nil, err
+	}
+	// A past month of the horizon may already be reconciled: from its close on,
+	// the projection starts from the real balance.
+	realByMonth, err := s.reconciliationsIn(ctx, uid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +110,9 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		comprometido := cuotas[period].Add(fijos)
 		libre := ingresos.Sub(comprometido).Sub(ahorro[period])
 		saldo = saldo.Add(libre)
+		if closing, ok := realByMonth[period]; ok {
+			saldo = closing
+		}
 		out = append(out, ForecastMonth{
 			Period:          period,
 			Cuotas:          cuotas[period],

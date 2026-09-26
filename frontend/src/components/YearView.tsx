@@ -89,7 +89,14 @@ export function YearView() {
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.gastos)}</td>
                   {hasSavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
                   <td className={`py-2 text-right tabular-nums ${signTone(m.balance)}`}>{formatCLP(m.balance)}</td>
-                  <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>{formatCLP(m.saldo)}</td>
+                  <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>
+                    {formatCLP(m.saldo)}
+                    {m.conciliado && (
+                      <span className="ml-1 text-xs text-slate-400" title="Saldo real conciliado con el banco">
+                        ✓<span className="sr-only"> conciliado</span>
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 text-center">
                     <span aria-label={m.alcanza ? 'Sí alcanza' : 'No alcanza'}>{m.alcanza ? '✓' : '✕'}</span>
                   </td>

@@ -90,6 +90,10 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
   (`liveGoalContributions`), like installments of a deleted expense.
+- **Carried balance restarts at a reconciliation**: `cumulativeBalanceBefore` = latest
+  `reconciliations` row before the month (real closing balance; the opening balance is one on the
+  month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to
+  `flowsBetween` (Go and TS) and to the year/forecast loops, which reset at a reconciled close.
 - **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
   `finance.StageCandidates`/`stageItems` into `import_items` and become expenses (or, for bank
   credits, extra incomes) only when the user confirms them (`ConfirmImportItem`/`LinkImportItem`/

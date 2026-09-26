@@ -148,6 +148,11 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			creditID = it.ID
 		}
 	}
+	// Reconciliations may not be in the future: this one closes a past month.
+	const reconciled = "2026-01"
+	if r := fin.SetReconciliation(ctx, reconciled, "123456"); r.Error != nil {
+		t.Fatalf("SetReconciliation: %v", r.Error)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -183,6 +188,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.GetCardStatement(ctx, imported.Data.StatementID).Error}
 		}},
 		{"DeleteCardStatement", func() finance.OpResult { return fin.DeleteCardStatement(ctx, imported.Data.StatementID) }},
+		{"DeleteReconciliation", func() finance.OpResult { return fin.DeleteReconciliation(ctx, reconciled) }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {
@@ -244,6 +250,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.ImportCardStatement(ctx, statement); r.Error != nil || r.Data.AlreadyImported || r.Data.StatementID == imported.Data.StatementID {
 		t.Fatalf("Camila ImportCardStatement = %+v, want her own new statement", r)
 	}
+	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != "" || !r.Data.Acumulado.IsZero() {
+		t.Fatalf("Camila MonthlySummary after Gastón's reconciliation = %+v, want no carried balance", r)
+	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.
 	if r := usr.SwitchUser(ctx, 1); r.Error != nil {
@@ -267,6 +276,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.GetCardStatement(ctx, imported.Data.StatementID); r.Error != nil {
 		t.Fatalf("Gastón's statement after Camila: %v", r.Error)
+	}
+	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != reconciled {
+		t.Fatalf("Gastón's reconciliation after Camila = %+v, want the carried balance from %s", r, reconciled)
 	}
 }
 

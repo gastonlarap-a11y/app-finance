@@ -216,6 +216,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const imported = ok(await finance.ImportCardStatement(statement)).data!
     expect(imported.added).toBe(1)
     const creditID = ok(await finance.ListImportItems('pendiente')).data!.find((it) => it.kind === 'abono')!.id
+    // Reconciliations may not be in the future: this one closes a past month.
+    const reconciled = '2026-01'
+    ok(await finance.SetReconciliation(reconciled, '123456'))
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -231,6 +234,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.ConfirmImportItemAsIncome(creditID, period, 'x', '1'),
       () => finance.GetCardStatement(imported.statementId),
       () => finance.DeleteCardStatement(imported.statementId),
+      () => finance.DeleteReconciliation(reconciled),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {
@@ -248,8 +252,11 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])
+    const hersFeb = ok(await finance.MonthlySummary('2026-02')).data!
+    expect([hersFeb.acumuladoDesde, hersFeb.acumulado]).toEqual(['', '0'])
 
     ok(await users.SwitchUser(1))
+    expect(ok(await finance.MonthlySummary('2026-02')).data!.acumuladoDesde).toBe(reconciled)
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })
     const pendingIDs = ok(await finance.ListImportItems('pendiente')).data!.map((it) => it.id)

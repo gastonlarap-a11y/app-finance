@@ -36,6 +36,7 @@ describe('migrationFiles', () => {
       '20260926019', // *.tx.up.sql: bun's transactional suffix, same name rule
       '20260926020',
       '20260926021',
+      '20260926022',
     ])
   })
 

@@ -14,6 +14,7 @@ import type {
   Merchant,
   MerchantRule,
   PeriodSalary,
+  Reconciliation,
   SavingsContribution,
   SavingsGoal,
   Settings,
@@ -234,6 +235,17 @@ export function rowToSavingsContribution(r: SqlRow): SavingsContribution {
     period: asString(r.period),
     amount: asString(r.amount),
     createdAt: asString(r.created_at),
+  }
+}
+
+export function rowToReconciliation(r: SqlRow): Reconciliation {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    period: asString(r.period),
+    amount: asString(r.amount),
+    createdAt: asString(r.created_at),
+    updatedAt: asString(r.updated_at),
   }
 }
 

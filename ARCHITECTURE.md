@@ -168,6 +168,17 @@ description), keeps amounts within ±15 % of the group median and suggests those
 that are not already a fixed expense; the UI converts one via `CreateFixedExpense` starting the month
 after its last charge, so nothing is counted twice.
 
+**Reconciliation / opening balance** (`reconciliation.go`, migration `20260926022`), the reconciliation
+of Actual Budget and YNAB on this app's monthly grain: `reconciliations(user_id, period, amount)` is the
+real account balance at the close of a month (may be negative). `cumulativeBalanceBefore` starts from
+the latest one before the month and adds only the flows after it (`flowsBetween`: salaries + extras −
+cuotas − fixed − ahorro in `(after, before)`), so an unrecorded cash expense stops skewing every later
+month once the user reconciles. The "saldo inicial" is the same record on the month before the first
+one tracked. `MonthlySummary.Conciliacion` shows real vs computed (`Balance`) and the difference;
+`AcumuladoDesde` says which close the carried balance comes from. `YearSummary` and
+`CommitmentsForecast` reset their running balance at a reconciled close (`YearMonth.Conciliado`).
+A month that has not started cannot be reconciled.
+
 ## 4b. Backup & Google Drive
 
 `backend/shared/backup` snapshots the live SQLite DB and (when Drive is connected) uploads it via
