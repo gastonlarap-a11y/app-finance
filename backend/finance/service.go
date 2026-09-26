@@ -845,18 +845,23 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, uid int64, period 
 	for _, p := range pays {
 		paid[p.FixedExpenseID] = true
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]Movimiento, 0, len(fixed))
 	for _, fe := range fixed {
-		if !fe.activeIn(period) {
+		if !fe.billsIn(period) {
 			continue
 		}
 		status := StatusPendiente
 		if paid[fe.ID] {
 			status = StatusPagado
 		}
+		clp, original, estimated := fixedCharge(fe, amountsByID[fe.ID], uf, period)
 		id := fe.ID
-		out = append(out, Movimiento{
+		mv := Movimiento{
 			Source:      SourceFijo,
 			FixedID:     &id,
 			Description: fe.Description,
@@ -865,32 +870,42 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, uid int64, period 
 			Kind:        SourceFijo,
 			Number:      1,
 			Total:       1,
-			Amount:      resolveAsOf(amountsByID[fe.ID], period),
+			Amount:      clp,
 			Status:      status,
-		})
+			Estimado:    estimated,
+		}
+		if fe.Currency == CurrencyUF {
+			mv.UFAmount = &original
+		}
+		out = append(out, mv)
 	}
 	return out, nil
 }
 
-// sumFixedBefore totals every fixed-expense charge for all months strictly before
-// `period`, used to carry the running balance forward. Each amount stretch is
-// multiplied out (sumAsOf), so the cost does not grow with the months elapsed.
-func (s *FinanceService) sumFixedBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
+// sumFixedBetween totals every fixed-expense charge of the months strictly
+// between `after` ("" = from the start) and `before`, used to carry the running
+// balance forward (fixedTotal keeps the monthly CLP case independent of the
+// months elapsed).
+func (s *FinanceService) sumFixedBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, false)
 	if err != nil {
 		return types.Zero(), err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return types.Zero(), err
+	}
 	total := types.Zero()
-	last := addMonths(period, -1) // último mes a considerar (inclusive)
+	first := ""
+	if after != "" {
+		first = addMonths(after, 1)
+	}
+	last := addMonths(before, -1) // último mes a considerar (inclusive)
 	for _, fe := range fixed {
 		if !validPeriod(fe.StartPeriod) {
 			continue
 		}
-		end := last
-		if fe.EndPeriod != "" {
-			end = min(end, fe.EndPeriod)
-		}
-		total = total.Add(sumAsOf(amountsByID[fe.ID], fe.StartPeriod, end))
+		total = total.Add(fixedTotal(fe, amountsByID[fe.ID], uf, first, last))
 	}
 	return total, nil
 }
@@ -913,13 +928,20 @@ func (s *FinanceService) ListFixedExpenses(ctx context.Context) ([]FixedExpenseV
 	if err != nil {
 		return nil, err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := currentPeriod()
 	out := make([]FixedExpenseView, 0, len(fixed))
 	for _, fe := range fixed {
+		clp, original, _ := fixedCharge(fe, amountsByID[fe.ID], uf, fixedDisplayPeriod(fe, now))
 		v := FixedExpenseView{
-			FixedExpense:  fe,
-			CurrentAmount: resolveAsOf(amountsByID[fe.ID], fixedDisplayPeriod(fe, now)),
-			Active:        fe.activeIn(now),
+			FixedExpense:     fe,
+			CurrentAmount:    original,
+			CurrentAmountCLP: clp,
+			NextPeriod:       fe.nextBilling(now),
+			Active:           fe.activeIn(now),
 		}
 		if fe.CardID != nil {
 			if c, ok := cardByID[*fe.CardID]; ok {
@@ -932,8 +954,11 @@ func (s *FinanceService) ListFixedExpenses(ctx context.Context) ([]FixedExpenseV
 	return out, nil
 }
 
+// CreateFixedExpense adds a recurring charge billed every intervalMonths months
+// (1, 2, 3, 4, 6 or 12) from startPeriod, priced in currency (CLP or UF).
 func (s *FinanceService) CreateFixedExpense(
 	ctx context.Context, description, category string, cardID *int64, startPeriod, amount string,
+	intervalMonths int, currency string,
 ) FixedExpenseResult {
 	desc := strings.TrimSpace(description)
 	if desc == "" {
@@ -941,6 +966,12 @@ func (s *FinanceService) CreateFixedExpense(
 	}
 	if !validPeriod(startPeriod) {
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "período inicial inválido (use YYYY-MM)")}
+	}
+	if !slices.Contains(validIntervals, intervalMonths) {
+		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "frecuencia inválida (cada 1, 2, 3, 4, 6 o 12 meses)")}
+	}
+	if currency != CurrencyCLP && currency != CurrencyUF {
+		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "moneda inválida (CLP o UF)")}
 	}
 	amt, aerr := parseAmount(amount)
 	if aerr != nil {
@@ -954,11 +985,13 @@ func (s *FinanceService) CreateFixedExpense(
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{
-		UserID:      uid,
-		Description: desc,
-		Category:    strings.TrimSpace(category),
-		CardID:      cardID,
-		StartPeriod: startPeriod,
+		UserID:         uid,
+		Description:    desc,
+		Category:       strings.TrimSpace(category),
+		CardID:         cardID,
+		StartPeriod:    startPeriod,
+		IntervalMonths: intervalMonths,
+		Currency:       currency,
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(fe).Returning("*").Exec(ctx); err != nil {
@@ -1019,7 +1052,7 @@ func ownFixedExpense(ctx context.Context, db bun.IDB, uid, id int64) (*FixedExpe
 	return fe, nil
 }
 
-// requireActiveIn fails unless the fixed expense bills in period: a payment or an
+// requireActiveIn fails unless period falls within the fixed expense's life: an
 // amount change outside [start, end] would never show up anywhere.
 func requireActiveIn(fe *FixedExpense, period, action string) error {
 	if period < fe.StartPeriod {
@@ -1029,6 +1062,20 @@ func requireActiveIn(fe *FixedExpense, period, action string) error {
 	if fe.EndPeriod != "" && period > fe.EndPeriod {
 		return shared.NewError(shared.ErrValidation,
 			fmt.Sprintf("no se puede %s en %s: el gasto fijo terminó en %s", action, period, fe.EndPeriod))
+	}
+	return nil
+}
+
+// requireBillsIn fails unless the fixed expense charges in period: a payment
+// (or a bank charge linked to it) in a month off its schedule would never show.
+func requireBillsIn(fe *FixedExpense, period, action string) error {
+	if err := requireActiveIn(fe, period, action); err != nil {
+		return err
+	}
+	if !fe.billsIn(period) {
+		return shared.NewError(shared.ErrValidation,
+			fmt.Sprintf("no se puede %s en %s: el gasto fijo cobra cada %d meses (próximo: %s)",
+				action, period, fe.interval(), fe.nextBilling(period)))
 	}
 	return nil
 }
@@ -1120,7 +1167,7 @@ func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, peri
 			return err
 		}
 		if paid {
-			if err := requireActiveIn(fe, period, "marcarlo pagado"); err != nil {
+			if err := requireBillsIn(fe, period, "marcarlo pagado"); err != nil {
 				return err
 			}
 			now := time.Now()
@@ -1142,43 +1189,67 @@ func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, peri
 
 // ---------- summaries ----------
 
-// cumulativeBalanceBefore returns the running account balance left over from
-// every period strictly before `period`: Σ salaries + Σ extras − Σ gastos. This
-// is the amount that carries (positive or negative) into the given month. Sums
-// are done in Go with types.Decimal — never SQLite SUM() over TEXT columns.
-func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
+// cumulativeBalanceBefore returns the running account balance carried into
+// `period` (positive or negative), and the reconciled month it starts from ("",
+// when none). With no reconciliation it is Σ salaries + Σ extras − Σ gastos −
+// Σ ahorro of every period before `period`; with one, it is that month's real
+// closing balance plus the same flows of the months after it. Sums are done in
+// Go with types.Decimal — never SQLite SUM() over TEXT columns.
+func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64, period string) (types.Decimal, string, error) {
+	anchor, err := s.reconciliationBefore(ctx, uid, period)
+	if err != nil {
+		return types.Zero(), "", err
+	}
+	// Periods are YYYY-MM, so every one sorts after "": with no anchor the
+	// same `period > after` bound reads the whole history.
+	base, after := types.Zero(), ""
+	if anchor != nil {
+		base, after = anchor.Amount, anchor.Period
+	}
+	flows, err := s.flowsBetween(ctx, uid, after, period)
+	if err != nil {
+		return types.Zero(), "", err
+	}
+	return base.Add(flows), after, nil
+}
+
+// flowsBetween is the net of every month strictly between `after` and
+// `before`: salaries + extras − cuotas − fixed expenses − savings contributions.
+func (s *FinanceService) flowsBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	// Only the amount column is read: this runs on every summary and walks the
 	// whole history, and full rows (timestamps parsed, structs allocated) made
 	// it the bulk of MonthlySummary's cost.
 	salaries, err := sumAmounts(ctx, s.db.NewSelect().Model((*PeriodSalary)(nil)).
-		Where("user_id = ? AND period < ?", uid, period))
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("salaries before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("salaries before %s: %w", before, err)
 	}
 	incomes, err := sumAmounts(ctx, s.db.NewSelect().Model((*Income)(nil)).
-		Where("user_id = ? AND period < ?", uid, period))
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("incomes before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("incomes before %s: %w", before, err)
 	}
 	cuotas, err := sumAmounts(ctx, s.db.NewSelect().Model((*Installment)(nil)).
-		Where("user_id = ? AND period < ?", uid, period).
+		Where("user_id = ? AND period > ? AND period < ?", uid, after, before).
 		Where("expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)", uid))
 	if err != nil {
-		return types.Zero(), fmt.Errorf("cuotas before %s: %w", period, err)
+		return types.Zero(), fmt.Errorf("cuotas before %s: %w", before, err)
 	}
-	total := salaries.Add(incomes).Sub(cuotas)
-
-	// Recurring fixed expenses charged in every month before `period`.
-	fixedTotal, err := s.sumFixedBefore(ctx, uid, period)
+	// Recurring fixed expenses charged in those months.
+	fixedTotal, err := s.sumFixedBetween(ctx, uid, after, before)
 	if err != nil {
 		return types.Zero(), err
 	}
-	// Savings contributions left the account too.
-	saved, err := s.savingsBefore(ctx, uid, period)
+	// Savings contributions left the account too; refunds came back into it.
+	saved, err := s.savingsBetween(ctx, uid, after, before)
 	if err != nil {
 		return types.Zero(), err
 	}
-	return total.Sub(fixedTotal).Sub(saved), nil
+	refunded, err := s.refundsBetween(ctx, uid, after, before)
+	if err != nil {
+		return types.Zero(), err
+	}
+	return salaries.Add(incomes).Sub(cuotas).Sub(fixedTotal).Sub(saved).Add(refunded), nil
 }
 
 func (s *FinanceService) MonthlySummary(ctx context.Context, period string) MonthlySummaryResult {
@@ -1197,7 +1268,7 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	if err != nil {
 		return nil, err
 	}
-	acumulado, err := s.cumulativeBalanceBefore(ctx, uid, period)
+	acumulado, acumuladoDesde, err := s.cumulativeBalanceBefore(ctx, uid, period)
 	if err != nil {
 		return nil, err
 	}
@@ -1241,6 +1312,8 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 		PorTarjeta:   []CardDebt{},
 		Incomes:      incomes,
 		Presupuestos: []BudgetStatus{},
+
+		AcumuladoDesde: acumuladoDesde,
 	}
 	for _, inc := range incomes {
 		sum.Extras = sum.Extras.Add(inc.Amount)
@@ -1248,10 +1321,22 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	sum.Ingresos = sum.Salary.Add(sum.Extras)
 	sum.Disponible = sum.Acumulado.Add(sum.Ingresos)
 
+	expenseIDs := make([]int64, 0, len(insts))
+	for _, inst := range insts {
+		expenseIDs = append(expenseIDs, inst.ExpenseID)
+	}
+	tagsOf, err := s.tagsByExpense(ctx, uid, expenseIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	catTotals := map[string]types.Decimal{}
 	gastoMesByCard := map[int64]types.Decimal{}
 	add := func(mv Movimiento) {
 		mv.Category = categoryOrDefault(mv.Category)
+		if mv.Tags = tagsOf[mv.ExpenseID]; mv.Tags == nil || mv.Source != SourceCuota {
+			mv.Tags = []string{}
+		}
 		if mv.CardID != nil {
 			if c, ok := cardByID[*mv.CardID]; ok {
 				mv.CardName = c.Name
@@ -1298,6 +1383,14 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	for _, mv := range fixedMovs {
 		add(mv)
 	}
+	// Refunds arrived this month: negative movimientos, net of their category and card.
+	refunds, err := s.refundsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		add(refundMovimiento(r))
+	}
 
 	ahorro, err := s.savingsIn(ctx, uid, period)
 	if err != nil {
@@ -1307,6 +1400,14 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	sum.Balance = sum.Disponible.Sub(sum.Gastos).Sub(ahorro)
 	sum.Alcanza = sum.Disponible.GTE(sum.Gastos.Add(ahorro))
 	sum.PorCategoria = sortedCategoryTotals(catTotals)
+
+	recs, err := s.reconciliationsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	if closing, ok := recs[period]; ok {
+		sum.Conciliacion = &ReconciliationStatus{SaldoReal: closing, Calculado: sum.Balance, Diferencia: closing.Sub(sum.Balance)}
+	}
 
 	budgets, err := s.budgetStatuses(ctx, uid, period, catTotals)
 	if err != nil {
@@ -1381,6 +1482,16 @@ func (s *FinanceService) cardChargesIn(ctx context.Context, uid int64, period st
 			out[*mv.CardID] = out[*mv.CardID].Add(mv.Amount)
 		}
 	}
+	// A refund to a card is a credit on its statement.
+	refunds, err := s.refundsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		if r.CardID != nil {
+			out[*r.CardID] = out[*r.CardID].Sub(r.Amount)
+		}
+	}
 	return out, nil
 }
 
@@ -1422,7 +1533,12 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 	prefix := itoa4(year) + "-"
 
 	// Carry-in from every period before this year.
-	saldo, err := s.cumulativeBalanceBefore(ctx, uid, prefix+"01")
+	saldo, _, err := s.cumulativeBalanceBefore(ctx, uid, prefix+"01")
+	if err != nil {
+		return nil, err
+	}
+	// A month reconciled inside the year resets the running balance to the real one.
+	realByMonth, err := s.reconciliationsIn(ctx, uid, prefix+"01", prefix+"12")
 	if err != nil {
 		return nil, err
 	}
@@ -1469,16 +1585,30 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 	if err != nil {
 		return nil, err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for m := 1; m <= 12; m++ {
 		period := prefix + pad2(m)
 		for _, fe := range fixed {
-			if !fe.activeIn(period) {
+			if !fe.billsIn(period) {
 				continue
 			}
-			amt := resolveAsOf(amountsByID[fe.ID], period)
+			amt, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, period)
 			gastosByMonth[period] = gastosByMonth[period].Add(amt)
 			byCat.add(fe.Category, period, amt)
 		}
+	}
+	// Refunds lower their month's gastos and their expense's category.
+	refunds, err := s.refundsIn(ctx, uid, prefix+"01", prefix+"12")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		neg := types.Zero().Sub(r.Amount)
+		gastosByMonth[r.Period] = gastosByMonth[r.Period].Add(neg)
+		byCat.add(r.Category, r.Period, neg)
 	}
 
 	ahorroByMonth, err := s.savingsByMonth(ctx, uid, prefix+"01", prefix+"12")
@@ -1501,14 +1631,19 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 		ahorro := ahorroByMonth[period]
 		balance := ingresos.Sub(gastos).Sub(ahorro)
 		saldo = saldo.Add(balance) // running account balance at month close
+		closing, conciliado := realByMonth[period]
+		if conciliado {
+			saldo = closing
+		}
 		out.Months = append(out.Months, YearMonth{
-			Period:   period,
-			Ingresos: ingresos,
-			Gastos:   gastos,
-			Ahorro:   ahorro,
-			Balance:  balance,
-			Saldo:    saldo,
-			Alcanza:  saldo.GTE(types.Zero()),
+			Period:     period,
+			Ingresos:   ingresos,
+			Gastos:     gastos,
+			Ahorro:     ahorro,
+			Balance:    balance,
+			Saldo:      saldo,
+			Alcanza:    saldo.GTE(types.Zero()),
+			Conciliado: conciliado,
 		})
 		out.TotalIngresos = out.TotalIngresos.Add(ingresos)
 		out.TotalGastos = out.TotalGastos.Add(gastos)
@@ -1631,9 +1766,13 @@ func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {
 	if err != nil {
 		return TrashResult{Error: internalErr(err)}
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return TrashResult{Error: internalErr(err)}
+	}
 	now := currentPeriod()
 	for _, fe := range fixed {
-		amt := resolveAsOf(amountsByID[fe.ID], fixedDisplayPeriod(fe, now))
+		amt, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, fixedDisplayPeriod(fe, now)) // in pesos, like every trash amount
 		out = append(out, TrashItem{Type: "fixedexpense", ID: fe.ID, Description: fe.Description, Amount: &amt, DeletedAt: *fe.DeletedAt})
 	}
 

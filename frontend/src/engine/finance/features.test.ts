@@ -28,6 +28,7 @@ beforeEach(async () => {
 const filter = (f: Partial<ExpenseFilter> = {}): ExpenseFilter => ({
   text: '',
   category: '',
+  tag: '',
   cardId: null,
   fromPeriod: '',
   toPeriod: '',
@@ -61,7 +62,7 @@ describe('borrar filas inexistentes', () => {
 describe('renombrar categoría', () => {
   it('cascadea también a los gastos fijos', async () => {
     const cat = ok(await finance.CreateCategory('Servicios'))
-    ok(await finance.CreateFixedExpense('Luz', 'Servicios', null, '2030-01', '30000'))
+    ok(await finance.CreateFixedExpense('Luz', 'Servicios', null, '2030-01', '30000', 1, 'CLP'))
     ok(await finance.UpdateCategory(cat.data!.id, 'Hogar'))
     expect((await finance.ListFixedExpenses())[0]?.category).toBe('Hogar')
   })
@@ -71,7 +72,7 @@ describe('YearSummary.categoriaMeses', () => {
   it('desglosa por categoría y mes, consistente con porCategoria', async () => {
     ok(await finance.CreateExpense('2030-03-10', 'Tele', 'Hogar', '', null, 'cuotas', '1000', 3))
     ok(await finance.CreateExpense('2030-01-05', 'Pan', '', '', null, 'unico', '200', 1))
-    ok(await finance.CreateFixedExpense('Internet', 'Hogar', null, '2030-02', '500'))
+    ok(await finance.CreateFixedExpense('Internet', 'Hogar', null, '2030-02', '500', 1, 'CLP'))
 
     const y = ok(await finance.YearSummary(2030)).data!
     expect(y.categoriaMeses).toHaveLength(2)
@@ -117,7 +118,7 @@ describe('proyección de compromisos', () => {
     ok(await finance.SetSalary('2030-02', '1200000'))
     ok(await finance.CreateIncome('2030-03', 'Bono', '50000'))
     ok(await finance.CreateExpense('2030-01-10', 'Notebook', 'Tecno', '', null, 'cuotas', '100000', 2))
-    ok(await finance.CreateFixedExpense('Plan', 'Servicios', null, '2030-02', '20000'))
+    ok(await finance.CreateFixedExpense('Plan', 'Servicios', null, '2030-02', '20000', 1, 'CLP'))
 
     const f = ok(await finance.CommitmentsForecast('2030-01', 3)).data!
     expect(f).toEqual([
@@ -177,7 +178,7 @@ describe('búsqueda de gastos', () => {
 describe('aislamiento en escrituras por id y lecturas agregadas', () => {
   it('otro perfil no puede tocar ni ver filas ajenas', async () => {
     const period = '2030-01'
-    const fe = ok(await finance.CreateFixedExpense('Netflix', 'Servicios', null, period, '8000'))
+    const fe = ok(await finance.CreateFixedExpense('Netflix', 'Servicios', null, period, '8000', 1, 'CLP'))
     const cat = ok(await finance.CreateCategory('Servicios'))
     ok(await finance.SetCategoryBudget(cat.data!.id, period, '50000'))
     ok(await finance.CreateExpense(`${period}-10`, 'Cine', 'Servicios', '', null, 'cuotas', '10000', 3))
@@ -216,6 +217,13 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const imported = ok(await finance.ImportCardStatement(statement)).data!
     expect(imported.added).toBe(1)
     const creditID = ok(await finance.ListImportItems('pendiente')).data!.find((it) => it.kind === 'abono')!.id
+    // Reconciliations may not be in the future: this one closes a past month.
+    const reconciled = '2026-01'
+    ok(await finance.SetReconciliation(reconciled, '123456'))
+    // UF values are public data, but which months are needed depends on the profile.
+    ok(await finance.CreateFixedExpense('Arriendo', '', null, reconciled, '10', 12, 'UF'))
+    expect((await finance.UFMonthsNeeded())[0]).toBe(reconciled)
+    const refund = ok(await finance.CreateRefund(expense.data!.id, period, '1000', '')).data!
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -231,6 +239,10 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.ConfirmImportItemAsIncome(creditID, period, 'x', '1'),
       () => finance.GetCardStatement(imported.statementId),
       () => finance.DeleteCardStatement(imported.statementId),
+      () => finance.DeleteReconciliation(reconciled),
+      () => finance.CreateRefund(expense.data!.id, period, '1', ''),
+      () => finance.DeleteRefund(refund.id),
+      () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {
@@ -248,8 +260,12 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])
+    const hersFeb = ok(await finance.MonthlySummary('2026-02')).data!
+    expect([hersFeb.acumuladoDesde, hersFeb.acumulado]).toEqual(['', '0'])
+    expect(await finance.UFMonthsNeeded()).toEqual([])
 
     ok(await users.SwitchUser(1))
+    expect(ok(await finance.MonthlySummary('2026-02')).data!.acumuladoDesde).toBe(reconciled)
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })
     const pendingIDs = ok(await finance.ListImportItems('pendiente')).data!.map((it) => it.id)

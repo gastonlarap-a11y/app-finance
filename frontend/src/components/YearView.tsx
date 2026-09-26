@@ -1,6 +1,7 @@
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { FinanceService, type CategoryYearRow, type YearSummary } from '@/services/finance'
-import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom, tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
 import { formatCLP, monthLabel, yearOf } from '@/lib/format'
@@ -18,12 +19,12 @@ function hasActivity(data: YearSummary): boolean {
 
 export function YearView() {
   const [period, setPeriod] = useAtom(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   const setTab = useSetAtom(tabAtom)
   const year = yearOf(period)
 
-  const query = useQuery(`${year}:${refresh}`, async () => {
+  const query = useQuery(`${year}:${version}`, async () => {
     const res = await FinanceService.YearSummary(year)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'resumen vacío')
     return res.data
@@ -34,7 +35,7 @@ export function YearView() {
     setTab('mes')
   }
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const data = query.data
   if (!data) return <Spinner />
   const stale = query.status === 'loading'
@@ -88,7 +89,14 @@ export function YearView() {
                   <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.gastos)}</td>
                   {hasSavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
                   <td className={`py-2 text-right tabular-nums ${signTone(m.balance)}`}>{formatCLP(m.balance)}</td>
-                  <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>{formatCLP(m.saldo)}</td>
+                  <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>
+                    {formatCLP(m.saldo)}
+                    {m.conciliado && (
+                      <span className="ml-1 text-xs text-slate-400" title="Saldo real conciliado con el banco">
+                        ✓<span className="sr-only"> conciliado</span>
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 text-center">
                     <span aria-label={m.alcanza ? 'Sí alcanza' : 'No alcanza'}>{m.alcanza ? '✓' : '✕'}</span>
                   </td>

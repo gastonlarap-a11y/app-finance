@@ -159,6 +159,26 @@ func TestStageImportReconcilesAlertWithStatement(t *testing.T) {
 	}
 }
 
+func TestStageImportAcceptsACSVCartola(t *testing.T) {
+	s := newTestService(t)
+	alert := ImportBatch{Source: ImportSourceEmail, Issuer: "bancochile", Items: []ImportCandidate{
+		{Date: "2026-09-01", Description: "COMPRA LIDER", Amount: "25990"},
+	}}
+	mustStage(t, s, alert)
+	csv := ImportBatch{Source: ImportSourceCSV, Issuer: "Banco de Chile", Items: []ImportCandidate{
+		{Date: "2026-09-01", Description: "COMPRA LIDER", Amount: "25990", Kind: ImportKindExpense},
+		{Date: "2026-09-02", Description: "TRASPASO DE: EMPRESA", Amount: "1500000", Kind: ImportKindCredit},
+	}}
+	// A CSV line is a statement-family sighting: it reconciles with the alert.
+	if got := mustStage(t, s, csv); got != (StageSummary{Added: 1, Reconciled: 1}) {
+		t.Fatalf("csv = %+v, want 1 added + 1 reconciled", got)
+	}
+	// Re-importing the same file adds nothing.
+	if got := mustStage(t, s, csv); got != (StageSummary{Duplicates: 2}) {
+		t.Fatalf("csv again = %+v, want 2 duplicates", got)
+	}
+}
+
 func TestConfirmImportItemCreatesExpenseAndLearnsRule(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

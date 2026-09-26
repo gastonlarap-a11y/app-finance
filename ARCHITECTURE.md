@@ -135,7 +135,9 @@ The effective-dated lookup is generic (`effectiveDated` rows → `latestAsOf` / 
 so `cumulativeBalanceBefore` (and every summary that carries the balance forward) no longer grows with
 the history length. **Category budgets** (`category_budgets`, `budget.go`) reuse the same scheme keyed
 by `category_id` (renames keep the budget; the rows ride along with the category into the trash);
-`MonthlySummary.Presupuestos` compares each cap in effect with the month's `PorCategoria` total.
+`MonthlySummary.Presupuestos` compares each cap in effect with the month's `PorCategoria` total:
+`Over` past the cap, `Near` from 80 % of it (`budgetAlertPercent`, the usual early warning), shown as
+red and amber alerts atop the month view.
 
 **Performance (measured, not guessed).** `backend/finance/bench_test.go` seeds 5 years of history
 (≈3.000 expenses, cuotas, fixed expenses, a statement a month, 200 inbox items) and times the hot
@@ -161,12 +163,59 @@ fixed expenses vs. salary, reusing the last known salary for months without one)
 `savings_contributions` (per month, hard delete, ride along with their goal). Contributions are an
 outflow of their month: `MonthlySummary.Ahorro`, `Balance = Disponible − Gastos − Ahorro`,
 `Alcanza = Disponible ≥ Gastos + Ahorro`, and they are subtracted in `cumulativeBalanceBefore`, the
-year view and the forecast. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
+year view and the forecast. A withdrawal (`WithdrawSavings`) is a negative contribution: the same sums
+give the money back to its month, and a goal never goes below zero (withdrawing more than it holds, or
+deleting a contribution a withdrawal relies on, is refused). A goal past its target month and still
+short is `Overdue`, flagged in the Ahorro view. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
 average of the earlier months of a 2–24-month window, overall and per category (`spendingByMonth`).
 `DetectRecurring` (`recurring.go`) groups one-off expenses of the last 6 months by merchant (or
 description), keeps amounts within ±15 % of the group median and suggests those seen in ≥ 3 months
 that are not already a fixed expense; the UI converts one via `CreateFixedExpense` starting the month
 after its last charge, so nothing is counted twice.
+
+**Fixed-expense schedules and UF** (`fixedexpense.go`, `uf.go`, migration `20260926023`): a fixed
+expense bills every `interval_months` (1, 2, 3, 4, 6, 12) from its start (`billsIn`; `activeIn` is only
+its life span) and is priced in `currency` CLP or UF. Both are set at creation — changing them would
+move or re-price recorded charges. `fixedCharge` is the single rule every summary uses (month, year,
+forecast, trend, carried balance, inbox matching, trash): the amount in effect, times the UF value of
+that month when in UF, rounded half away from zero to whole pesos (`MulRound`). `uf_values(period,
+value)` holds the UF of day 1 of each month; it is public data (no `user_id`). A month without a
+value borrows the closest known one and the movimiento says so (`Estimado`, shown as "estimado").
+The backend never goes online for it: `lib/uf.ts` (shared by desktop and web) asks
+`UFMonthsNeeded`, downloads those years from mindicador.cl (free, no key, CORS `*`; allowed in the
+web CSP) and stores them with `SetUFValues`. `fixedTotal` keeps the carried balance of monthly CLP
+expenses O(amount changes) (`sumAsOf`) and walks billing months for the rest. Paying or linking a
+bank charge to a month off the schedule is refused (`requireBillsIn`).
+
+**Tags** (`tag.go`, migration `20260926025`), like Monarch's tags or Actual's #tags: labels across
+categories (viaje, trabajo, deducible). `tags(user_id, name, name_key)` (the lowercase key keeps
+"Viaje" and "viaje" one tag) and `expense_tags(expense_id, tag_id)`, which has no `user_id` and is
+written only after proving the expense is the profile's (`SetExpenseTags` replaces an expense's set:
+at most 10 tags of up to 30 characters). They show on the month's movimientos; `SearchExpenses`
+filters by one and returns `Sum`, the total of every match (not just the page) — "¿cuánto costó el
+viaje?". Renaming onto another tag's name is refused; deleting a tag removes it from its expenses.
+
+**Refunds** (`refund.go`, migration `20260926024`), as YNAB and Monarch treat them: `refunds(expense_id,
+period, amount)` is money returned for one expense (a store return, a bank reversal), partial or
+total, never more than the expense cost (`insertRefund`). It is a negative movimiento of the month it
+arrives in (`SourceReembolso`, status pagado) in its expense's category and card, so `Gastos`,
+`PorCategoria`, budgets, the card's month charges (`cardChargesIn`, statement comparison), the year,
+the trend and the carried balance (`flowsBetween`) are all net of it; the forecast adds it to
+`Libre`. Refunds ride along with their expense: a trashed expense's refunds count nowhere. A pending
+CLP bank credit named like a purchase of the last 120 days that cost at least as much gets a
+suggestion (`refundOf`) and `ConfirmImportItemAsRefund` links it (`import_items.refund_id`); deleting
+the refund lets the credit go back to review.
+
+**Reconciliation / opening balance** (`reconciliation.go`, migration `20260926022`), the reconciliation
+of Actual Budget and YNAB on this app's monthly grain: `reconciliations(user_id, period, amount)` is the
+real account balance at the close of a month (may be negative). `cumulativeBalanceBefore` starts from
+the latest one before the month and adds only the flows after it (`flowsBetween`: salaries + extras −
+cuotas − fixed − ahorro in `(after, before)`), so an unrecorded cash expense stops skewing every later
+month once the user reconciles. The "saldo inicial" is the same record on the month before the first
+one tracked. `MonthlySummary.Conciliacion` shows real vs computed (`Balance`) and the difference;
+`AcumuladoDesde` says which close the carried balance comes from. `YearSummary` and
+`CommitmentsForecast` reset their running balance at a reconciled close (`YearMonth.Conciliado`).
+A month that has not started cannot be reconciled.
 
 ## 4b. Backup & Google Drive
 
@@ -423,6 +472,15 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
 Movements detected by the bank reach the app through **one reviewed inbox** — nothing becomes an
 expense until the user confirms it:
 
+- **CSV of any bank** (`frontend/src/lib/statements/csv.ts` + `components/CsvImport.tsx`), the file
+  import of YNAB, Actual and Monarch: every Chilean bank exports its cartola to Excel/CSV, so instead
+  of a parser per layout the user maps the columns once (fecha, descripción, and a signed monto, a
+  column of card charges, or separate cargos/abonos). The reader detects the delimiter (`;` `,` tab)
+  and the encoding (UTF-8, else Windows-1252), reads es-CL dates and amounts, skips title/total rows,
+  and stages the rows with source `csv` (statement family: it reconciles with alert emails and
+  re-importing adds nothing). Bank-specific PDF/email parsers still need an anonymized real sample
+  of that bank's document.
+
 - **Inbox** (`backend/finance/importitem.go` + `imports.go`, mirrored in the TS engine):
   `import_items` rows move `pendiente → confirmado` (new expense via `ConfirmImportItem`, or an
   existing one via `LinkImportItem`) or `→ descartado`. `StageCandidates(ctx, idb, uid, batch)` is
@@ -511,3 +569,31 @@ Constraints, all verified on macOS with the real bundle and the real updater cod
 - Windows installs per user (`INSTALL_SCOPE: user`) so the exe can be replaced without UAC.
 - The PWA (web build) updates through its service worker (prompted, see §17);
   `services/web/updates.ts` is a stub.
+
+## 20. Desktop ⇄ iPad handoff (sync state)
+
+Desktop and iPad hold separate copies of the same `.sqlite` file. They move it by hand: a Drive
+backup or an exported file goes one way, a restore or a web import brings it in on the other side.
+The app never merges two copies. It only tells the user, before anything is replaced, how the
+incoming copy relates to the local one, so a copy with changes made elsewhere is never overwritten
+silently.
+
+- **Version vector (`sync_vector(device_id, edits)`)**: how many shared rounds of edits each
+  device has put into this copy. `sync_state.dirty` flips to 1 on any write to a user-data table,
+  through 72 SQLite triggers (insert, update and delete on 24 tables, migration
+  `20260926026_sync_state`). The triggers live in the schema, so the Go and TS engines share them.
+- **`MarkShared`** runs before a copy leaves the device: the desktop backup `Runner.Run` and the web
+  `exportDb`. If `dirty` is 1, it bumps this device's counter and clears the flag, in one
+  transaction. A copy made with no edits since the last share leaves the vector as it was.
+- **`CompareSync(local, dirty, device, incoming)`** returns `igual`, `mas-nueva`, `mas-antigua` or
+  `divergente`, using the usual vector dominance. It has one twist: when this device has unshared
+  edits (`dirty`), a copy that only matches its vector is `mas-antigua`, and one that also brings
+  another device's edits is `divergente`. `InspectBackup` (desktop) and `inspectDb` (web) fill
+  `sync` in the summary, and `SyncNoticeBox` turns it into the confirmation's warning.
+- **The device id lives outside the DB**, in desktop `prefs.json` (`prefs.DeviceID`, `escritorio-…`)
+  and in web `localStorage` (`web-…`). A restored copy therefore never brings the other device's
+  identity with it.
+- **Why not automatic merge or sync:** it would need a server, or both devices reaching the same
+  Drive file. The web build has no OAuth client, and `drive.file` only shows a file to the OAuth
+  client that created it, so the iPad cannot read the desktop's backup without a Google Cloud setup
+  per user. The zero-cost constraint rules out a server.

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import { FinanceService, KIND_UNICO, type ExpenseFilter } from '@/services/finance'
-import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom, tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
-import { Button, Empty, Field, QueryError, Section, Select, inputCls } from './ui'
+import { Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
 import { ExportButton } from './ExportButton'
 
 const PAGE = 50
@@ -23,34 +24,36 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export function SearchView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   const setPeriod = useSetAtom(periodAtom)
   const setTab = useSetAtom(tabAtom)
 
   const [text, setText] = useState('')
   const [category, setCategory] = useState('')
+  const [tag, setTag] = useState('')
   const [cardId, setCardId] = useState('')
   const [fromPeriod, setFromPeriod] = useState('')
   const [toPeriod, setToPeriod] = useState('')
   const [limit, setLimit] = useState(PAGE)
   const debouncedText = useDebounced(text.trim(), DEBOUNCE_MS)
 
-  const options = useQuery(`options:${refresh}`, async () => {
-    const [cats, cards] = await Promise.all([FinanceService.ListCategories(), FinanceService.ListCards()])
-    return { categories: cats.map((c) => c.name), cards }
+  const options = useQuery(`options:${version}`, async () => {
+    const [cats, cards, tags] = await Promise.all([FinanceService.ListCategories(), FinanceService.ListCards(), FinanceService.ListTags()])
+    return { categories: cats.map((c) => c.name), cards, tags: tags.map((t) => t.name) }
   })
 
   const filter: ExpenseFilter = {
     text: debouncedText,
     category,
+    tag,
     cardId: cardId === '' ? null : Number(cardId),
     fromPeriod,
     toPeriod,
     limit,
     offset: 0,
   }
-  const results = useQuery(`${JSON.stringify(filter)}:${refresh}`, async () => {
+  const results = useQuery(`${JSON.stringify(filter)}:${version}`, async () => {
     const res = await FinanceService.SearchExpenses(filter)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'búsqueda vacía')
     return res.data
@@ -64,14 +67,14 @@ export function SearchView() {
     }
   }
 
-  const hasFilters = text !== '' || category !== '' || cardId !== '' || fromPeriod !== '' || toPeriod !== ''
+  const hasFilters = text !== '' || category !== '' || tag !== '' || cardId !== '' || fromPeriod !== '' || toPeriod !== ''
   const data = results.data
   const stale = results.status === 'loading'
 
   return (
     <div className="space-y-5">
       <Section title="Buscar gastos">
-        <form role="search" onSubmit={(e) => e.preventDefault()} className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+        <form role="search" onSubmit={(e) => e.preventDefault()} className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
           <div className="lg:col-span-2">
             <Field label="Texto (descripción o comercio)">
               <input
@@ -90,6 +93,16 @@ export function SearchView() {
               {options.data?.categories.map((c) => (
                 <option key={c} value={c}>
                   {c}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Etiqueta">
+            <Select value={tag} onChange={(e) => changeFilter(setTag)(e.target.value)}>
+              <option value="">Todas</option>
+              {options.data?.tags.map((t) => (
+                <option key={t} value={t}>
+                  {t}
                 </option>
               ))}
             </Select>
@@ -120,6 +133,7 @@ export function SearchView() {
             onClick={() => {
               setText('')
               setCategory('')
+              setTag('')
               setCardId('')
               setFromPeriod('')
               setToPeriod('')
@@ -132,14 +146,14 @@ export function SearchView() {
       </Section>
 
       {results.status === 'error' ? (
-        <QueryError message={results.error} onRetry={() => bump((n) => n + 1)} />
+        <QueryError message={results.error} onRetry={() => invalidate('ledger')} />
       ) : !data ? (
         <Empty>Buscando…</Empty>
       ) : data.count === 0 ? (
         <Empty>{hasFilters ? 'Ningún gasto coincide con la búsqueda.' : 'Aún no registras gastos.'}</Empty>
       ) : (
         <Section
-          title={`${data.count} ${data.count === 1 ? 'gasto' : 'gastos'}`}
+          title={`${data.count} ${data.count === 1 ? 'gasto' : 'gastos'} · total ${formatCLP(data.sum)}`}
           action={<ExportButton build={() => searchTable(data.items)} basename={exportBasename('busqueda', todayISO())} />}
         >
           <div className={`overflow-x-auto transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale} aria-live="polite">
@@ -167,6 +181,7 @@ export function SearchView() {
                       <td className="py-2">
                         <div className="font-medium">{ex.description}</div>
                         {ex.merchant && <div className="text-xs text-slate-500">{ex.merchant}</div>}
+                        <TagChips tags={hit.tags} />
                       </td>
                       <td className="hidden py-2 text-slate-400 md:table-cell">{ex.category || 'Sin categoría'}</td>
                       <td className="hidden py-2 text-slate-400 lg:table-cell">{hit.cardName || '—'}</td>

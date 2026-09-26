@@ -60,9 +60,11 @@ type FixedExpenseResult struct {
 // been ended (cancelled).
 type FixedExpenseView struct {
 	FixedExpense
-	CurrentAmount types.Decimal `json:"currentAmount"` // monto vigente hoy
-	CardName      string        `json:"cardName"`
-	Active        bool          `json:"active"`
+	CurrentAmount    types.Decimal `json:"currentAmount"`    // monto vigente hoy, en su moneda (Currency)
+	CurrentAmountCLP types.Decimal `json:"currentAmountClp"` // el mismo en pesos (UF al valor del mes)
+	NextPeriod       string        `json:"nextPeriod"`       // próximo mes que cobra ("" si ya terminó)
+	CardName         string        `json:"cardName"`
+	Active           bool          `json:"active"`
 }
 
 // --- Summary view models ---
@@ -76,10 +78,11 @@ const (
 // Movimiento is one row of a month's view: either an installment joined with its
 // expense/card (Source="cuota") or a recurring fixed expense (Source="fijo").
 type Movimiento struct {
-	Source        string        `json:"source"`        // "cuota" | "fijo"
+	Source        string        `json:"source"`        // "cuota" | "fijo" | "reembolso"
 	InstallmentID int64         `json:"installmentId"` // 0 para fijos
 	ExpenseID     int64         `json:"expenseId"`     // 0 para fijos
 	FixedID       *int64        `json:"fixedId"`       // set sólo para fijos
+	RefundID      *int64        `json:"refundId"`      // set sólo para reembolsos (monto negativo)
 	Description   string        `json:"description"`
 	Category      string        `json:"category"`
 	Merchant      string        `json:"merchant"`
@@ -91,6 +94,13 @@ type Movimiento struct {
 	Amount        types.Decimal `json:"amount"`
 	Status        string        `json:"status"`
 	Date          *time.Time    `json:"date"` // nil para gastos fijos
+	// UFAmount is the charge in UF when the fixed expense is priced in UF (Amount
+	// is its conversion to pesos); nil otherwise.
+	UFAmount *types.Decimal `json:"ufAmount"`
+	// Estimado: Amount rests on an estimated UF value (month not downloaded yet).
+	Estimado bool `json:"estimado"`
+	// Tags of the expense behind a cuota (always a list, empty when none).
+	Tags []string `json:"tags"`
 }
 
 type CategoryTotal struct {
@@ -125,6 +135,29 @@ type MonthlySummary struct {
 	Movimientos  []Movimiento    `json:"movimientos"`
 	Incomes      []Income        `json:"incomes"`
 	Presupuestos []BudgetStatus  `json:"presupuestos"` // sólo categorías con tope vigente
+	// AcumuladoDesde is the reconciled month the carried balance starts from
+	// ("" = it sums the whole history).
+	AcumuladoDesde string `json:"acumuladoDesde"`
+	// Conciliacion compares this month's real closing balance with Balance;
+	// nil until the user reconciles the month.
+	Conciliacion *ReconciliationStatus `json:"conciliacion"`
+}
+
+// ReconciliationStatus is a month's real closing balance against the computed one.
+type ReconciliationStatus struct {
+	SaldoReal  types.Decimal `json:"saldoReal"`
+	Calculado  types.Decimal `json:"calculado"`  // Balance del mes
+	Diferencia types.Decimal `json:"diferencia"` // saldoReal − calculado (negativo: falta plata)
+}
+
+type RefundResult struct {
+	Data  *Refund          `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+type ReconciliationResult struct {
+	Data  *Reconciliation  `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
 }
 
 // BudgetStatus compares a category's monthly cap with what the month charges to it
@@ -136,6 +169,7 @@ type BudgetStatus struct {
 	Spent      types.Decimal `json:"spent"`
 	Remaining  types.Decimal `json:"remaining"` // negativo cuando se excede
 	Over       bool          `json:"over"`
+	Near       bool          `json:"near"` // ya gastó el 80 % o más del tope, sin excederlo
 }
 
 // CategoryBudgetView is the cap in effect for one category at a given month.
@@ -164,6 +198,8 @@ type YearMonth struct {
 	Balance  types.Decimal `json:"balance"` // neto del mes (ingresos − gastos − ahorro)
 	Saldo    types.Decimal `json:"saldo"`   // saldo acumulado al cierre del mes
 	Alcanza  bool          `json:"alcanza"`
+	// Conciliado: Saldo is the real balance the user reconciled, not a sum.
+	Conciliado bool `json:"conciliado"`
 }
 
 type YearSummary struct {
@@ -202,7 +238,7 @@ type ForecastMonth struct {
 	Ahorro          types.Decimal `json:"ahorro"`       // aportes a metas ya registrados para ese mes
 	Ingresos        types.Decimal `json:"ingresos"`
 	IngresoEstimado bool          `json:"ingresoEstimado"` // sin sueldo cargado: se usa el último conocido
-	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido − ahorro
+	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido − ahorro + reembolsos ya registrados
 	SaldoProyectado types.Decimal `json:"saldoProyectado"` // saldo acumulado al cierre si sólo ocurre lo comprometido
 }
 
@@ -232,7 +268,8 @@ type SavingsGoalView struct {
 	Remaining     types.Decimal         `json:"remaining"`
 	MonthsLeft    int                   `json:"monthsLeft"`
 	MonthlyNeeded types.Decimal         `json:"monthlyNeeded"`
-	Contributions []SavingsContribution `json:"contributions"` // newest first
+	Overdue       bool                  `json:"overdue"`       // pasó su mes objetivo sin completarse
+	Contributions []SavingsContribution `json:"contributions"` // newest first; withdrawals are negative
 }
 
 // --- Spending trend ---
@@ -291,6 +328,7 @@ type RecurringResult struct {
 type ExpenseFilter struct {
 	Text       string `json:"text"` // descripción o comercio (contiene)
 	Category   string `json:"category"`
+	Tag        string `json:"tag"` // nombre de etiqueta (sin distinguir mayúsculas); "" = cualquiera
 	CardID     *int64 `json:"cardId"`
 	FromPeriod string `json:"fromPeriod"` // YYYY-MM
 	ToPeriod   string `json:"toPeriod"`   // YYYY-MM
@@ -307,11 +345,13 @@ type ExpenseHit struct {
 	LastPeriod  string        `json:"lastPeriod"`
 	Total       types.Decimal `json:"total"` // monto cuota × cuotas
 	PaidCount   int           `json:"paidCount"`
+	Tags        []string      `json:"tags"`
 }
 
 type ExpenseSearch struct {
-	Items []ExpenseHit `json:"items"`
-	Count int          `json:"count"` // total de coincidencias (para paginar)
+	Items []ExpenseHit  `json:"items"`
+	Count int           `json:"count"` // total de coincidencias (para paginar)
+	Sum   types.Decimal `json:"sum"`   // Σ total de todas las coincidencias, no sólo de esta página
 }
 
 type ExpenseSearchResult struct {
@@ -360,6 +400,10 @@ type ImportItemView struct {
 	SuggestedFixedID          *int64 `json:"suggestedFixedId"`
 	SuggestedFixedDescription string `json:"suggestedFixedDescription"`
 	SuggestedFixedPeriod      string `json:"suggestedFixedPeriod"`
+	// A pending bank credit that looks like the refund of a recent purchase
+	// (same name, not more than it cost): ConfirmImportItemAsRefund links it.
+	SuggestedRefundExpenseID   *int64 `json:"suggestedRefundExpenseId"`
+	SuggestedRefundDescription string `json:"suggestedRefundDescription"`
 	// A confirmed item whose expense or income went to the trash can go back
 	// to review (RestoreImportItem).
 	Reopenable bool `json:"reopenable"`

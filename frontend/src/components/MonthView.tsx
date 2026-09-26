@@ -1,41 +1,47 @@
 import { useEffect, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import {
   FinanceService,
   SOURCE_FIJO,
+  SOURCE_REEMBOLSO,
   STATUS_PAGADO,
   type BudgetStatus,
   type Expense,
+  type MonthlySummary,
   type Movimiento,
   type OpResult,
 } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { greaterThan, isZero, ratio } from '@/lib/money'
-import { formatCLP, formatDate } from '@/lib/format'
-import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
+import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
+import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
+import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
 import { TrendPanel } from './TrendPanel'
 import { StatementBanner } from './CardStatements'
+import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
+import { RefundDialog } from './RefundDialog'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
 
 function movKey(m: Movimiento): string {
+  if (m.source === SOURCE_REEMBOLSO) return `reembolso-${m.refundId}`
   return m.source === SOURCE_FIJO ? `fijo-${m.fixedId}` : `cuota-${m.installmentId}`
 }
 
 export function MonthView() {
   const period = useAtomValue(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
 
-  const query = useQuery(`${period}:${refresh}`, async () => {
+  const query = useQuery(`${period}:${version}`, async () => {
     const [summary, expenses, cats, mers] = await Promise.all([
       FinanceService.MonthlySummary(period),
       FinanceService.ListExpenses(period),
@@ -57,6 +63,9 @@ export function MonthView() {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
   const [filterCategory, setFilterCategory] = useState('')
   const [filterCardId, setFilterCardId] = useState<number | ''>('')
+  const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
+  const [refundFor, setRefundFor] = useState<Movimiento | null>(null)
+  const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
 
   function openNewExpense() {
     setEditing(null)
@@ -115,9 +124,16 @@ export function MonthView() {
     reload()
   }
 
+  async function removeRefund(refundId: number) {
+    setConfirmRefundId(null)
+    // A bank credit confirmed as this refund can then go back to review.
+    if (!failed(await FinanceService.DeleteRefund(refundId))) invalidate('ledger', 'imports')
+  }
+
   async function removeExpense(expenseId: number) {
     setConfirmExpId(null)
-    if (!failed(await FinanceService.DeleteExpense(expenseId))) reload()
+    // Its import item (if any) reopens and its statement lines unlink.
+    if (!failed(await FinanceService.DeleteExpense(expenseId))) invalidate('ledger', 'imports')
   }
 
   function editExpense(expenseId: number) {
@@ -131,6 +147,7 @@ export function MonthView() {
   const balanceTone = summary.alcanza ? 'success' : 'danger'
   const budgetByCategory = new Map<string, BudgetStatus>(summary.presupuestos.map((b) => [b.category, b]))
   const overBudget = summary.presupuestos.filter((b) => b.over)
+  const nearBudget = summary.presupuestos.filter((b) => b.near)
 
   // Built from the movimientos themselves (not summary.porTarjeta) so a card that
   // was since soft-deleted still shows up as a filter option for its past charges.
@@ -165,6 +182,18 @@ export function MonthView() {
           .
         </div>
       )}
+      {nearBudget.length > 0 && (
+        <div role="status" className="rounded-base bg-warning/10 px-4 py-3 text-sm text-amber-200 ring-1 ring-warning/30">
+          Cerca del tope (80 % o más) en{' '}
+          {nearBudget.map((b, i) => (
+            <span key={b.categoryId}>
+              {i > 0 && ', '}
+              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(b.budget)})
+            </span>
+          ))}
+          .
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
@@ -185,13 +214,17 @@ export function MonthView() {
           hint={
             isZero(summary.ahorro)
               ? 'Se arrastra al próximo mes'
-              : `Tras ahorrar ${formatCLP(summary.ahorro)} · se arrastra al próximo mes`
+              : isNegative(summary.ahorro)
+                ? `Con ${formatCLP(subtract('0', summary.ahorro))} retirados del ahorro · se arrastra al próximo mes`
+                : `Tras ahorrar ${formatCLP(summary.ahorro)} · se arrastra al próximo mes`
           }
         />
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
 
-      <StatementBanner period={period} refresh={refresh} />
+      <ReconciliationBar summary={summary} onOpen={setReconcile} />
+
+      <StatementBanner period={period} />
 
       <div className="grid gap-5 lg:grid-cols-4">
         <div className="lg:col-span-3">
@@ -277,6 +310,7 @@ export function MonthView() {
                         {filteredMovs.map((m) => {
                           const paid = m.status === STATUS_PAGADO
                           const isFijo = m.source === SOURCE_FIJO
+                          const isRefund = m.source === SOURCE_REEMBOLSO
                           const busy = pending.has(movKey(m))
                           return (
                             <tr key={movKey(m)} className="border-t border-slate-800">
@@ -284,6 +318,7 @@ export function MonthView() {
                                 <span className="block max-w-[220px] truncate" title={m.description}>
                                   {m.description}
                                 </span>
+                                <TagChips tags={m.tags} />
                               </td>
                               <td className="hidden py-2 text-slate-400 md:table-cell">
                                 <span className="block max-w-[140px] truncate" title={m.category}>
@@ -301,11 +336,25 @@ export function MonthView() {
                                 </span>
                               </td>
                               <td className="hidden py-2 text-slate-400 lg:table-cell">
-                                {isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}
+                                {isFijo ? 'Fijo' : isRefund ? 'Reembolso' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}
                               </td>
-                              <td className="hidden py-2 text-slate-400 md:table-cell">{isFijo ? '—' : formatDate(m.date)}</td>
-                              <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
+                              <td className="hidden py-2 text-slate-400 md:table-cell">{isFijo || isRefund ? '—' : formatDate(m.date)}</td>
+                              <td className={`py-2 text-right tabular-nums ${isRefund ? 'text-success' : ''}`}>
+                                {formatCLP(m.amount)}
+                                {m.ufAmount !== null && (
+                                  <span
+                                    className="block text-xs text-slate-500"
+                                    title={m.estimado ? 'Valor de la UF estimado: aún no se descarga el de este mes' : undefined}
+                                  >
+                                    {formatUF(m.ufAmount)}
+                                    {m.estimado && ' · estimado'}
+                                  </span>
+                                )}
+                              </td>
                               <td className="py-2 text-center">
+                                {isRefund ? (
+                                  <span className="rounded-full bg-success/20 px-2 py-0.5 text-xs font-medium text-success">Devuelto</span>
+                                ) : (
                                 <button
                                   type="button"
                                   onClick={() => togglePaid(m, paid)}
@@ -318,12 +367,36 @@ export function MonthView() {
                                 >
                                   {busy ? '…' : paid ? 'Pagado' : 'Pendiente'}
                                 </button>
+                                )}
                               </td>
                               <td className="whitespace-nowrap py-2 text-right">
                                 {isFijo ? (
                                   <span className="text-xs text-slate-500" title="Se administra en la pestaña Fijos">
                                     Fijo ⚙
                                   </span>
+                                ) : isRefund && m.refundId !== null ? (
+                                  confirmRefundId === m.refundId ? (
+                                    <>
+                                      <button type="button" onClick={() => removeRefund(m.refundId!)} className="text-xs text-danger hover:text-red-400">
+                                        Quitar
+                                      </button>{' '}
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmRefundId(null)}
+                                        className="text-xs text-slate-400 hover:text-slate-200"
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <IconButton
+                                      label={`Quitar reembolso ${m.description}`}
+                                      onClick={() => setConfirmRefundId(m.refundId)}
+                                      className="text-slate-400 hover:text-danger"
+                                    >
+                                      🗑
+                                    </IconButton>
+                                  )
                                 ) : confirmExpId === m.expenseId ? (
                                   <>
                                     <button
@@ -349,6 +422,13 @@ export function MonthView() {
                                       className="text-slate-400 hover:text-primary"
                                     >
                                       ✎
+                                    </IconButton>{' '}
+                                    <IconButton
+                                      label={`Registrar reembolso de ${m.description}`}
+                                      onClick={() => setRefundFor(m)}
+                                      className="text-slate-400 hover:text-success"
+                                    >
+                                      ↩
                                     </IconButton>{' '}
                                     <IconButton
                                       label={`Eliminar ${m.description}`}
@@ -383,7 +463,10 @@ export function MonthView() {
                           <span className="w-40 shrink-0 truncate text-slate-300">{c.category}</span>
                           <div className="flex-1">
                             {budget ? (
-                              <Bar fill={ratio(budget.spent, budget.budget)} tone={budget.over ? 'danger' : 'success'} />
+                              <Bar
+                                fill={ratio(budget.spent, budget.budget)}
+                                tone={budget.over ? 'danger' : budget.near ? 'warning' : 'success'}
+                              />
                             ) : (
                               <Bar fill={ratio(c.total, summary.gastos)} />
                             )}
@@ -391,7 +474,9 @@ export function MonthView() {
                           <span className="w-28 shrink-0 text-right tabular-nums">{formatCLP(c.total)}</span>
                         </div>
                         {budget && (
-                          <div className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : 'text-slate-500'}`}>
+                          <div
+                            className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : budget.near ? 'text-warning' : 'text-slate-500'}`}
+                          >
                             {budget.over
                               ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(budget.budget)}`
                               : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(budget.budget)}`}
@@ -406,7 +491,7 @@ export function MonthView() {
           )}
 
           <div className="mt-5">
-            <TrendPanel period={period} refresh={refresh} />
+            <TrendPanel period={period} />
           </div>
         </div>
 
@@ -462,11 +547,74 @@ export function MonthView() {
           cards={summary.porTarjeta.map((t) => t.card)}
           categories={categories}
           merchants={merchants}
-          target={editing ? { mode: 'edit', expense: editing } : { mode: 'create' }}
+          target={
+            editing
+              ? { mode: 'edit', expense: editing, tags: summary.movimientos.find((m) => m.expenseId === editing.id)?.tags ?? [] }
+              : { mode: 'create' }
+          }
           onClose={() => setShowForm(false)}
           onSaved={reload}
         />
       )}
+      {refundFor && (
+        <RefundDialog
+          expenseId={refundFor.expenseId}
+          expenseDescription={refundFor.description}
+          defaultPeriod={summary.period}
+          onClose={() => setRefundFor(null)}
+          onSaved={() => {
+            setRefundFor(null)
+            reload()
+          }}
+        />
+      )}
+      {reconcile && (
+        <ReconcileDialog
+          mode={reconcile}
+          summary={summary}
+          onClose={() => setReconcile(null)}
+          onSaved={() => {
+            setReconcile(null)
+            reload()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ReconciliationBar says where the carried balance comes from and offers to
+// set the opening balance or reconcile the month's close with the bank.
+function ReconciliationBar({ summary, onOpen }: { summary: MonthlySummary; onOpen: (mode: ReconcileMode) => void }) {
+  const rec = summary.conciliacion
+  const canClose = summary.period <= currentPeriod()
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-base bg-surface px-4 py-3 text-sm ring-1 ring-slate-800">
+      <div className="space-y-0.5">
+        <p className="text-slate-400">
+          {summary.acumuladoDesde
+            ? `Saldo arrastrado desde el cierre conciliado de ${periodLabel(summary.acumuladoDesde)}.`
+            : 'Saldo arrastrado desde el primer mes con datos (sin saldo inicial).'}
+        </p>
+        {rec && (
+          <p>
+            Cierre conciliado: saldo real <strong>{formatCLP(rec.saldoReal)}</strong> · calculado {formatCLP(rec.calculado)} ·{' '}
+            <span className={isZero(rec.diferencia) ? 'text-success' : isNegative(rec.diferencia) ? 'text-danger' : 'text-warning'}>
+              {isZero(rec.diferencia) ? 'cuadra ✓' : `diferencia ${formatCLP(rec.diferencia)}`}
+            </span>
+          </p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Button variant="ghost" onClick={() => onOpen('inicio')}>
+          Saldo inicial
+        </Button>
+        {canClose && (
+          <Button variant="ghost" onClick={() => onOpen('cierre')}>
+            {rec ? 'Editar conciliación' : 'Conciliar cierre'}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

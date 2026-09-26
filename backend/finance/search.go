@@ -7,6 +7,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
 
 const (
@@ -39,41 +40,67 @@ func (s *FinanceService) SearchExpenses(ctx context.Context, f ExpenseFilter) Ex
 
 	uid := s.uid()
 	var expenses []Expense
-	q := s.db.NewSelect().Model(&expenses).Where("ex.user_id = ?", uid)
-	if text := strings.TrimSpace(f.Text); text != "" {
-		pattern := "%" + escapeLike(text) + "%"
-		q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\')`, pattern, pattern)
-	}
-	switch cat := strings.TrimSpace(f.Category); cat {
-	case "":
-	case uncategorized:
-		q = q.Where("ex.category = ''")
-	default:
-		q = q.Where("ex.category = ?", cat)
-	}
-	if f.CardID != nil {
-		q = q.Where("ex.card_id = ?", *f.CardID)
-	}
-	if f.FromPeriod != "" || f.ToPeriod != "" {
-		from, to := f.FromPeriod, f.ToPeriod
-		if from == "" {
-			from = "0000-01"
-		}
-		if to == "" {
-			to = "9999-12"
-		}
-		q = q.Where("ex.id IN (SELECT expense_id FROM installments WHERE user_id = ? AND period >= ? AND period <= ?)", uid, from, to)
-	}
-	count, err := q.Order("ex.date DESC", "ex.id DESC").Limit(limit).Offset(offset).ScanAndCount(ctx)
+	count, err := s.db.NewSelect().Model(&expenses).
+		Apply(expenseFilter(uid, f)).
+		Order("ex.date DESC", "ex.id DESC").Limit(limit).Offset(offset).ScanAndCount(ctx)
 	if err != nil {
 		return ExpenseSearchResult{Error: internalErr(err)}
+	}
+	// The sum covers every match, not just this page ("¿cuánto costó el viaje?").
+	var totals []struct {
+		InstallmentAmount types.Decimal `bun:"installment_amount"`
+		InstallmentsTotal int           `bun:"installments_total"`
+	}
+	if err := s.db.NewSelect().Model((*Expense)(nil)).Column("installment_amount", "installments_total").
+		Apply(expenseFilter(uid, f)).Scan(ctx, &totals); err != nil {
+		return ExpenseSearchResult{Error: internalErr(err)}
+	}
+	sum := types.Zero()
+	for _, t := range totals {
+		sum = sum.Add(t.InstallmentAmount.MulInt(int64(max(t.InstallmentsTotal, 1))))
 	}
 
 	hits, err := s.expenseHits(ctx, uid, expenses)
 	if err != nil {
 		return ExpenseSearchResult{Error: internalErr(err)}
 	}
-	return ExpenseSearchResult{Data: &ExpenseSearch{Items: hits, Count: count}}
+	return ExpenseSearchResult{Data: &ExpenseSearch{Items: hits, Count: count, Sum: sum}}
+}
+
+// expenseFilter applies f to a query over uid's (live) expenses aliased ex.
+func expenseFilter(uid int64, f ExpenseFilter) func(*bun.SelectQuery) *bun.SelectQuery {
+	return func(q *bun.SelectQuery) *bun.SelectQuery {
+		q = q.Where("ex.user_id = ?", uid)
+		if text := strings.TrimSpace(f.Text); text != "" {
+			pattern := "%" + escapeLike(text) + "%"
+			q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\')`, pattern, pattern)
+		}
+		switch cat := strings.TrimSpace(f.Category); cat {
+		case "":
+		case uncategorized:
+			q = q.Where("ex.category = ''")
+		default:
+			q = q.Where("ex.category = ?", cat)
+		}
+		if tag := strings.Join(strings.Fields(f.Tag), " "); tag != "" {
+			q = q.Where(`ex.id IN (SELECT et.expense_id FROM expense_tags AS et JOIN tags AS tg ON tg.id = et.tag_id
+				WHERE tg.user_id = ? AND tg.name_key = ?)`, uid, tagKey(tag))
+		}
+		if f.CardID != nil {
+			q = q.Where("ex.card_id = ?", *f.CardID)
+		}
+		if f.FromPeriod != "" || f.ToPeriod != "" {
+			from, to := f.FromPeriod, f.ToPeriod
+			if from == "" {
+				from = "0000-01"
+			}
+			if to == "" {
+				to = "9999-12"
+			}
+			q = q.Where("ex.id IN (SELECT expense_id FROM installments WHERE user_id = ? AND period >= ? AND period <= ?)", uid, from, to)
+		}
+		return q
+	}
 }
 
 // expenseHits enriches expenses with their card name and installment span/progress.
@@ -112,11 +139,19 @@ func (s *FinanceService) expenseHits(ctx context.Context, uid int64, expenses []
 	if err != nil {
 		return nil, err
 	}
+	tags, err := s.tagsByExpense(ctx, uid, ids)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, ex := range expenses {
 		hit := ExpenseHit{
 			Expense: ex,
 			Total:   ex.InstallmentAmount.MulInt(int64(max(ex.InstallmentsTotal, 1))),
+			Tags:    tags[ex.ID],
+		}
+		if hit.Tags == nil {
+			hit.Tags = []string{}
 		}
 		if sp := spans[ex.ID]; sp != nil {
 			hit.FirstPeriod, hit.LastPeriod, hit.PaidCount = sp.first, sp.last, sp.paid

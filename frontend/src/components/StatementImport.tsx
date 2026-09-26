@@ -3,6 +3,7 @@ import { FinanceService, type CardStatementImport, type StageSummary } from '@/s
 import type { DetectedStatement } from '@/lib/statements/detect'
 import { errorText } from '@/lib/useQuery'
 import { Button } from './ui'
+import { CsvImportDialog } from './CsvImport'
 
 // Outcome of one "Importar PDF" run, shown until dismissed or replaced.
 type Outcome =
@@ -69,18 +70,39 @@ async function importParsed(parsed: DetectedStatement, data: ArrayBuffer): Promi
   return { results }
 }
 
-// StatementImport reads a bank statement PDF and stages its movements in the
-// inbox, then reports exactly what happened: what was added, what was already
-// there, what was skipped on purpose and any check that failed.
+// isCsv tells a CSV export (any bank, columns mapped by the user) from a PDF.
+function isCsv(file: File): boolean {
+  return file.type === 'text/csv' || /\.(csv|txt)$/i.test(file.name)
+}
+
+// StatementImport reads a bank statement (a PDF we have a parser for, or a
+// CSV export of any bank) and stages its movements in the inbox, then reports
+// exactly what happened: what was added, what was already there, what was
+// skipped on purpose and any check that failed.
 export function StatementImport({ onImported }: { onImported: () => void }) {
   const inputId = useId()
   const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+  const [csv, setCsv] = useState<{ file: string; rows: string[][] } | null>(null)
+
+  async function openCsv(file: File) {
+    const { decodeText, parseCsv } = await import('@/lib/statements/csv')
+    const rows = parseCsv(decodeText(new Uint8Array(await file.arrayBuffer())))
+    if (rows.length < 2) {
+      setOutcome({ kind: 'error', file: file.name, message: 'El archivo no tiene filas que leer.' })
+      return
+    }
+    setCsv({ file: file.name, rows })
+  }
 
   async function importFile(file: File) {
     setBusy(true)
     try {
+      if (isCsv(file)) {
+        await openCsv(file)
+        return
+      }
       const data = await file.arrayBuffer()
       // pdf.js may transfer (detach) the buffer it reads: hand it a copy.
       const parsed = await readStatement(data.slice(0))
@@ -106,7 +128,7 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
           ref={input}
           id={inputId}
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,text/csv,.csv"
           className="sr-only"
           // Opened by the button below: keep it out of the tab order and the a11y tree.
           tabIndex={-1}
@@ -117,12 +139,33 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
           }}
         />
         <Button onClick={() => input.current?.click()} disabled={busy}>
-          {busy ? 'Leyendo PDF…' : 'Importar estado de cuenta (PDF)'}
+          {busy ? 'Leyendo archivo…' : 'Importar cartola (PDF o CSV)'}
         </Button>
         <span className="text-xs text-slate-500">
-          Cartola de cuenta corriente o estado de cuenta de tarjeta de crédito Itaú. Reimportar el mismo PDF no duplica movimientos.
+          PDF: cartola o estado de cuenta de tarjeta Itaú. CSV: la cartola exportada por cualquier banco (eliges qué columna
+          es cada dato). Reimportar el mismo archivo no duplica movimientos.
         </span>
       </div>
+
+      {csv && (
+        <CsvImportDialog
+          fileName={csv.file}
+          rows={csv.rows}
+          onClose={() => setCsv(null)}
+          onImported={(summary, skipped) => {
+            setCsv(null)
+            setOutcome({
+              kind: 'done',
+              file: csv.file,
+              format: 'CSV',
+              results: [`CSV: ${stagedText(summary, 'alertas de correo')}.`],
+              notes: skipped > 0 ? [`${skipped} filas omitidas (títulos, totales o saldos).`] : [],
+              warnings: [],
+            })
+            onImported()
+          }}
+        />
+      )}
 
       {outcome && (
         <div

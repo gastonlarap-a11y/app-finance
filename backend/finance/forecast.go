@@ -47,6 +47,11 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 	if err != nil {
 		return nil, err
 	}
+	// Future months have no UF value yet: fixedCharge uses the latest known one.
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Every salary up to the horizon: the ones before `from` only seed the
 	// "last known salary" used to estimate months without one.
@@ -80,7 +85,23 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		return nil, err
 	}
 
-	saldo, err := s.cumulativeBalanceBefore(ctx, uid, from)
+	saldo, _, err := s.cumulativeBalanceBefore(ctx, uid, from)
+	if err != nil {
+		return nil, err
+	}
+	// Refunds already recorded in the horizon come back into the account
+	// (added to Libre, as in the month and year views).
+	refunds, err := s.refundsIn(ctx, uid, from, to)
+	if err != nil {
+		return nil, err
+	}
+	refundedIn := map[string]types.Decimal{}
+	for _, r := range refunds {
+		refundedIn[r.Period] = refundedIn[r.Period].Add(r.Amount)
+	}
+	// A past month of the horizon may already be reconciled: from its close on,
+	// the projection starts from the real balance.
+	realByMonth, err := s.reconciliationsIn(ctx, uid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +111,9 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		period := addMonths(from, i)
 		fijos := types.Zero()
 		for _, fe := range fixed {
-			if fe.activeIn(period) {
-				fijos = fijos.Add(resolveAsOf(amountsByID[fe.ID], period))
+			if fe.billsIn(period) {
+				clp, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, period)
+				fijos = fijos.Add(clp)
 			}
 		}
 		salary, known := salaryByMonth[period]
@@ -102,8 +124,11 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		}
 		ingresos := salary.Add(extras[period])
 		comprometido := cuotas[period].Add(fijos)
-		libre := ingresos.Sub(comprometido).Sub(ahorro[period])
+		libre := ingresos.Sub(comprometido).Sub(ahorro[period]).Add(refundedIn[period])
 		saldo = saldo.Add(libre)
+		if closing, ok := realByMonth[period]; ok {
+			saldo = closing
+		}
 		out = append(out, ForecastMonth{
 			Period:          period,
 			Cuotas:          cuotas[period],

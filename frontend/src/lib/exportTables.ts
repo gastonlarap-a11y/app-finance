@@ -71,6 +71,7 @@ export function searchTable(items: ExpenseHit[]): ExportTable {
       { title: 'Total', kind: 'money' },
       { title: 'Desde', kind: 'text' },
       { title: 'Hasta', kind: 'text' },
+      { title: 'Etiquetas', kind: 'text' },
     ],
     rows: items.map((h) => [
       h.expense.date.slice(0, 10),
@@ -84,6 +85,7 @@ export function searchTable(items: ExpenseHit[]): ExportTable {
       h.total,
       h.firstPeriod,
       h.lastPeriod,
+      h.tags.join(', '),
     ]),
   }
 }

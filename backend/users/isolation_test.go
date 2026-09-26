@@ -86,7 +86,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	usr := users.NewService(bdb, session, "test-app-finance-crossuser")
 
 	const period = "2030-01"
-	fe := fin.CreateFixedExpense(ctx, "Netflix", "Servicios", nil, period, "8000")
+	fe := fin.CreateFixedExpense(ctx, "Netflix", "Servicios", nil, period, "8000", 1, finance.CurrencyCLP)
 	if fe.Error != nil {
 		t.Fatalf("CreateFixedExpense: %v", fe.Error)
 	}
@@ -148,6 +148,29 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			creditID = it.ID
 		}
 	}
+	// Reconciliations may not be in the future: this one closes a past month.
+	const reconciled = "2026-01"
+	if r := fin.SetReconciliation(ctx, reconciled, "123456"); r.Error != nil {
+		t.Fatalf("SetReconciliation: %v", r.Error)
+	}
+	// UF values are public data, but which months are needed depends on the profile.
+	if r := fin.CreateFixedExpense(ctx, "Arriendo", "", nil, reconciled, "10", 12, finance.CurrencyUF); r.Error != nil {
+		t.Fatalf("CreateFixedExpense UF: %v", r.Error)
+	}
+	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) == 0 || need[0] != reconciled {
+		t.Fatalf("Gastón UFMonthsNeeded = %v (err %v), want it to start at %s", need, err, reconciled)
+	}
+	refund := fin.CreateRefund(ctx, expense.Data.ID, period, "1000", "")
+	if refund.Error != nil {
+		t.Fatalf("CreateRefund: %v", refund.Error)
+	}
+	if r := fin.SetExpenseTags(ctx, expense.Data.ID, []string{"Salud"}); r.Error != nil {
+		t.Fatalf("SetExpenseTags: %v", r.Error)
+	}
+	tags, err := fin.ListTags(ctx)
+	if err != nil || len(tags) != 1 {
+		t.Fatalf("ListTags = %+v (err %v), want 1", tags, err)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -183,6 +206,17 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.GetCardStatement(ctx, imported.Data.StatementID).Error}
 		}},
 		{"DeleteCardStatement", func() finance.OpResult { return fin.DeleteCardStatement(ctx, imported.Data.StatementID) }},
+		{"DeleteReconciliation", func() finance.OpResult { return fin.DeleteReconciliation(ctx, reconciled) }},
+		{"CreateRefund", func() finance.OpResult {
+			return finance.OpResult{Error: fin.CreateRefund(ctx, expense.Data.ID, period, "1", "").Error}
+		}},
+		{"DeleteRefund", func() finance.OpResult { return fin.DeleteRefund(ctx, refund.Data.ID) }},
+		{"ConfirmImportItemAsRefund", func() finance.OpResult {
+			return finance.OpResult{Error: fin.ConfirmImportItemAsRefund(ctx, creditID, expense.Data.ID, period, "1").Error}
+		}},
+		{"SetExpenseTags", func() finance.OpResult { return fin.SetExpenseTags(ctx, expense.Data.ID, []string{"x"}) }},
+		{"RenameTag", func() finance.OpResult { return fin.RenameTag(ctx, tags[0].ID, "x") }},
+		{"DeleteTag", func() finance.OpResult { return fin.DeleteTag(ctx, tags[0].ID) }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {
@@ -219,6 +253,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.AddSavingsContribution(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila AddSavingsContribution on Gastón's goal = %+v, want NOT_FOUND", r.Error)
 	}
+	if r := fin.WithdrawSavings(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("Camila WithdrawSavings on Gastón's goal = %+v, want NOT_FOUND", r.Error)
+	}
 	if r := fin.DeleteSavingsContribution(ctx, contrib.Data.ID); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila DeleteSavingsContribution on Gastón's row = %+v, want NOT_FOUND", r.Error)
 	}
@@ -244,6 +281,18 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.ImportCardStatement(ctx, statement); r.Error != nil || r.Data.AlreadyImported || r.Data.StatementID == imported.Data.StatementID {
 		t.Fatalf("Camila ImportCardStatement = %+v, want her own new statement", r)
 	}
+	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != "" || !r.Data.Acumulado.IsZero() {
+		t.Fatalf("Camila MonthlySummary after Gastón's reconciliation = %+v, want no carried balance", r)
+	}
+	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) != 0 {
+		t.Fatalf("Camila UFMonthsNeeded = %v (err %v), want none (the UF expense is Gastón's)", need, err)
+	}
+	if tags, err := fin.ListTags(ctx); err != nil || len(tags) != 0 {
+		t.Fatalf("Camila ListTags = %+v (err %v), want none", tags, err)
+	}
+	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Tag: "Salud"}); r.Error != nil || r.Data.Count != 0 {
+		t.Fatalf("Camila search by Gastón's tag = %+v, want nothing", r)
+	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.
 	if r := usr.SwitchUser(ctx, 1); r.Error != nil {
@@ -267,6 +316,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.GetCardStatement(ctx, imported.Data.StatementID); r.Error != nil {
 		t.Fatalf("Gastón's statement after Camila: %v", r.Error)
+	}
+	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != reconciled {
+		t.Fatalf("Gastón's reconciliation after Camila = %+v, want the carried balance from %s", r, reconciled)
 	}
 }
 

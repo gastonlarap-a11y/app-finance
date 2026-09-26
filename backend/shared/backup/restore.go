@@ -47,6 +47,11 @@ type Summary struct {
 	FirstPeriod string `json:"firstPeriod"` // YYYY-MM of the oldest movement; "" when none
 	LastPeriod  string `json:"lastPeriod"`
 	Migrations  int    `json:"migrations"` // schema updates applied to bring it up to date
+	// Sync is how the backup relates to the current data (db.SyncSame,
+	// SyncNewer, SyncOlder, SyncDiverged); the caller fills it with CompareSync.
+	Sync string `json:"sync"`
+	// Vector is the backup's sync vector, for that comparison.
+	Vector db.Vector `json:"-"`
 }
 
 // File is one restorable backup found on this computer.
@@ -210,8 +215,14 @@ func checkAndMigrate(ctx context.Context, path string) (Summary, error) {
 		return Summary{}, fmt.Errorf("%w: no se pudo poner al día con esta versión (%w)", ErrInvalidBackup, err)
 	}
 	summary, err := summarize(ctx, bdb)
+	if err != nil {
+		return summary, err
+	}
 	summary.Migrations = pending
-	return summary, err
+	if summary.Vector, _, err = db.ReadSync(ctx, bdb); err != nil {
+		return summary, fmt.Errorf("reading the backup's sync state: %w", err)
+	}
+	return summary, nil
 }
 
 func orText(s string, err error) string {

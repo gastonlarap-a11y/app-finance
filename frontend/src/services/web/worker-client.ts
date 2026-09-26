@@ -50,11 +50,41 @@ export function remoteService<T extends object>(service: 'finance' | 'users'): T
 }
 
 export function exportDbBytes(): Promise<Uint8Array> {
-  return call((api) => api.exportDb())
+  const device = deviceId()
+  return call((api) => api.exportDb(device))
+}
+
+export function inspectDbBytes(bytes: Uint8Array): Promise<ImportSummary> {
+  const device = deviceId()
+  return call((api) => api.inspectDb(bytes, device))
 }
 
 export function importDbBytes(bytes: Uint8Array): Promise<ImportSummary> {
   return call((api) => api.importDb(bytes))
+}
+
+const DEVICE_KEY = 'app-finance-device-id'
+
+// deviceId names this browser in the database's sync vector (see
+// engine/db/syncstate.ts). It lives in localStorage, not in the database: the
+// database file travels between devices. Without storage (private mode, cleared
+// site data) a new id is made: that only counts as a new device, which the
+// comparison handles.
+function deviceId(): string {
+  try {
+    const saved = localStorage.getItem(DEVICE_KEY)
+    if (saved) return saved
+  } catch {
+    // Storage unavailable: fall through to a fresh id for this session.
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  const id = 'web-' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+  try {
+    localStorage.setItem(DEVICE_KEY, id)
+  } catch {
+    // Not persisted: see above.
+  }
+  return id
 }
 
 // DB_LOCK is held by the one tab that owns the database: opfs-sahpool admits a

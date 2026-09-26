@@ -9,7 +9,8 @@
 // spent in the system file picker. A suppressed confirm() returns false, which
 // used to abort the import without a single word on screen.
 import { useRef, useState, type ReactNode } from 'react'
-import { exportDb, importDb, type ImportSummary } from '@/services/web/settings'
+import { exportDb, importDb, inspectDb, type ImportSummary } from '@/services/web/settings'
+import { SyncNoticeBox } from './SyncNoticeBox'
 import { validateSqliteFile } from '@/engine/db/dbfile'
 import { backupFilename, shareOrDownload } from '@/lib/exportFile'
 import { useQuery } from '@/lib/useQuery'
@@ -25,7 +26,9 @@ type ExportState =
 
 type ImportState =
   | { kind: 'idle' }
-  | { kind: 'confirming'; file: File }
+  | { kind: 'inspecting' }
+  // Checked and compared with the data here (summary.sync); waits for the user.
+  | { kind: 'confirming'; file: File; bytes: Uint8Array; summary: ImportSummary }
   | { kind: 'running' }
   | { kind: 'done'; summary: ImportSummary }
   | { kind: 'failed'; message: string }
@@ -166,8 +169,10 @@ export function WebSettingsView() {
   const [state, setState] = useState<ImportState>({ kind: 'idle' })
   const fileRef = useRef<HTMLInputElement>(null)
 
-  async function runImport(file: File) {
-    setState({ kind: 'running' })
+  // inspect reads and checks the picked file, then asks for confirmation with
+  // what it holds and whether importing it would drop changes made here.
+  async function inspect(file: File) {
+    setState({ kind: 'inspecting' })
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
       const problem = validateSqliteFile(bytes)
@@ -175,6 +180,15 @@ export function WebSettingsView() {
         setState({ kind: 'failed', message: problem })
         return
       }
+      setState({ kind: 'confirming', file, bytes, summary: await inspectDb(bytes) })
+    } catch (err) {
+      setState({ kind: 'failed', message: message(err) })
+    }
+  }
+
+  async function runImport(bytes: Uint8Array) {
+    setState({ kind: 'running' })
+    try {
       const summary = await importDb(bytes)
       setState({ kind: 'done', summary })
       // Let the summary render before the reload wipes the page; the worker
@@ -185,7 +199,7 @@ export function WebSettingsView() {
     }
   }
 
-  const busy = state.kind === 'running' || state.kind === 'done'
+  const busy = state.kind === 'running' || state.kind === 'done' || state.kind === 'inspecting'
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -207,7 +221,7 @@ export function WebSettingsView() {
             {exportLabel(exportState)}
           </Button>
           <Button variant="ghost" onClick={() => fileRef.current?.click()} disabled={busy}>
-            {state.kind === 'running' ? 'Importando…' : '⬆ Importar respaldo'}
+            {state.kind === 'running' ? 'Importando…' : state.kind === 'inspecting' ? 'Revisando…' : '⬆ Importar respaldo'}
           </Button>
           <input
             ref={fileRef}
@@ -219,7 +233,7 @@ export function WebSettingsView() {
             onChange={(e) => {
               const f = e.target.files?.[0]
               e.target.value = ''
-              if (f) setState({ kind: 'confirming', file: f })
+              if (f) void inspect(f) // errors become the 'failed' state inside
             }}
           />
         </div>
@@ -253,14 +267,16 @@ export function WebSettingsView() {
         <Modal title="Reemplazar tus datos" onClose={() => setState({ kind: 'idle' })}>
           <p className="text-sm text-slate-300">
             Se reemplazarán <strong>todos</strong> los datos actuales de la app por los del archivo
-            «{state.file.name}». Si aún no exportaste un respaldo de lo que tienes ahora, cancela y
-            hazlo primero.
+            «{state.file.name}»: {state.summary.users} {state.summary.users === 1 ? 'perfil' : 'perfiles'},{' '}
+            {state.summary.expenses} {state.summary.expenses === 1 ? 'gasto' : 'gastos'} y {state.summary.incomes}{' '}
+            {state.summary.incomes === 1 ? 'ingreso' : 'ingresos'}.
           </p>
+          <SyncNoticeBox sync={state.summary.sync} />
           <div className="mt-5 flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setState({ kind: 'idle' })}>
               Cancelar
             </Button>
-            <Button variant="danger" onClick={() => void runImport(state.file)}>
+            <Button variant="danger" onClick={() => void runImport(state.bytes)}>
               Reemplazar mis datos
             </Button>
           </div>

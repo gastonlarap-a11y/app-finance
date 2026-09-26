@@ -89,14 +89,20 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Savings contributions are a monthly outflow**: they lower `Disponible`/`Balance` and the carried
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
-  (`liveGoalContributions`), like installments of a deleted expense.
+  (`liveGoalContributions`), like installments of a deleted expense. A withdrawal is a negative
+  contribution (`WithdrawSavings`); a goal's balance never goes below zero.
+- **Carried balance restarts at a reconciliation**: `cumulativeBalanceBefore` = latest
+  `reconciliations` row before the month (real closing balance; the opening balance is one on the
+  month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to
+  `flowsBetween` (Go and TS) and to the year/forecast loops, which reset at a reconciled close.
 - **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
   `finance.StageCandidates`/`stageItems` into `import_items` and become expenses (or, for bank
   credits, extra incomes) only when the user confirms them (`ConfirmImportItem`/`LinkImportItem`/
   `ConfirmImportItemAsIncome`), or mark a fixed expense's month paid (`LinkImportItemToFixed`).
   Never create expenses straight from a parser. An item's `kind` (gasto | abono) is fixed when
   staged — `lineCandidate` turns negative charge lines into abono — and every confirm path checks
-  it (`requireKind`); items in another currency need a whole-peso amount (`requirePesos`). Credit-card
+  it (`requireKind`; an abono may also become the refund of an expense: `ConfirmImportItemAsRefund`);
+  items in another currency need a whole-peso amount (`requirePesos`). Credit-card
   statements are stored whole (`ImportCardStatement` → `card_statements` + lines + schedule) and
   feed the inbox from the same path. Statement
   parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); email
@@ -112,9 +118,18 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Export**: views build an `ExportTable` (`frontend/src/lib/exportTables.ts`, money as decimal
   strings); `@/services/reports` writes it — desktop via `ReportsService.SaveTable` (.xlsx + native
   Save dialog; blob downloads are unreliable in the webview), web via CSV + Share Sheet.
+- **Fixed-expense charges go through `fixedCharge`** (Go `uf.go`, TS `engine/finance/fixedexpense.ts`):
+  a fixed expense bills only where `billsIn` (its `interval_months` schedule) and converts UF amounts
+  with that month's `uf_values` row. Never read `resolveAsOf` of a fixed expense as a peso charge.
+  UF values are downloaded by the frontend (`lib/uf.ts`, mindicador.cl), never by the backend.
 - **Effective-dated values** (fixed-expense amounts, category budgets): rows apply from
   `effective_from` onward; resolve with `latestAsOf`/`resolveAsOf`, sum ranges with `sumAsOf`
   (`backend/finance/fixedexpense.go`, mirrored in `frontend/src/engine/finance/fixedexpense.ts`).
+- **Sync state (invariant)**: desktop⇄iPad copies are compared with a version vector
+  (`sync_vector` plus `sync_state.dirty`, `backend/shared/db/syncstate.go`, mirrored in
+  `engine/db/syncstate.ts`). Every new user-data table needs its three `sync_dirty_*` triggers in its
+  migration. `MarkShared` runs before a copy leaves the device (backup, web export). The device id
+  never lives in the DB. See `ARCHITECTURE.md` §20.
 - **Soft delete** (bun `soft_delete`) on cards/categories/incomes/expenses/fixed_expenses/users;
   deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore. Children of a
   trashed parent are frozen (no paying its cuotas, no deleting its contributions); an edit may keep
@@ -166,9 +181,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   the contract (`FinanceService: FinanceServiceContract = Bound`), so the desktop typecheck proves
   the bindings match `contract.ts`. Regenerate after signature changes.
 - **Frontend data loading**: `useQuery(key, load)` (`lib/useQuery.ts`) — encode every input
-  (period, `refreshAtom`…) in the key; it drops stale responses and turns rejections into an error
-  state (`QueryError`). Mutations call `failed(res)` (toast via `lib/notify.ts`, never
-  `window.alert`) and bump `refreshAtom`. Atoms hold UI state only — never server data.
+  (period, `useVersion(...topics)`…) in the key; it drops stale responses and turns rejections into
+  an error state (`QueryError`). Mutations call `failed(res)` (toast via `lib/notify.ts`, never
+  `window.alert`) and `useInvalidate()(...topics)` for what they changed (`atoms/refresh.ts`:
+  ledger | imports | profiles | settings | mail; no topic = all, e.g. a profile switch). Atoms hold
+  UI state only — never server data.
 - **Dialogs**: `Modal` is a native `<dialog>` (focus trap, Escape); icon-only buttons use
   `IconButton` (mandatory accessible label). React Compiler is on: no manual `useCallback`/`useMemo`.
 - **Go⇄TS parity (invariant)**: adding or changing a bound method in `finance`/`users` requires the

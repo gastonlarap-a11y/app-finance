@@ -1,9 +1,11 @@
 import { useEffect } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import { periodAtom, refreshAtom, tabAtom, type Tab } from '@/atoms/finance'
+import { useAtom } from 'jotai'
+import { periodAtom, tabAtom, type Tab } from '@/atoms/finance'
+import { useInvalidate } from '@/atoms/refresh'
 import { onMailSyncDone } from '@/services/mailsync'
 import { UsersService } from '@/services/users'
 import { notify } from '@/lib/notify'
+import { useUFSync } from '@/lib/useUFSync'
 import { IS_WEB } from '@/lib/platform'
 import { UpdateBanner } from '@/components/UpdateNotice'
 import { WebUpdateBanner } from '@/components/WebUpdateBanner'
@@ -50,14 +52,15 @@ function isTyping(target: EventTarget | null): boolean {
 
 const navBtn = 'rounded bg-surface px-3 py-1.5 ring-1 ring-slate-700 hover:ring-slate-500'
 
-// useMailSyncNotices refreshes the views after every background mail sync and
-// tells the active profile what it brought (other profiles' syncs stay quiet).
+// useMailSyncNotices refreshes the inbox and mail status after every background
+// mail sync (it only stages import items) and tells the active profile what it
+// brought (other profiles' syncs stay quiet).
 function useMailSyncNotices() {
-  const bump = useSetAtom(refreshAtom)
+  const invalidate = useInvalidate()
   useEffect(
     () =>
       onMailSyncDone((ev) => {
-        bump((n) => n + 1)
+        invalidate('imports', 'mail')
         void UsersService.ActiveUser().then((active) => {
           if (active.data?.id !== ev.userId) return
           if (ev.error) notify('No se pudo revisar el correo: ' + ev.error)
@@ -66,7 +69,7 @@ function useMailSyncNotices() {
           }
         })
       }),
-    [bump],
+    [invalidate],
   )
 }
 
@@ -74,6 +77,7 @@ function App() {
   const [tab, setTab] = useAtom(tabAtom)
   const [period, setPeriod] = useAtom(periodAtom)
   useMailSyncNotices()
+  useUFSync()
   const monthNav = MONTH_TABS.has(tab)
   const step = tab === 'anio' ? 12 : 1
 

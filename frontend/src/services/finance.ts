@@ -60,7 +60,14 @@ export type {
   Movimiento,
   OpResult,
   PeriodSalary,
+  Reconciliation,
+  ReconciliationResult,
+  ReconciliationStatus,
   RecurringSuggestion,
+  Refund,
+  RefundResult,
+  Tag,
+  TagView,
   SalaryResult,
   SavingsContribution,
   SavingsGoal,
@@ -84,3 +91,4 @@ export const STATUS_PENDIENTE = 'pendiente'
 export const STATUS_PAGADO = 'pagado'
 export const SOURCE_CUOTA = 'cuota'
 export const SOURCE_FIJO = 'fijo'
+export const SOURCE_REEMBOLSO = 'reembolso'

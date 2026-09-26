@@ -34,6 +34,26 @@ export function formatAmount(v: string, currency: string): string {
   return `${s} ${currency}`
 }
 
+const uf = new Intl.NumberFormat('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 4 })
+
+// formatUF formats an amount in Unidades de Fomento: '12.5' → 'UF 12,5'.
+export function formatUF(v: string): string {
+  const s = v.trim()
+  return `UF ${uf.format(DECIMAL_RE.test(s) ? (s as Intl.StringNumericLiteral) : 0)}`
+}
+
+// parseDecimalInput reads a decimal typed in es-CL ('12,5', '1.234,56') or
+// with a dot ('12.5') and returns it as a plain decimal string ('12.5'), or ''
+// when it is not a number. For amounts that do have decimals (UF); pesos use
+// MoneyInput.
+export function parseDecimalInput(typed: string): string {
+  const s = typed.trim().replace(/\s/g, '')
+  if (s === '') return ''
+  // With a comma, dots are thousands separators; without one, a single dot is the decimal point.
+  const normalized = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s
+  return /^\d+(\.\d+)?$/.test(normalized) ? normalized.replace(/^0+(?=\d)/, '') : ''
+}
+
 // Live thousands-separator masking for money <input>s (es-CL: '.' groups
 // thousands, ',' marks decimals). The "real" value is a whole-peso digit
 // string (what's sent to the backend: CLP has no minor unit); the input shows

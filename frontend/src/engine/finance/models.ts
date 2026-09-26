@@ -14,7 +14,10 @@ import type {
   Merchant,
   MerchantRule,
   PeriodSalary,
+  Reconciliation,
+  Refund,
   SavingsContribution,
+  Tag,
   SavingsGoal,
   Settings,
 } from '@/services/contract'
@@ -33,11 +36,13 @@ export const StatusPendiente = 'pendiente'
 export const StatusPagado = 'pagado'
 export const SourceCuota = 'cuota'
 export const SourceFijo = 'fijo'
+export const SourceReembolso = 'reembolso' // a refund: negative movimiento
 
 // Import inbox (mirror backend/finance/importitem.go constants).
 export const ImportSourceEmail = 'email'
 export const ImportSourcePDFAccount = 'pdf_account'
 export const ImportSourcePDFCard = 'pdf_card'
+export const ImportSourceCSV = 'csv' // a cartola exported to CSV by any bank (lib/statements/csv.ts)
 export const ImportPendiente = 'pendiente'
 export const ImportConfirmado = 'confirmado'
 export const ImportDescartado = 'descartado'
@@ -82,6 +87,28 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     incomeId: asNullableNumber(r.income_id),
     fixedExpenseId: asNullableNumber(r.fixed_expense_id),
     fixedPeriod: asString(r.fixed_period),
+    refundId: asNullableNumber(r.refund_id),
+  }
+}
+
+export function rowToTag(r: SqlRow): Tag {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    name: asString(r.name),
+    createdAt: asString(r.created_at),
+  }
+}
+
+export function rowToRefund(r: SqlRow): Refund {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    expenseId: asNumber(r.expense_id),
+    period: asString(r.period),
+    amount: asString(r.amount),
+    description: asString(r.description),
+    createdAt: asString(r.created_at),
   }
 }
 
@@ -237,6 +264,17 @@ export function rowToSavingsContribution(r: SqlRow): SavingsContribution {
   }
 }
 
+export function rowToReconciliation(r: SqlRow): Reconciliation {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    period: asString(r.period),
+    amount: asString(r.amount),
+    createdAt: asString(r.created_at),
+    updatedAt: asString(r.updated_at),
+  }
+}
+
 export function rowToIncome(r: SqlRow): Income {
   return {
     id: asNumber(r.id),
@@ -305,6 +343,8 @@ export function rowToFixedExpense(r: SqlRow): FixedExpense {
     startPeriod: asString(r.start_period),
     // end_period is NULL in SQL for "active forever"; Go models it as "".
     endPeriod: asString(r.end_period),
+    intervalMonths: asNumber(r.interval_months),
+    currency: asString(r.currency),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

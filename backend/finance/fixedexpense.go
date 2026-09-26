@@ -10,22 +10,60 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
 
-// FixedExpense is a recurring monthly charge (subscriptions, plan bills, services)
-// that the user does not want to re-enter every month. Its amount carries forward
-// month to month and can be overridden "from a given month onward" via
-// FixedExpenseAmount, while past months keep their previous value.
+// Currencies a fixed expense's amounts may be in. UF (Unidad de Fomento) is
+// converted to CLP with the UF value of each billed month (uf.go).
+const (
+	CurrencyCLP = "CLP"
+	CurrencyUF  = "UF"
+)
+
+// validIntervals are the billing frequencies offered: monthly, bimonthly,
+// quarterly, every four months, half-yearly and yearly.
+var validIntervals = []int{1, 2, 3, 4, 6, 12}
+
+// FixedExpense is a recurring charge (subscriptions, plan bills, services,
+// insurance, rent in UF) that the user does not want to re-enter. It bills
+// every IntervalMonths months from StartPeriod; its amount carries forward and
+// can be overridden "from a given month onward" via FixedExpenseAmount, while
+// past months keep their previous value. Interval and currency are fixed at
+// creation: changing them would move or re-price charges already recorded.
 type FixedExpense struct {
 	bun.BaseModel `bun:"table:fixed_expenses,alias:fe"`
 
-	ID          int64      `bun:"id,pk,autoincrement" json:"id"`
-	UserID      int64      `bun:"user_id,notnull" json:"userId"`
-	Description string     `bun:"description,notnull" json:"description"`
-	Category    string     `bun:"category,notnull" json:"category"`
-	CardID      *int64     `bun:"card_id" json:"cardId"`
-	StartPeriod string     `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM: primer mes cobrado
-	EndPeriod   string     `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
-	CreatedAt   time.Time  `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
-	DeletedAt   *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
+	ID             int64      `bun:"id,pk,autoincrement" json:"id"`
+	UserID         int64      `bun:"user_id,notnull" json:"userId"`
+	Description    string     `bun:"description,notnull" json:"description"`
+	Category       string     `bun:"category,notnull" json:"category"`
+	CardID         *int64     `bun:"card_id" json:"cardId"`
+	StartPeriod    string     `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM: primer mes cobrado
+	EndPeriod      string     `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
+	IntervalMonths int        `bun:"interval_months,notnull,default:1" json:"intervalMonths"`
+	Currency       string     `bun:"currency,notnull,default:'CLP'" json:"currency"` // CLP | UF
+	CreatedAt      time.Time  `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
+	DeletedAt      *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
+}
+
+// interval is IntervalMonths, never below 1 (rows written before the column existed read 1).
+func (fe FixedExpense) interval() int { return max(fe.IntervalMonths, 1) }
+
+// billsIn reports whether the fixed expense charges in `period`: inside its
+// [start, end] and on its schedule (every interval months from the start).
+func (fe FixedExpense) billsIn(period string) bool {
+	return fe.activeIn(period) && monthsBetween(fe.StartPeriod, period)%fe.interval() == 0
+}
+
+// nextBilling is the first month at or after `from` the fixed expense bills
+// in, or "" when it has ended before then.
+func (fe FixedExpense) nextBilling(from string) string {
+	p := fe.StartPeriod
+	if from > p {
+		n := fe.interval()
+		p = addMonths(fe.StartPeriod, (monthsBetween(fe.StartPeriod, from)+n-1)/n*n)
+	}
+	if fe.EndPeriod != "" && p > fe.EndPeriod {
+		return ""
+	}
+	return p
 }
 
 // FixedExpenseAmount is the amount that becomes effective for a fixed expense from
@@ -51,7 +89,8 @@ type FixedExpensePayment struct {
 	PaidAt         *time.Time `bun:"paid_at" json:"paidAt"`
 }
 
-// activeIn reports whether the fixed expense should be billed in the given month.
+// activeIn reports whether `period` falls within the fixed expense's life
+// [start, end]; whether it charges that month is billsIn.
 func (fe FixedExpense) activeIn(period string) bool {
 	if period < fe.StartPeriod {
 		return false

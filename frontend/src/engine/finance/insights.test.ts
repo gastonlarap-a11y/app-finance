@@ -81,7 +81,7 @@ describe('tendencia de gasto', () => {
     ] as const) {
       ok(await finance.CreateExpense(date, 'x', cat, '', null, 'unico', amount, 1))
     }
-    ok(await finance.CreateFixedExpense('Luz', 'Servicios', null, '2030-02', '10'))
+    ok(await finance.CreateFixedExpense('Luz', 'Servicios', null, '2030-02', '10', 1, 'CLP'))
 
     const tr = ok(await finance.SpendingTrend('2030-03', 3)).data!
     expect(tr.months.map((m) => `${m.period}=${m.gastos}`)).toEqual(['2030-01=100', '2030-02=210', '2030-03=360'])
@@ -105,7 +105,7 @@ describe('detección de recurrentes', () => {
     await add('2030-02-11', 'Viaje', 'Uber', 'unico', '9000', 1)
     await add('2030-03-11', 'Viaje', 'Uber', 'unico', '15000', 1)
     for (const m of ['01', '02', '03']) await add(`2030-${m}-12`, 'Netflix', '', 'unico', '8990', 1)
-    ok(await finance.CreateFixedExpense('netflix', 'Servicios', null, '2030-04', '8990'))
+    ok(await finance.CreateFixedExpense('netflix', 'Servicios', null, '2030-04', '8990', 1, 'CLP'))
     await add('2030-01-13', 'Gimnasio', 'Gym', 'cuotas', '20000', 4)
 
     const res = ok(await finance.DetectRecurring('2030-04')).data!
@@ -135,6 +135,7 @@ describe('aislamiento de ahorro y tendencias', () => {
     expect(tr.current).toBe('0')
     expect(tr.categories).toEqual([])
     expect((await finance.AddSavingsContribution(goal.id, '2030-01', '1')).error?.code).toBe('NOT_FOUND')
+    expect((await finance.WithdrawSavings(goal.id, '2030-01', '1')).error?.code).toBe('NOT_FOUND')
     expect((await finance.DeleteSavingsContribution(contrib.id)).error?.code).toBe('NOT_FOUND')
     expect((await finance.DeleteSavingsGoal(goal.id)).error?.code).toBe('NOT_FOUND')
   })

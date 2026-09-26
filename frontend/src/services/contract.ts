@@ -106,14 +106,24 @@ export interface FixedExpense {
   cardId: number | null
   startPeriod: string
   endPeriod: string
+  intervalMonths: number // bills every N months from startPeriod (1, 2, 3, 4, 6, 12)
+  currency: string // 'CLP' | 'UF': currency of its amounts
   createdAt: string
   deletedAt?: string | null
 }
 
 export interface FixedExpenseView extends FixedExpense {
-  currentAmount: string
+  currentAmount: string // in its currency
+  currentAmountClp: string // the same in pesos (UF at the month's value)
+  nextPeriod: string // next month it bills ('' when it has ended)
   cardName: string
   active: boolean
+}
+
+// One month's UF value (pesos per UF on day 1), as downloaded by lib/uf.ts.
+export interface UFValueInput {
+  period: string // YYYY-MM
+  value: string
 }
 
 export interface Movimiento {
@@ -121,6 +131,7 @@ export interface Movimiento {
   installmentId: number
   expenseId: number
   fixedId: number | null
+  refundId: number | null // set only for refunds (negative amount)
   description: string
   category: string
   merchant: string
@@ -132,6 +143,9 @@ export interface Movimiento {
   amount: string
   status: string
   date: string | null
+  ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
+  estimado: boolean // amount rests on an estimated UF value
+  tags: string[] // tags of the expense behind a cuota
 }
 
 export interface CategoryTotal {
@@ -165,6 +179,26 @@ export interface MonthlySummary {
   incomes: Income[]
   // Only categories with a cap in effect this month.
   presupuestos: BudgetStatus[]
+  // The reconciled month the carried balance starts from ('' = the whole history).
+  acumuladoDesde: string
+  // This month's real closing balance against the computed one; null until reconciled.
+  conciliacion: ReconciliationStatus | null
+}
+
+// Reconciliation: the real account balance at the close of a month (may be negative).
+export interface Reconciliation {
+  id: number
+  userId: number
+  period: string // YYYY-MM of the close
+  amount: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReconciliationStatus {
+  saldoReal: string
+  calculado: string // the month's balance
+  diferencia: string // saldoReal − calculado (negative: money is missing)
 }
 
 export interface BudgetStatus {
@@ -174,6 +208,7 @@ export interface BudgetStatus {
   spent: string
   remaining: string // negative when over budget
   over: boolean
+  near: boolean // spent 80 % or more of the cap, without exceeding it
 }
 
 export interface CategoryBudgetView {
@@ -191,6 +226,7 @@ export interface YearMonth {
   balance: string // ingresos − gastos − ahorro
   saldo: string
   alcanza: boolean
+  conciliado: boolean // saldo is the reconciled real balance, not a sum
 }
 
 export interface YearSummary {
@@ -219,7 +255,7 @@ export interface ForecastMonth {
   ahorro: string // savings contributions already registered for the month
   ingresos: string
   ingresoEstimado: boolean // no salary saved: the last known one is reused
-  libre: string // ingresos − comprometido − ahorro
+  libre: string // ingresos − comprometido − ahorro + refunds already recorded
   saldoProyectado: string
 }
 
@@ -249,7 +285,8 @@ export interface SavingsGoalView extends SavingsGoal {
   remaining: string
   monthsLeft: number
   monthlyNeeded: string // 0 without target month, once reached, or when it passed
-  contributions: SavingsContribution[] // newest first
+  overdue: boolean // past its target month and still short
+  contributions: SavingsContribution[] // newest first; withdrawals are negative
 }
 
 // ---------- spending trend ----------
@@ -307,6 +344,7 @@ export interface ExportTable {
 export interface ExpenseFilter {
   text: string
   category: string
+  tag: string // tag name, any case; '' = any
   cardId: number | null
   fromPeriod: string
   toPeriod: string
@@ -321,11 +359,25 @@ export interface ExpenseHit {
   lastPeriod: string
   total: string
   paidCount: number
+  tags: string[]
 }
 
 export interface ExpenseSearch {
   items: ExpenseHit[]
   count: number
+  sum: string // Σ total of every match, not only this page
+}
+
+// Tag: a label across categories (viaje, trabajo, deducible).
+export interface Tag {
+  id: number
+  userId: number
+  name: string
+  createdAt: string
+}
+
+export interface TagView extends Tag {
+  count: number // live expenses carrying it
 }
 
 // ---------- import inbox ----------
@@ -361,6 +413,7 @@ export interface ImportItem {
   // A charge linked to a fixed expense marks that month of it as paid.
   fixedExpenseId: number | null
   fixedPeriod: string // YYYY-MM marked paid; '' = not linked
+  refundId: number | null // a credit confirmed as the refund of an expense
 }
 
 export interface ImportItemView extends ImportItem {
@@ -379,7 +432,21 @@ export interface ImportItemView extends ImportItem {
   suggestedFixedId: number | null
   suggestedFixedDescription: string
   suggestedFixedPeriod: string
+  // A pending bank credit that looks like the refund of a recent purchase.
+  suggestedRefundExpenseId: number | null
+  suggestedRefundDescription: string
   reopenable: boolean // confirmed item whose expense/income went to the trash
+}
+
+// Refund: money returned for an expense; lowers the gastos of the month it arrives in.
+export interface Refund {
+  id: number
+  userId: number
+  expenseId: number
+  period: string // YYYY-MM it arrived in
+  amount: string // positive
+  description: string
+  createdAt: string
 }
 
 export interface MerchantRule {
@@ -639,6 +706,8 @@ export type ImportItemsResult = Result<ImportItemView[]>
 export type CardStatementImportResult = Result<CardStatementImport>
 export type CardStatementsResult = Result<CardStatementView[]>
 export type CardStatementDetailResult = Result<CardStatementDetail>
+export type ReconciliationResult = Result<Reconciliation>
+export type RefundResult = Result<Refund>
 
 // ---------- users ----------
 
@@ -693,10 +762,13 @@ export interface FinanceServiceContract {
   DeleteExpense(id: number): Promise<OpResult>
   RestoreExpense(id: number): Promise<OpResult>
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
+  CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
+  DeleteRefund(id: number): Promise<OpResult>
 
   ListFixedExpenses(): Promise<FixedExpenseView[]>
   CreateFixedExpense(
     description: string, category: string, cardID: number | null, startPeriod: string, amount: string,
+    intervalMonths: number, currency: string,
   ): Promise<FixedExpenseResult>
   UpdateFixedExpense(
     id: number, description: string, category: string, cardID: number | null,
@@ -706,15 +778,25 @@ export interface FinanceServiceContract {
   DeleteFixedExpense(id: number): Promise<OpResult>
   RestoreFixedExpense(id: number): Promise<OpResult>
   SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult>
+  UFMonthsNeeded(): Promise<string[]>
+  SetUFValues(values: UFValueInput[]): Promise<OpResult>
 
   MonthlySummary(period: string): Promise<MonthlySummaryResult>
   YearSummary(year: number): Promise<YearSummaryResult>
   CommitmentsForecast(fromPeriod: string, months: number): Promise<ForecastResult>
 
+  SetReconciliation(period: string, amount: string): Promise<ReconciliationResult>
+  DeleteReconciliation(period: string): Promise<OpResult>
+
   SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult>
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
+
+  SetExpenseTags(expenseID: number, names: string[]): Promise<OpResult>
+  ListTags(): Promise<TagView[]>
+  RenameTag(id: number, name: string): Promise<OpResult>
+  DeleteTag(id: number): Promise<OpResult>
 
   ListSavingsGoals(): Promise<SavingsGoalView[]>
   CreateSavingsGoal(name: string, targetAmount: string, targetPeriod: string): Promise<SavingsGoalResult>
@@ -722,6 +804,7 @@ export interface FinanceServiceContract {
   DeleteSavingsGoal(id: number): Promise<OpResult>
   RestoreSavingsGoal(id: number): Promise<OpResult>
   AddSavingsContribution(goalID: number, period: string, amount: string): Promise<SavingsContributionResult>
+  WithdrawSavings(goalID: number, period: string, amount: string): Promise<SavingsContributionResult>
   DeleteSavingsContribution(id: number): Promise<OpResult>
 
   SpendingTrend(period: string, months: number): Promise<SpendingTrendResult>
@@ -741,6 +824,7 @@ export interface FinanceServiceContract {
   ListMerchantRules(): Promise<MerchantRule[]>
   DeleteMerchantRule(id: number): Promise<OpResult>
   ConfirmImportItemAsIncome(id: number, period: string, description: string, amount: string): Promise<IncomeResult>
+  ConfirmImportItemAsRefund(id: number, expenseID: number, period: string, amount: string): Promise<RefundResult>
 
   ImportCardStatement(input: CardStatementInput): Promise<CardStatementImportResult>
   ListCardStatements(period: string): Promise<CardStatementsResult>
@@ -801,6 +885,9 @@ export interface BackupSummary {
   firstPeriod: string // YYYY-MM; '' when it has no movements
   lastPeriod: string
   migrations: number // schema updates applied to bring it up to date
+  // How it relates to the data here: 'igual' | 'mas-nueva' | 'mas-antigua' |
+  // 'divergente' (backend/shared/db/syncstate.go); '' when not compared.
+  sync: string
 }
 
 export type InspectResult = Result<BackupSummary>

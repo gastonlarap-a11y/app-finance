@@ -4,6 +4,8 @@
 package prefs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,26 @@ type Prefs struct {
 	OAuthClientID     string `json:"oauthClientId"`     // optional override of the baked-in client
 	OAuthClientSecret string `json:"oauthClientSecret"` // optional override of the baked-in client
 	ActiveUserID      int64  `json:"activeUserId"`      // selected finance profile (0 = default to first user)
+	// DeviceID names this computer in the database's sync vector
+	// (db.MarkShared). It lives here, not in the database: the database file
+	// travels between devices.
+	DeviceID string `json:"deviceId"`
+}
+
+// DeviceID returns this computer's sync id, creating it on first use.
+func DeviceID(appName string) string {
+	if id := Load(appName).DeviceID; id != "" {
+		return id
+	}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail on supported platforms; a fixed id would
+		// only merge this computer with another that also failed.
+		slog.Warn("prefs: id de dispositivo sin aleatoriedad", "err", err)
+	}
+	id := "escritorio-" + hex.EncodeToString(b)
+	Update(appName, func(p *Prefs) { p.DeviceID = id })
+	return id
 }
 
 func defaults() Prefs {

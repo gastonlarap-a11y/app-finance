@@ -45,6 +45,10 @@ func (d Decimal) DivRound(n int64) Decimal {
 	return Decimal{d.Decimal.Div(decimal.NewFromInt(n)).Round(0)}
 }
 
+// MulRound returns d × o rounded half away from zero to a whole unit (an
+// amount in UF converted to CLP, which has no cents).
+func (d Decimal) MulRound(o Decimal) Decimal { return Decimal{d.Decimal.Mul(o.Decimal).Round(0)} }
+
 // Abs returns |d|.
 func (d Decimal) Abs() Decimal { return Decimal{d.Decimal.Abs()} }
 

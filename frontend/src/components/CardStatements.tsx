@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import {
   FinanceService,
   type CardStatementLineView,
   type CardStatementView,
 } from '@/services/finance'
-import { refreshAtom, tabAtom } from '@/atoms/finance'
+import { tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { compare, isZero, subtract } from '@/lib/money'
 import { useQuery } from '@/lib/useQuery'
@@ -61,12 +62,13 @@ function ComparisonLine({ st }: { st: CardStatementView }) {
 // CardStatementsSection lists the imported credit-card statements, newest
 // first, each compared with what the app has for that card and month.
 export function CardStatementsSection() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('imports', 'ledger')
+  const invalidate = useInvalidate()
+  // Deleting a statement unlinks its lines from cuotas and drops its inbox items.
+  const reload = () => invalidate('imports', 'ledger')
   const [open, setOpen] = useState<number | null>(null)
   const [confirmId, setConfirmId] = useState<number | null>(null)
-  const query = useQuery(String(refresh), async () => {
+  const query = useQuery(version, async () => {
     const res = await FinanceService.ListCardStatements('')
     if (res.error) throw new Error(res.error.message)
     return res.data ?? []
@@ -161,9 +163,9 @@ function lineOutcome(l: CardStatementLineView): string {
 }
 
 function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => void }) {
-  const refresh = useAtomValue(refreshAtom)
+  const version = useVersion('imports', 'ledger')
   const setTab = useSetAtom(tabAtom)
-  const query = useQuery(`${id}:${refresh}`, async () => {
+  const query = useQuery(`${id}:${version}`, async () => {
     const res = await FinanceService.GetCardStatement(id)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'estado de cuenta no disponible')
     return res.data
@@ -289,8 +291,9 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
 
 // StatementBanner compares, in the month view, what each card's statement
 // bills for the period with what the app has on that card.
-export function StatementBanner({ period, refresh }: { period: string; refresh: number }) {
-  const query = useQuery(`${period}:${refresh}`, async () => (await FinanceService.ListCardStatements(period)).data ?? [])
+export function StatementBanner({ period }: { period: string }) {
+  const version = useVersion('imports', 'ledger')
+  const query = useQuery(`${period}:${version}`, async () => (await FinanceService.ListCardStatements(period)).data ?? [])
   const statements = (query.data ?? []).filter((st) => st.currency === 'CLP')
   if (statements.length === 0) return null
   return (

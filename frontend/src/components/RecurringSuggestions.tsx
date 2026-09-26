@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { useSetAtom } from 'jotai'
 import { FinanceService, type RecurringSuggestion } from '@/services/finance'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
@@ -15,14 +14,15 @@ function keyOf(s: RecurringSuggestion): string {
 // RecurringSuggestions lists one-off charges that keep repeating every month and
 // converts one into a fixed expense starting the month after its last charge
 // (so nothing is counted twice).
-export function RecurringSuggestions({ period, refresh }: { period: string; refresh: number }) {
-  const bump = useSetAtom(refreshAtom)
+export function RecurringSuggestions({ period }: { period: string }) {
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   // Dismissed only for this session: the detector is cheap and the user may
   // change their mind next time.
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
 
-  const query = useQuery(`${period}:${refresh}`, async () => {
+  const query = useQuery(`${period}:${version}`, async () => {
     const res = await FinanceService.DetectRecurring(period)
     if (res.error) throw new Error(res.error.message)
     return res.data ?? []
@@ -34,10 +34,10 @@ export function RecurringSuggestions({ period, refresh }: { period: string; refr
   async function convert(s: RecurringSuggestion) {
     setBusy(keyOf(s))
     try {
-      const res = await FinanceService.CreateFixedExpense(s.description, s.category, s.cardId, s.nextPeriod, s.amount)
+      const res = await FinanceService.CreateFixedExpense(s.description, s.category, s.cardId, s.nextPeriod, s.amount, 1, 'CLP')
       if (failed(res)) return
       notify(`«${s.description}» ahora es un gasto fijo desde ${periodLabel(s.nextPeriod)}.`, 'success')
-      bump((n) => n + 1)
+      invalidate('ledger')
     } finally {
       setBusy(null)
     }

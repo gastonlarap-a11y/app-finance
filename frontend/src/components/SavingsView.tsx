@@ -1,27 +1,28 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { FinanceService, type SavingsGoalView } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { isZero, ratio } from '@/lib/money'
+import { isNegative, isZero, ratio } from '@/lib/money'
 import { formatCLP, periodLabel } from '@/lib/format'
 import { Bar, Button, Empty, Field, IconButton, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
 
 // SavingsView manages savings goals. Contributions count as an outflow of their
 // month (they lower disponible and the carried balance) but show apart from
-// gastos and never count against category budgets.
+// gastos and never count against category budgets; withdrawals do the reverse.
 export function SavingsView() {
-  const refresh = useAtomValue(refreshAtom)
+  const version = useVersion('ledger')
   const period = useAtomValue(periodAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
   const [editing, setEditing] = useState<SavingsGoalView | null>(null)
   const [showForm, setShowForm] = useState(false)
-  const [contributeTo, setContributeTo] = useState<SavingsGoalView | null>(null)
+  const [movement, setMovement] = useState<GoalMovement | null>(null)
   const [confirmId, setConfirmId] = useState<number | null>(null)
 
-  const query = useQuery(String(refresh), () => FinanceService.ListSavingsGoals())
+  const query = useQuery(version, () => FinanceService.ListSavingsGoals())
 
   async function remove(id: number) {
     setConfirmId(null)
@@ -52,8 +53,18 @@ export function SavingsView() {
     >
       <p className="mb-4 text-xs text-slate-500">
         Cada aporte sale del disponible del mes en que lo registras (como un gasto, pero aparte), así el saldo refleja
-        lo que te queda para gastar.
+        lo que te queda para gastar. Un retiro hace lo contrario: la plata vuelve al disponible de su mes.
       </p>
+      {goals.some((g) => g.overdue) && (
+        <div role="status" className="mb-4 rounded-base bg-danger/10 px-4 py-3 text-sm text-red-200 ring-1 ring-danger/30">
+          Metas vencidas sin completar:{' '}
+          {goals
+            .filter((g) => g.overdue)
+            .map((g) => `${g.name} (faltan ${formatCLP(g.remaining)})`)
+            .join(', ')}
+          . Ajusta la fecha objetivo o el monto, o sigue aportando.
+        </div>
+      )}
       {goals.length === 0 ? (
         <Empty>Aún no tienes metas. Crea una (vacaciones, fondo de emergencia…) y registra aportes mes a mes.</Empty>
       ) : (
@@ -66,6 +77,9 @@ export function SavingsView() {
                   <div>
                     <div className="font-medium">
                       {g.name} {done && <span className="ml-1 text-xs text-success">¡Meta cumplida!</span>}
+                      {g.overdue && (
+                        <span className="ml-2 rounded-full bg-danger/15 px-2 py-0.5 text-xs text-red-200">Vencida</span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-500">
                       {formatCLP(g.saved)} de {formatCLP(g.targetAmount)}
@@ -73,7 +87,12 @@ export function SavingsView() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button onClick={() => setContributeTo(g)}>+ Aporte</Button>
+                    <Button onClick={() => setMovement({ goal: g, kind: 'aporte' })}>+ Aporte</Button>
+                    {!isZero(g.saved) && (
+                      <Button variant="ghost" onClick={() => setMovement({ goal: g, kind: 'retiro' })}>
+                        Retirar
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       onClick={() => {
@@ -118,16 +137,21 @@ export function SavingsView() {
                 {g.contributions.length > 0 && (
                   <details className="mt-3">
                     <summary className="cursor-pointer text-xs text-slate-400">
-                      {g.contributions.length} {g.contributions.length === 1 ? 'aporte' : 'aportes'}
+                      {g.contributions.length} {g.contributions.length === 1 ? 'movimiento' : 'movimientos'}
                     </summary>
                     <ul className="mt-2 space-y-1 text-sm">
                       {g.contributions.map((c) => (
                         <li key={c.id} className="flex items-center justify-between">
-                          <span className="text-slate-400">{periodLabel(c.period)}</span>
+                          <span className="text-slate-400">
+                            {periodLabel(c.period)}
+                            {isNegative(c.amount) && ' · retiro'}
+                          </span>
                           <span className="flex items-center gap-2">
-                            <span className="tabular-nums text-success">{formatCLP(c.amount)}</span>
+                            <span className={`tabular-nums ${isNegative(c.amount) ? 'text-warning' : 'text-success'}`}>
+                              {formatCLP(c.amount)}
+                            </span>
                             <IconButton
-                              label={`Eliminar aporte de ${periodLabel(c.period)}`}
+                              label={`Eliminar ${isNegative(c.amount) ? 'retiro' : 'aporte'} de ${periodLabel(c.period)}`}
                               onClick={() => removeContribution(c.id)}
                               className="text-slate-500 hover:text-danger"
                             >
@@ -146,9 +170,7 @@ export function SavingsView() {
       )}
 
       {showForm && <GoalForm goal={editing} onClose={() => setShowForm(false)} onSaved={reload} />}
-      {contributeTo && (
-        <ContributionForm goal={contributeTo} defaultPeriod={period} onClose={() => setContributeTo(null)} onSaved={reload} />
-      )}
+      {movement && <MovementForm movement={movement} defaultPeriod={period} onClose={() => setMovement(null)} onSaved={reload} />}
     </Section>
   )
 }
@@ -199,18 +221,23 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
   )
 }
 
-function ContributionForm({
-  goal,
+// A money movement on a goal: a contribution leaves the month's disponible, a
+// withdrawal gives it back (never more than the goal holds).
+type GoalMovement = { goal: SavingsGoalView; kind: 'aporte' | 'retiro' }
+
+function MovementForm({
+  movement: { goal, kind },
   defaultPeriod,
   onClose,
   onSaved,
 }: {
-  goal: SavingsGoalView
+  movement: GoalMovement
   defaultPeriod: string
   onClose: () => void
   onSaved: () => void
 }) {
-  const [amount, setAmount] = useState(isZero(goal.monthlyNeeded) ? '' : goal.monthlyNeeded)
+  const withdrawal = kind === 'retiro'
+  const [amount, setAmount] = useState(withdrawal || isZero(goal.monthlyNeeded) ? '' : goal.monthlyNeeded)
   const [period, setPeriod] = useState(defaultPeriod)
   const [busy, setBusy] = useState(false)
 
@@ -218,7 +245,10 @@ function ContributionForm({
     e.preventDefault()
     setBusy(true)
     try {
-      if (failed(await FinanceService.AddSavingsContribution(goal.id, period, amount))) return
+      const res = withdrawal
+        ? await FinanceService.WithdrawSavings(goal.id, period, amount)
+        : await FinanceService.AddSavingsContribution(goal.id, period, amount)
+      if (failed(res)) return
       onSaved()
       onClose()
     } finally {
@@ -226,8 +256,9 @@ function ContributionForm({
     }
   }
 
+  const month = period ? periodLabel(period) : 'ese mes'
   return (
-    <Modal title={`Aporte · ${goal.name}`} onClose={onClose}>
+    <Modal title={`${withdrawal ? 'Retiro' : 'Aporte'} · ${goal.name}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <Field label="Monto">
           <MoneyInput value={amount} onChange={setAmount} placeholder="100000" required />
@@ -235,13 +266,17 @@ function ContributionForm({
         <Field label="Mes">
           <input type="month" className={inputCls} value={period} onChange={(e) => setPeriod(e.target.value)} required />
         </Field>
-        <p className="text-xs text-slate-500">Se descuenta del disponible de {period ? periodLabel(period) : 'ese mes'}.</p>
+        <p className="text-xs text-slate-500">
+          {withdrawal
+            ? `Vuelve al disponible de ${month}. Tienes ${formatCLP(goal.saved)} en esta meta.`
+            : `Se descuenta del disponible de ${month}.`}
+        </p>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
           <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Registrar aporte'}
+            {busy ? 'Guardando…' : withdrawal ? 'Registrar retiro' : 'Registrar aporte'}
           </Button>
         </div>
       </form>

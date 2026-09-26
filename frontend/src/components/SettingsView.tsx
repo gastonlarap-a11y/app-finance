@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { SettingsService } from '@/services/settings'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
@@ -40,11 +39,11 @@ function DesktopSettingsView() {
   const [backingUp, setBackingUp] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
 
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('settings')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('settings')
 
-  const query = useQuery(String(refresh), async () => {
+  const query = useQuery(version, async () => {
     const res = await SettingsService.GetState()
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'configuración no disponible')
     return res.data

@@ -1,7 +1,7 @@
 import { useState, type SubmitEvent } from 'react'
 import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense, type ImportItemView } from '@/services/finance'
-import { errMsg } from '@/lib/result'
-import { errorText } from '@/lib/useQuery'
+import { errMsg, failed } from '@/lib/result'
+import { errorText, useQuery } from '@/lib/useQuery'
 import { perInstallment, times } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
@@ -36,8 +36,16 @@ function parseCuotas(raw: string): number | null {
 // inbox (confirmed into a new expense), or nothing (a new manual expense).
 export type ExpenseFormTarget =
   | { mode: 'create' }
-  | { mode: 'edit'; expense: Expense }
+  | { mode: 'edit'; expense: Expense; tags: readonly string[] }
   | { mode: 'confirm'; item: ImportItemView }
+
+// parseTags reads the comma-separated tags field ("viaje, Trabajo").
+function parseTags(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t !== '')
+}
 
 type Props = {
   cards: Card[]
@@ -117,6 +125,9 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const importItem = target.mode === 'confirm' ? target.item : null
   const [learnRule, setLearnRule] = useState(importItem !== null)
   const [rulePattern, setRulePattern] = useState(importItem ? importItem.rulePattern || importItem.suggestedPattern : '')
+  const initialTags = target.mode === 'edit' ? target.tags.join(', ') : ''
+  const [tags, setTags] = useState(initialTags)
+  const knownTags = useQuery('expense-form-tags', () => FinanceService.ListTags())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -163,6 +174,9 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         setError(msg)
         return
       }
+      // Tags go in a second call; the expense is already saved, so a failure
+      // there is reported (toast) without keeping the form open.
+      if (res.data && tags !== initialTags) failed(await FinanceService.SetExpenseTags(res.data.id, parseTags(tags)))
       onSaved()
       onClose()
     } catch (err) {
@@ -256,6 +270,23 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
             </Select>
           </Field>
         </div>
+
+        <Field label="Etiquetas (separadas por coma)">
+          <input
+            className={inputCls}
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="viaje, trabajo, deducible"
+            list="expense-form-tag-options"
+          />
+          {/* Suggests the next tag after the last comma from the ones already in use. */}
+          <datalist id="expense-form-tag-options">
+            {(knownTags.data ?? []).map((t) => {
+              const done = tags.includes(',') ? tags.slice(0, tags.lastIndexOf(',') + 1) + ' ' : ''
+              return <option key={t.id} value={done + t.name} />
+            })}
+          </datalist>
+        </Field>
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Tarjeta">

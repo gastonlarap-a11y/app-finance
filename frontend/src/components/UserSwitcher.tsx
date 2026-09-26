@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { useSetAtom } from 'jotai'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { UsersService, type User } from '@/services/users'
 import { currentPeriod } from '@/lib/format'
 import { failed } from '@/lib/result'
@@ -13,14 +14,14 @@ export function UserSwitcher() {
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('profiles')
+  const invalidate = useInvalidate()
   const setPeriod = useSetAtom(periodAtom)
   const boxRef = useRef<HTMLDivElement>(null)
 
   // Server state stays in the query (not copied into an atom): every switch
-  // bumps refreshAtom, which refetches this and every view.
-  const query = useQuery(String(refresh), async () => {
+  // invalidates every topic, which refetches this and every view.
+  const query = useQuery(version, async () => {
     const [activeRes, users] = await Promise.all([UsersService.ActiveUser(), UsersService.ListUsers()])
     return { active: activeRes.data ?? null, users }
   })
@@ -51,7 +52,7 @@ export function UserSwitcher() {
   // Reload every view for the freshly-selected profile.
   function applySwitch() {
     setPeriod(currentPeriod())
-    bump((n) => n + 1)
+    invalidate()
     setOpen(false)
   }
 
@@ -90,7 +91,7 @@ export function UserSwitcher() {
       const res = await UsersService.DeleteUser(id)
       if (failed(res)) return
       if (res.data) applySwitch()
-      else bump((n) => n + 1)
+      else invalidate('profiles')
     } finally {
       setBusy(false)
     }

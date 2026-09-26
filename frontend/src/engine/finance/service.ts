@@ -48,6 +48,8 @@ import type {
   Movimiento,
   OpResult,
   PeriodSalary,
+  ReconciliationResult,
+  RefundResult,
   RecurringResult,
   RecurringSuggestion,
   SalaryResult,
@@ -62,7 +64,9 @@ import type {
   StageSummary,
   TrashItem,
   TrashResult,
+  TagView,
   TrendMonth,
+  UFValueInput,
   YearMonth,
   YearSummary,
   YearSummaryResult,
@@ -81,9 +85,24 @@ import {
   validPeriod,
   type DateParts,
 } from '@/engine/finance/period'
-import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
+import {
+  activeIn,
+  billsIn,
+  CurrencyCLP,
+  CurrencyUF,
+  fixedCharge,
+  fixedTotal,
+  interval,
+  latestAsOf,
+  nextBilling,
+  resolveAsOf,
+  UFRates,
+  validIntervals,
+  type EffectiveDated,
+} from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
+import { cleanTagName, normalizeTags, tagKey } from '@/engine/finance/tags'
 import {
   HintCardPayment,
   HintNone,
@@ -94,6 +113,7 @@ import {
   ImportKindCredit,
   ImportKindExpense,
   ImportPendiente,
+  ImportSourceCSV,
   ImportSourceEmail,
   ImportSourcePDFAccount,
   ImportSourcePDFCard,
@@ -106,6 +126,7 @@ import {
   LineVoluntary,
   SourceCuota,
   SourceFijo,
+  SourceReembolso,
   StatementInternational,
   StatementNational,
   StatusPagado,
@@ -124,6 +145,9 @@ import {
   rowToMerchant,
   rowToMerchantRule,
   rowToPeriodSalary,
+  rowToReconciliation,
+  rowToRefund,
+  rowToTag,
   rowToSavingsContribution,
   rowToSavingsGoal,
   rowToSettings,
@@ -419,7 +443,7 @@ function validateCandidate(
 // candidate is invalid, and keys each item by its stable fields plus its
 // ordinal among identical candidates of the batch.
 function validateBatch(batch: ImportBatch): { items?: StagedItem[]; error?: ReturnType<typeof newError> } {
-  if (![ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard].includes(batch.source)) {
+  if (![ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard, ImportSourceCSV].includes(batch.source)) {
     return { error: newError(ErrValidation, 'origen de importación inválido: ' + batch.source) }
   }
   const issuer = batch.issuer.trim().toLowerCase()
@@ -709,6 +733,17 @@ function suggestClp(it: ImportItem, fx: string): string {
 // you already enter it?" suggestion.
 function duplicateReviewable(it: ImportItem): boolean {
   return it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
+}
+
+// budgetAlertPercent mirrors Go: the share of a cap that raises the early warning.
+const budgetAlertPercent = 80
+
+// refundWindowDays / refundReviewable mirror the Go refund suggestion: a pending
+// CLP bank credit is matched to purchases up to 120 days before it.
+const refundWindowDays = 120
+
+function refundReviewable(it: ImportItem): boolean {
+  return it.status === ImportPendiente && it.kind === ImportKindCredit && it.currency === 'CLP'
 }
 
 // clpAmountOf mirrors the Go helper: the item's amount in pesos (its own for a
@@ -1065,6 +1100,38 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       }
       return best
+    }
+  }
+
+  // refundFinder mirrors Go's refundCandidates + refundOf: live expenses dated up
+  // to refundWindowDays before any reviewable credit, loaded once (newest
+  // first); a credit takes the most recent purchase named like it, costing at
+  // least the credit, on its card when both know one.
+  function refundFinder(items: ImportItem[]): (item: ImportItem, cardId: number | null) => Expense | null {
+    const days = (ymd: string) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000
+    const reviewable = items.filter(refundReviewable).map((it) => it.date)
+    if (reviewable.length === 0) return () => null
+    const shift = (ymd: string, n: number) => new Date((days(ymd) + n) * 86_400_000).toISOString().slice(0, 10)
+    const from = shift(reviewable.reduce((a, b) => (b < a ? b : a)), -refundWindowDays)
+    const to = shift(reviewable.reduce((a, b) => (b > a ? b : a)), 1)
+    const cands = db
+      .query('SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL AND date >= ? AND date < ? ORDER BY date DESC, id DESC', [
+        uid(),
+        from,
+        to,
+      ])
+      .map(rowToExpense)
+    return (item, cardId) => {
+      const amount = Money.fromString(item.amount)
+      const day = days(item.date)
+      for (const ex of cands) {
+        const purchased = days(ex.date.slice(0, 10))
+        if (purchased > day || day - purchased > refundWindowDays) continue
+        if (cardId != null && ex.cardId != null && ex.cardId !== cardId) continue
+        if (Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal).cmp(amount) < 0) continue
+        if (namesMatch(ex.merchant, item.description) || namesMatch(ex.description, item.description)) return ex
+      }
+      return null
     }
   }
 
@@ -1425,6 +1492,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     for (const mv of fixedChargesFor(period)) {
       if (mv.cardId != null) add(mv.cardId, Money.fromString(mv.amount))
     }
+    // A refund to a card is a credit on its statement.
+    for (const r of refundsIn(period, period)) {
+      if (r.cardId != null) add(r.cardId, Money.zero().sub(r.amount))
+    }
     return out
   }
 
@@ -1464,6 +1535,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   interface LoadedFixed {
     fixed: FixedExpense[]
     amountsByID: Map<number, FixedExpenseAmountRow[]>
+    uf: UFRates
+  }
+
+  // loadUF reads the stored UF values (public data: no user_id).
+  function loadUF(): UFRates {
+    const values = new Map<string, Money>()
+    for (const r of db.query('SELECT period, value FROM uf_values', [])) {
+      values.set(asString(r.period), Money.fromString(asString(r.value)))
+    }
+    return new UFRates(values)
   }
 
   function loadFixed(deletedOnly: boolean): LoadedFixed {
@@ -1484,14 +1565,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         else amountsByID.set(a.fixedExpenseId, [a])
       }
     }
-    return { fixed, amountsByID }
+    return { fixed, amountsByID, uf: loadUF() }
   }
 
   // fixedSuggester mirrors Go's fixedIndex.suggest: the live fixed expense whose
   // still-unpaid month the item most likely bills — same name, amount within
   // the tolerance (closest wins), same card when both name one.
   function fixedSuggester(): (it: ImportItem, period: string, cardId: number | null, clp: Money | null) => FixedExpense | null {
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     const paid = new Set<string>()
     if (fixed.length > 0) {
       const placeholders = fixed.map(() => '?').join(', ')
@@ -1508,10 +1589,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       let best: FixedExpense | null = null
       let bestGap: Money | null = null
       for (const fe of fixed) {
-        if (!activeIn(fe, period) || paid.has(`${fe.id}|${period}`)) continue
+        if (!billsIn(fe, period) || paid.has(`${fe.id}|${period}`)) continue
         if (fe.cardId != null && cardId != null && fe.cardId !== cardId) continue
         if (!namesMatch(fe.description, it.description)) continue
-        const gap = amountGap(clp, resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+        const gap = amountGap(clp, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp)
         if (gap === null) continue
         if (bestGap === null || gap.cmp(bestGap) < 0) {
           best = fe
@@ -1530,13 +1611,42 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
        LEFT JOIN expenses AS e ON e.id = ii.expense_id
        LEFT JOIN incomes AS inc ON inc.id = ii.income_id
        LEFT JOIN fixed_expenses AS f ON f.id = ii.fixed_expense_id
+       LEFT JOIN refunds AS rf ON rf.id = ii.refund_id
+       LEFT JOIN expenses AS rfe ON rfe.id = rf.expense_id
        WHERE ii.user_id = ? AND ii.status = ?
          AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
          AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
-         AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`,
+         AND (f.id IS NULL OR f.deleted_at IS NOT NULL)
+         AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)`,
       [uid(), ImportConfirmado],
     )
     return new Set(rows.map((r) => asNumber(r.id)))
+  }
+
+  // insertRefund mirrors the Go helper (call inside a transaction): the expense
+  // must be the profile's and live, and its refunds never exceed what it cost.
+  function insertRefund(expenseID: number, period: string, amount: string, description: string): RefundResult {
+    if (!validPeriod(period)) return { error: invalidPeriodError() }
+    const parsed = amountOrError(amount)
+    if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+    if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el reembolso debe ser mayor a 0') }
+    const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
+    if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+    const ex = rowToExpense(row)
+    const refunded = sumAmounts('SELECT amount FROM refunds WHERE expense_id = ?', [expenseID])
+    const total = Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal)
+    if (refunded.add(parsed.amount).gt(total)) {
+      return {
+        error: newError(ErrValidation, `el reembolso supera lo que queda por devolver de ese gasto (${total.sub(refunded).toString()})`),
+      }
+    }
+    const desc = description.trim() !== '' ? description.trim() : 'Reembolso: ' + ex.description
+    const inserted = db.query(
+      `INSERT INTO refunds (user_id, expense_id, period, amount, description, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+      [uid(), expenseID, period, parsed.amount.toString(), desc, nowIso()],
+    )[0]
+    if (!inserted) throw new Error('INSERT refunds RETURNING produced no row')
+    return { data: rowToRefund(inserted) }
   }
 
   // applyMonthAmount mirrors the Go helper: `amount` becomes the fixed
@@ -1562,7 +1672,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // fixedChargesFor builds the movimientos for fixed expenses billed in `period`.
   function fixedChargesFor(period: string): Movimiento[] {
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     const paid = new Set(
       db
         .query(
@@ -1574,12 +1684,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     )
     const out: Movimiento[] = []
     for (const fe of fixed) {
-      if (!activeIn(fe, period)) continue
+      if (!billsIn(fe, period)) continue
+      const charge = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period)
       out.push({
         source: SourceFijo,
         installmentId: 0,
         expenseId: 0,
         fixedId: fe.id,
+        refundId: null,
         description: fe.description,
         category: fe.category,
         merchant: '',
@@ -1588,26 +1700,28 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         kind: SourceFijo,
         number: 1,
         total: 1,
-        amount: resolveAsOf(amountsByID.get(fe.id) ?? [], period).toString(),
+        amount: charge.clp.toString(),
         status: paid.has(fe.id) ? StatusPagado : StatusPendiente,
         date: null,
+        ufAmount: fe.currency === CurrencyUF ? charge.original.toString() : null,
+        estimado: charge.estimated,
+        tags: [],
       })
     }
     return out
   }
 
-  // sumFixedBefore totals fixed-expense charges for all months strictly before
-  // `period` (carry-forward of the running balance). Each amount stretch is
-  // multiplied out (sumAsOf), so the cost does not grow with the months elapsed.
-  function sumFixedBefore(period: string): Money {
-    const { fixed, amountsByID } = loadFixed(false)
+  // sumFixedBetween totals fixed-expense charges of the months strictly between
+  // `after` ('' = from the start) and `before` (carry-forward of the running
+  // balance); fixedTotal keeps monthly CLP independent of the months elapsed.
+  function sumFixedBetween(after: string, before: string): Money {
+    const { fixed, amountsByID, uf } = loadFixed(false)
     let total = Money.zero()
-    const last = addMonths(period, -1)
+    const last = addMonths(before, -1)
+    const first = after === '' ? '' : addMonths(after, 1)
     for (const fe of fixed) {
       if (!validPeriod(fe.startPeriod)) continue
-      let end = last
-      if (fe.endPeriod !== '' && fe.endPeriod < end) end = fe.endPeriod
-      total = total.add(sumAsOf(amountsByID.get(fe.id) ?? [], fe.startPeriod, end))
+      total = total.add(fixedTotal(fe, amountsByID.get(fe.id) ?? [], uf, first, last))
     }
     return total
   }
@@ -1641,8 +1755,20 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return null
   }
 
-  // cumulativeBalanceBefore: Σ salaries + Σ extras − Σ gastos for every period
-  // strictly before `period`, summed with Money (never SQL SUM over TEXT).
+  // requireBillsIn mirrors the Go helper: a payment (or a linked bank charge)
+  // in a month off the fixed expense's schedule would never show up.
+  function requireBillsIn(fe: FixedExpense, period: string, action: string): ReturnType<typeof newError> | null {
+    const outside = requireActiveIn(fe, period, action)
+    if (outside) return outside
+    if (!billsIn(fe, period)) {
+      return newError(
+        ErrValidation,
+        `no se puede ${action} en ${period}: el gasto fijo cobra cada ${interval(fe)} meses (próximo: ${nextBilling(fe, period)})`,
+      )
+    }
+    return null
+  }
+
   // sumAmounts mirrors the Go helper: adds up the amount column of a query,
   // as decimals (never SQLite's float SUM over TEXT).
   function sumAmounts(sql: string, params: SqlValue[]): Money {
@@ -1651,23 +1777,173 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return total
   }
 
-  // cumulativeBalanceBefore reads only amounts: it walks the whole history on
-  // every summary (mirrors Go).
-  function cumulativeBalanceBefore(period: string): Money {
+  // ---------- tags (mirror backend/finance/tag.go) ----------
+
+  // ensureTag returns the id of the profile's tag named `name` (any case),
+  // creating it with that spelling when it does not exist.
+  function ensureTag(name: string): number {
+    const found = db.query('SELECT id FROM tags WHERE user_id = ? AND name_key = ?', [uid(), tagKey(name)])[0]
+    if (found) return asNumber(found.id)
+    const row = db.query('INSERT INTO tags (user_id, name, name_key, created_at) VALUES (?, ?, ?, ?) RETURNING id', [
+      uid(),
+      name,
+      tagKey(name),
+      nowIso(),
+    ])[0]
+    if (!row) throw new Error('INSERT tags RETURNING produced no row')
+    return asNumber(row.id)
+  }
+
+  // tagsByExpense maps each of the given expenses to its tag names, sorted by key.
+  function tagsByExpense(ids: readonly number[]): Map<number, string[]> {
+    const out = new Map<number, string[]>()
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return out
+    for (const r of db.query(
+      `SELECT et.expense_id, tg.name FROM expense_tags AS et JOIN tags AS tg ON tg.id = et.tag_id
+       WHERE tg.user_id = ? AND et.expense_id IN (${unique.map(() => '?').join(', ')})`,
+      [uid(), ...unique],
+    )) {
+      const id = asNumber(r.expense_id)
+      out.set(id, [...(out.get(id) ?? []), asString(r.name)])
+    }
+    for (const list of out.values()) list.sort((a, b) => compareStrings(tagKey(a), tagKey(b)))
+    return out
+  }
+
+  // ---------- refunds (mirror backend/finance/refund.go) ----------
+
+  interface RefundRow {
+    id: number
+    expenseId: number
+    period: string
+    amount: Money
+    description: string
+    category: string
+    merchant: string
+    cardId: number | null
+  }
+
+  // refundsIn lists the live refunds (expense not in the trash) arrived in [from, to].
+  function refundsIn(from: string, to: string): RefundRow[] {
+    return db
+      .query(
+        `SELECT rf.id, rf.expense_id, rf.period, rf.amount, rf.description, e.category, e.merchant, e.card_id
+         FROM refunds AS rf JOIN expenses AS e ON e.id = rf.expense_id
+         WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ? AND e.deleted_at IS NULL
+         ORDER BY rf.id`,
+        [uid(), from, to],
+      )
+      .map((r) => ({
+        id: asNumber(r.id),
+        expenseId: asNumber(r.expense_id),
+        period: asString(r.period),
+        amount: Money.fromString(asString(r.amount)),
+        description: asString(r.description),
+        category: asString(r.category),
+        merchant: asString(r.merchant),
+        cardId: r.card_id == null ? null : asNumber(r.card_id),
+      }))
+  }
+
+  // refundsBetween sums the live refunds of the months strictly between `after` and `before`.
+  function refundsBetween(after: string, before: string): Money {
+    return sumAmounts(
+      `SELECT amount FROM refunds WHERE user_id = ? AND period > ? AND period < ?
+       AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+      [uid(), after, before],
+    )
+  }
+
+  // refundMovimiento: a negative, already-received charge in its expense's category and card.
+  function refundMovimiento(r: RefundRow): Movimiento {
+    return {
+      source: SourceReembolso,
+      installmentId: 0,
+      expenseId: r.expenseId,
+      fixedId: null,
+      refundId: r.id,
+      description: r.description,
+      category: r.category,
+      merchant: r.merchant,
+      cardId: r.cardId,
+      cardName: '',
+      kind: SourceReembolso,
+      number: 1,
+      total: 1,
+      amount: Money.zero().sub(r.amount).toString(),
+      status: StatusPagado,
+      date: null,
+      ufAmount: null,
+      estimado: false,
+      tags: [],
+    }
+  }
+
+  // ---------- reconciliations (mirror backend/finance/reconciliation.go) ----------
+
+  // reconciliationBefore is the latest reconciliation strictly before `period`.
+  function reconciliationBefore(period: string): { period: string; amount: Money } | null {
+    const row = db.query(
+      'SELECT period, amount FROM reconciliations WHERE user_id = ? AND period < ? ORDER BY period DESC LIMIT 1',
+      [uid(), period],
+    )[0]
+    return row ? { period: asString(row.period), amount: Money.fromString(asString(row.amount)) } : null
+  }
+
+  // reconciliationsIn maps each reconciled month in [from, to] to its real balance.
+  function reconciliationsIn(from: string, to: string): Map<string, Money> {
+    const out = new Map<string, Money>()
+    for (const r of db.query('SELECT period, amount FROM reconciliations WHERE user_id = ? AND period >= ? AND period <= ?', [
+      uid(),
+      from,
+      to,
+    ])) {
+      out.set(asString(r.period), Money.fromString(asString(r.amount)))
+    }
+    return out
+  }
+
+  // cumulativeBalanceBefore: the running balance carried into `period` and the
+  // reconciled month it starts from ('' when none). Without a reconciliation it
+  // is Σ salaries + Σ extras − Σ gastos − Σ ahorro of every earlier period; with
+  // one, that month's real closing balance plus the same flows after it.
+  function cumulativeBalanceBefore(period: string): { amount: Money; from: string } {
+    const anchor = reconciliationBefore(period)
+    // Every YYYY-MM sorts after '': with no anchor the bound reads the whole history.
+    const after = anchor?.period ?? ''
+    const base = anchor?.amount ?? Money.zero()
+    return { amount: base.add(flowsBetween(after, period)), from: after }
+  }
+
+  // flowsBetween is the net of every month strictly between `after` and
+  // `before`; it reads only amounts (it walks the whole history on every summary).
+  function flowsBetween(after: string, before: string): Money {
     const user = uid()
-    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period < ?', [user, period])
+    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period > ? AND period < ?', [
+      user,
+      after,
+      before,
+    ])
     total = total.add(
-      sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period < ? AND deleted_at IS NULL', [user, period]),
+      sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period > ? AND period < ? AND deleted_at IS NULL', [
+        user,
+        after,
+        before,
+      ]),
     )
     total = total.sub(
       sumAmounts(
-        `SELECT amount FROM installments WHERE user_id = ? AND period < ?
+        `SELECT amount FROM installments WHERE user_id = ? AND period > ? AND period < ?
          AND expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)`,
-        [user, period, user],
+        [user, after, before, user],
       ),
     )
-    // Savings contributions left the account too.
-    return total.sub(sumFixedBefore(period)).sub(sumContributions('period < ?', [period]))
+    // Savings contributions left the account too; refunds came back into it.
+    return total
+      .sub(sumFixedBetween(after, before))
+      .sub(sumContributions('period > ? AND period < ?', [after, before]))
+      .add(refundsBetween(after, before))
   }
 
   // ---------- savings helpers ----------
@@ -1728,9 +2004,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         remaining: remaining.toString(),
         monthsLeft,
         monthlyNeeded: monthlyNeeded.toString(),
+        // Past its target month and still short: the UI flags it.
+        overdue: g.targetPeriod !== '' && g.targetPeriod < now && !remaining.isZero(),
         contributions,
       }
     })
+  }
+
+  // goalBalance is what a goal holds: its contributions minus its withdrawals.
+  function goalBalance(goalID: number): Money {
+    return sumAmounts('SELECT amount FROM savings_contributions WHERE goal_id = ?', [goalID])
   }
 
   function validateGoal(
@@ -1773,10 +2056,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       .map(rowToInstallment)
     const exById = expenseMapActive(insts.map((i) => i.expenseId))
     for (const inst of insts) add(inst.period, exById.get(inst.expenseId)?.category ?? '', Money.fromString(inst.amount))
-    const { fixed, amountsByID } = loadFixed(false)
+    for (const r of refundsIn(from, to)) add(r.period, r.category, Money.zero().sub(r.amount))
+    const { fixed, amountsByID, uf } = loadFixed(false)
     for (let p = from; p <= to; p = addMonths(p, 1)) {
       for (const fe of fixed) {
-        if (activeIn(fe, p)) add(p, fe.category, resolveAsOf(amountsByID.get(fe.id) ?? [], p))
+        if (billsIn(fe, p)) add(p, fe.category, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, p).clp)
       }
     }
     return { totals, byCat }
@@ -1857,13 +2141,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return budgetsInEffect(period).map((v) => {
       const budget = Money.fromString(v.amount)
       const spent = catTotals.get(v.category) ?? Money.zero()
+      const over = spent.gt(budget)
       return {
         categoryId: v.categoryId,
         category: v.category,
         budget: budget.toString(),
         spent: spent.toString(),
         remaining: budget.sub(spent).toString(),
-        over: spent.gt(budget),
+        over,
+        // Mirrors Go's nearCap: 80 % of a positive cap, the usual early warning.
+        near: !over && budget.gt(Money.zero()) && spent.mulInt(100).gte(budget.mulInt(budgetAlertPercent)),
       }
     })
   }
@@ -2273,13 +2560,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     // ---------- fixed expenses (recurring) ----------
 
     async ListFixedExpenses(): Promise<FixedExpenseView[]> {
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
       const cardByID = cardMapAll()
       const now = currentPeriod()
       const out: FixedExpenseView[] = fixed.map((fe) => {
+        const charge = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, fixedDisplayPeriod(fe, now))
         return {
           ...fe,
-          currentAmount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
+          currentAmount: charge.original.toString(),
+          currentAmountClp: charge.clp.toString(),
+          nextPeriod: nextBilling(fe, now),
           cardName: fe.cardId != null ? (cardByID.get(fe.cardId)?.name ?? '') : '',
           active: activeIn(fe, now),
         }
@@ -2294,10 +2584,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       cardID: number | null,
       startPeriod: string,
       amount: string,
+      intervalMonths: number,
+      currency: string,
     ): Promise<FixedExpenseResult> {
       const desc = description.trim()
       if (desc === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
       if (!validPeriod(startPeriod)) return { error: newError(ErrValidation, 'período inicial inválido (use YYYY-MM)') }
+      if (!validIntervals.includes(intervalMonths)) {
+        return { error: newError(ErrValidation, 'frecuencia inválida (cada 1, 2, 3, 4, 6 o 12 meses)') }
+      }
+      if (currency !== CurrencyCLP && currency !== CurrencyUF) {
+        return { error: newError(ErrValidation, 'moneda inválida (CLP o UF)') }
+      }
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
@@ -2307,9 +2605,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       return db.transaction((): FixedExpenseResult => {
         const row = db.query(
-          `INSERT INTO fixed_expenses (user_id, description, category, card_id, start_period, created_at)
-           VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-          [uid(), desc, category.trim(), cardID, startPeriod, nowIso()],
+          `INSERT INTO fixed_expenses (user_id, description, category, card_id, start_period, interval_months, currency, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), desc, category.trim(), cardID, startPeriod, intervalMonths, currency, nowIso()],
         )[0]
         if (!row) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
         const fe = rowToFixedExpense(row)
@@ -2320,6 +2618,48 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         ])
         return { data: fe }
       })
+    },
+
+    // UFMonthsNeeded mirrors the Go method: billing months of the profile's UF
+    // fixed expenses, up to next month, without a stored UF value.
+    async UFMonthsNeeded(): Promise<string[]> {
+      const { fixed, uf } = loadFixed(false)
+      const horizon = addMonths(currentPeriod(), 1)
+      const need = new Set<string>()
+      for (const fe of fixed) {
+        if (fe.currency !== CurrencyUF || !validPeriod(fe.startPeriod)) continue
+        const last = fe.endPeriod !== '' && fe.endPeriod < horizon ? fe.endPeriod : horizon
+        for (let p = fe.startPeriod; p <= last; p = addMonths(p, interval(fe))) {
+          if (!uf.has(p)) need.add(p)
+        }
+      }
+      return [...need].sort(compareStrings)
+    },
+
+    async SetUFValues(values: UFValueInput[]): Promise<OpResult> {
+      const rows: Array<{ period: string; value: string }> = []
+      for (const v of values) {
+        if (!validPeriod(v.period)) return { error: invalidPeriodError() }
+        let value: Money
+        try {
+          value = Money.fromString(v.value.trim())
+        } catch {
+          return { error: newError(ErrValidation, 'valor UF inválido: ' + v.value) }
+        }
+        if (value.isZero() || value.isNegative()) return { error: newError(ErrValidation, 'valor UF inválido: ' + v.value) }
+        rows.push({ period: v.period, value: value.toString() })
+      }
+      const now = nowIso()
+      db.transaction(() => {
+        for (const r of rows) {
+          db.exec(
+            `INSERT INTO uf_values (period, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (period) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+            [r.period, r.value, now],
+          )
+        }
+      })
+      return {}
     },
 
     async UpdateFixedExpense(
@@ -2402,7 +2742,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
         if (paid) {
           // Marking needs a month it bills in; unmarking is always allowed.
-          const outside = requireActiveIn(fe, period, 'marcarlo pagado')
+          const outside = requireBillsIn(fe, period, 'marcarlo pagado')
           if (outside) return { error: outside }
           db.exec(
             `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
@@ -2422,7 +2762,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(period)) return { error: invalidPeriodError() }
 
       const salary = salaryFor(period)
-      const acumulado = cumulativeBalanceBefore(period)
+      const carried = cumulativeBalanceBefore(period)
+      const acumulado = carried.amount
       const incomes = await service.ListIncomes(period)
       const cards = listCardsActive()
       const cardByID = cardMapAll()
@@ -2438,6 +2779,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         )
         .map(rowToInstallment)
       const exById = expenseMapActive(insts.map((i) => i.expenseId))
+      const tagsOf = tagsByExpense(insts.map((i) => i.expenseId))
 
       let extras = Money.zero()
       for (const inc of incomes) extras = extras.add(Money.fromString(inc.amount))
@@ -2459,6 +2801,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           installmentId: inst.id,
           expenseId: 0,
           fixedId: null,
+          refundId: null,
           description: '',
           category: '',
           merchant: '',
@@ -2470,6 +2813,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           amount: inst.amount,
           status: inst.status,
           date: null,
+          ufAmount: null,
+          estimado: false,
+          tags: tagsOf.get(inst.expenseId) ?? [],
         }
         let cat = uncategorized
         if (ex) {
@@ -2493,8 +2839,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amount))
       }
 
-      // Recurring fixed expenses billed this month fold into the same totals.
-      for (const mv of fixedChargesFor(period)) {
+      // Recurring fixed expenses billed this month fold into the same totals, and
+      // so do the refunds that arrived (negative, net of their category and card).
+      for (const mv of [...fixedChargesFor(period), ...refundsIn(period, period).map(refundMovimiento)]) {
         const cat = mv.category !== '' ? mv.category : uncategorized
         mv.category = cat
         const amount = Money.fromString(mv.amount)
@@ -2541,6 +2888,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         movimientos,
         incomes,
         presupuestos: budgetStatuses(period, catTotals),
+        acumuladoDesde: carried.from,
+        conciliacion: null,
+      }
+      const closing = reconciliationsIn(period, period).get(period)
+      if (closing) {
+        data.conciliacion = {
+          saldoReal: closing.toString(),
+          calculado: balance.toString(),
+          diferencia: closing.sub(balance).toString(),
+        }
       }
       return { data }
     },
@@ -2550,7 +2907,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const prefix = `${String(year).padStart(4, '0')}-`
 
       // Carry-in from every period before this year.
-      let saldo = cumulativeBalanceBefore(prefix + '01')
+      let saldo = cumulativeBalanceBefore(prefix + '01').amount
+      // A month reconciled inside the year resets the running balance to the real one.
+      const realByMonth = reconciliationsIn(prefix + '01', prefix + '12')
 
       const salaryByMonth = new Map<string, Money>()
       for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period LIKE ?', [
@@ -2588,15 +2947,21 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
 
       // Fold recurring fixed expenses into each month's gastos and categories.
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
       for (let m = 1; m <= 12; m++) {
         const period = prefix + String(m).padStart(2, '0')
         for (const fe of fixed) {
-          if (!activeIn(fe, period)) continue
-          const amt = resolveAsOf(amountsByID.get(fe.id) ?? [], period)
+          if (!billsIn(fe, period)) continue
+          const amt = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp
           gastosByMonth.set(period, (gastosByMonth.get(period) ?? Money.zero()).add(amt))
           byCat.add(fe.category, period, amt)
         }
+      }
+      // Refunds lower their month's gastos and their expense's category.
+      for (const r of refundsIn(prefix + '01', prefix + '12')) {
+        const neg = Money.zero().sub(r.amount)
+        gastosByMonth.set(r.period, (gastosByMonth.get(r.period) ?? Money.zero()).add(neg))
+        byCat.add(r.category, r.period, neg)
       }
 
       const ahorroByMonth = savingsByMonth(prefix + '01', prefix + '12')
@@ -2611,6 +2976,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
         const balance = ingresos.sub(gastos).sub(ahorro)
         saldo = saldo.add(balance) // running account balance at month close
+        const closing = realByMonth.get(period)
+        if (closing) saldo = closing
         months.push({
           period,
           ingresos: ingresos.toString(),
@@ -2619,6 +2986,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           balance: balance.toString(),
           saldo: saldo.toString(),
           alcanza: saldo.gte(Money.zero()),
+          conciliado: closing !== undefined,
         })
         totalIngresos = totalIngresos.add(ingresos)
         totalGastos = totalGastos.add(gastos)
@@ -2658,7 +3026,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         cuotas.set(inst.period, (cuotas.get(inst.period) ?? Money.zero()).add(Money.fromString(inst.amount)))
       }
 
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
 
       // Every salary up to the horizon: the ones before `fromPeriod` only seed
       // the "last known salary" used to estimate months without one.
@@ -2683,13 +3051,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
 
       const ahorroByMonth = savingsByMonth(fromPeriod, to)
-      let saldo = cumulativeBalanceBefore(fromPeriod)
+      let saldo = cumulativeBalanceBefore(fromPeriod).amount
+      // A past month of the horizon may already be reconciled.
+      const realByMonth = reconciliationsIn(fromPeriod, to)
+      const refundedIn = new Map<string, Money>()
+      for (const r of refundsIn(fromPeriod, to)) refundedIn.set(r.period, (refundedIn.get(r.period) ?? Money.zero()).add(r.amount))
       const data: ForecastMonth[] = []
       for (let i = 0; i < months; i++) {
         const period = addMonths(fromPeriod, i)
         let fijos = Money.zero()
         for (const fe of fixed) {
-          if (activeIn(fe, period)) fijos = fijos.add(resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+          // Future months have no UF value yet: fixedCharge uses the latest known one.
+          if (billsIn(fe, period)) fijos = fijos.add(fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp)
         }
         const known = salaryByMonth.get(period)
         if (known) lastKnown = known
@@ -2697,8 +3070,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const cuotasMes = cuotas.get(period) ?? Money.zero()
         const comprometido = cuotasMes.add(fijos)
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
-        const libre = ingresos.sub(comprometido).sub(ahorro)
-        saldo = saldo.add(libre)
+        // Refunds already recorded come back into the account, as in the month view.
+        const libre = ingresos.sub(comprometido).sub(ahorro).add(refundedIn.get(period) ?? Money.zero())
+        saldo = realByMonth.get(period) ?? saldo.add(libre)
         data.push({
           period,
           cuotas: cuotasMes.toString(),
@@ -2712,6 +3086,50 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         })
       }
       return { data }
+    },
+
+    // ---------- refunds (reembolsos) ----------
+
+    async CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult> {
+      return db.transaction((): RefundResult => insertRefund(expenseID, period, amount, description))
+    },
+
+    async DeleteRefund(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM refunds WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'reembolso no encontrado') }
+      return {}
+    },
+
+    // ---------- reconciliations (conciliación) ----------
+
+    async SetReconciliation(period: string, amount: string): Promise<ReconciliationResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      if (period > currentPeriod()) {
+        return { error: newError(ErrValidation, 'no se puede conciliar un mes que aún no empieza') }
+      }
+      // Unlike every other amount, a real balance may be negative (an overdraft).
+      let balance: Money
+      try {
+        balance = Money.fromString(amount.trim())
+      } catch {
+        return { error: newError(ErrValidation, 'saldo inválido: ' + amount) }
+      }
+      const now = nowIso()
+      const row = db.query(
+        `INSERT INTO reconciliations (user_id, period, amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, period) DO UPDATE SET amount = EXCLUDED.amount, updated_at = EXCLUDED.updated_at
+         RETURNING *`,
+        [uid(), period, balance.toString(), now, now],
+      )[0]
+      if (!row) return { error: newError(ErrNotFound, 'conciliación no encontrada') }
+      return { data: rowToReconciliation(row) }
+    },
+
+    async DeleteReconciliation(period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      db.exec('DELETE FROM reconciliations WHERE user_id = ? AND period = ?', [uid(), period])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'no hay conciliación para ese mes') }
+      return {}
     },
 
     // ---------- category budgets (presupuestos) ----------
@@ -2768,6 +3186,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         where.push('category = ?')
         params.push(category)
       }
+      const tag = f.tag.trim().split(/\s+/).join(' ')
+      if (tag !== '') {
+        where.push(`id IN (SELECT et.expense_id FROM expense_tags AS et JOIN tags AS tg ON tg.id = et.tag_id
+          WHERE tg.user_id = ? AND tg.name_key = ?)`)
+        params.push(uid(), tagKey(tag))
+      }
       if (f.cardId != null) {
         where.push('card_id = ?')
         params.push(f.cardId)
@@ -2778,6 +3202,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       const clause = where.join(' AND ')
       const count = asNumber(db.query(`SELECT COUNT(*) AS n FROM expenses WHERE ${clause}`, params)[0]?.n)
+      // The sum covers every match, not just this page.
+      let sum = Money.zero()
+      for (const r of db.query(`SELECT installment_amount, installments_total FROM expenses WHERE ${clause}`, params)) {
+        sum = sum.add(Money.fromString(asString(r.installment_amount)).mulInt(Math.max(asNumber(r.installments_total), 1)))
+      }
       const expenses = db
         .query(`SELECT * FROM expenses WHERE ${clause} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`, [
           ...params,
@@ -2803,6 +3232,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       }
       const cardByID = cardMapAll()
+      const tagsOf = tagsByExpense(expenses.map((e) => e.id))
       const items: ExpenseHit[] = expenses.map((ex) => {
         const sp = spans.get(ex.id)
         return {
@@ -2812,9 +3242,55 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           lastPeriod: sp?.last ?? '',
           total: Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1)).toString(),
           paidCount: sp?.paid ?? 0,
+          tags: tagsOf.get(ex.id) ?? [],
         }
       })
-      return { data: { items, count } }
+      return { data: { items, count, sum: sum.toString() } }
+    },
+
+    // ---------- tags (mirror backend/finance/tag.go) ----------
+
+    async SetExpenseTags(expenseID: number, names: string[]): Promise<OpResult> {
+      const clean = normalizeTags(names)
+      if (clean.error || !clean.names) return { error: clean.error ?? newError(ErrValidation, 'etiquetas inválidas') }
+      const cleanNames = clean.names
+      return db.transaction((): OpResult => {
+        const owned = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        const tagIDs = cleanNames.map(ensureTag)
+        db.exec('DELETE FROM expense_tags WHERE expense_id = ?', [expenseID])
+        for (const id of tagIDs) db.exec('INSERT INTO expense_tags (expense_id, tag_id) VALUES (?, ?)', [expenseID, id])
+        return {}
+      })
+    },
+
+    async ListTags(): Promise<TagView[]> {
+      return db
+        .query(
+          `SELECT tg.*, (
+             SELECT COUNT(*) FROM expense_tags AS et JOIN expenses AS e ON e.id = et.expense_id
+             WHERE et.tag_id = tg.id AND e.deleted_at IS NULL
+           ) AS count
+           FROM tags AS tg WHERE tg.user_id = ? ORDER BY tg.name_key`,
+          [uid()],
+        )
+        .map((r) => ({ ...rowToTag(r), count: asNumber(r.count) }))
+    },
+
+    async RenameTag(id: number, name: string): Promise<OpResult> {
+      const clean = cleanTagName(name)
+      if (clean.error || clean.name === undefined) return { error: clean.error ?? newError(ErrValidation, 'etiqueta inválida') }
+      const taken = db.query('SELECT 1 FROM tags WHERE user_id = ? AND name_key = ? AND id <> ?', [uid(), tagKey(clean.name), id])
+      if (taken.length > 0) return { error: newError(ErrConflict, 'ya existe una etiqueta con ese nombre') }
+      db.exec('UPDATE tags SET name = ?, name_key = ? WHERE id = ? AND user_id = ?', [clean.name, tagKey(clean.name), id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'etiqueta no encontrada') }
+      return {}
+    },
+
+    async DeleteTag(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM tags WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'etiqueta no encontrada') }
+      return {}
     },
 
     // ---------- savings goals ----------
@@ -2884,16 +3360,52 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       })
     },
 
-    // Contributions of a goal in the trash stay untouched until it is restored.
+    // WithdrawSavings mirrors the Go method: a negative contribution, never
+    // more than the goal holds.
+    async WithdrawSavings(goalID: number, period: string, amount: string): Promise<SavingsContributionResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el retiro debe ser mayor a 0') }
+      const amt = parsed.amount
+      return db.transaction((): SavingsContributionResult => {
+        const owned = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+          goalID,
+          uid(),
+        ])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        const saved = goalBalance(goalID)
+        if (amt.gt(saved)) {
+          return { error: newError(ErrValidation, `no puedes retirar más de lo ahorrado en la meta (${saved.toString()})`) }
+        }
+        const row = db.query(
+          `INSERT INTO savings_contributions (user_id, goal_id, period, amount, created_at)
+           VALUES (?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), goalID, period, Money.zero().sub(amt).toString(), nowIso()],
+        )[0]
+        if (!row) throw new Error('INSERT savings_contributions RETURNING produced no row')
+        return { data: rowToSavingsContribution(row) }
+      })
+    },
+
+    // Contributions of a goal in the trash stay untouched until it is restored;
+    // deleting one may never leave its goal below zero.
     async DeleteSavingsContribution(id: number): Promise<OpResult> {
       const user = uid()
-      db.exec(
-        `DELETE FROM savings_contributions WHERE id = ? AND user_id = ?
-         AND goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)`,
-        [id, user, user],
-      )
-      if (db.changes() === 0) return { error: newError(ErrNotFound, 'aporte no encontrado') }
-      return {}
+      return db.transaction((): OpResult => {
+        const row = db.query(
+          `SELECT * FROM savings_contributions WHERE id = ? AND user_id = ?
+           AND goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)`,
+          [id, user, user],
+        )[0]
+        if (!row) return { error: newError(ErrNotFound, 'aporte no encontrado') }
+        const c = rowToSavingsContribution(row)
+        if (goalBalance(c.goalId).sub(Money.fromString(c.amount)).isNegative()) {
+          return { error: newError(ErrConflict, 'la meta quedaría negativa: elimina primero el retiro') }
+        }
+        db.exec('DELETE FROM savings_contributions WHERE id = ?', [id])
+        return {}
+      })
     },
 
     // ---------- spending trend ----------
@@ -3010,11 +3522,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const suggestFixed = status === ImportPendiente ? fixedSuggester() : null
       const reopenable = status === ImportConfirmado ? reopenableIds() : new Set<number>()
       const findDuplicate = duplicateFinder(items)
+      const findRefunded = refundFinder(items)
       const matchedByID = matchedItemsOf(items)
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
         const dup = duplicateReviewable(it) ? findDuplicate(it, card?.id ?? null) : null
+        const refunded = refundReviewable(it) ? findRefunded(it, card?.id ?? null) : null
         const suggestedClp = suggestClp(it, fx)
         const fixedPeriod = billingPeriodOf(it, card?.billingDay ?? 0)
         const fixed =
@@ -3038,6 +3552,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           suggestedFixedId: fixed?.id ?? null,
           suggestedFixedDescription: fixed?.description ?? '',
           suggestedFixedPeriod: fixed ? fixedPeriod : '',
+          suggestedRefundExpenseId: refunded?.id ?? null,
+          suggestedRefundDescription: refunded?.description ?? '',
           reopenable: reopenable.has(it.id),
         }
       })
@@ -3137,7 +3653,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (wrongKind) return { error: wrongKind }
         const fe = ownFixedExpense(fixedID)
         if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
-        const outside = requireActiveIn(fe, period, 'enlazarlo')
+        const outside = requireBillsIn(fe, period, 'enlazarlo')
         if (outside) return { error: outside }
         const taken = db.query(
           'SELECT 1 FROM import_items WHERE user_id = ? AND fixed_expense_id = ? AND fixed_period = ?',
@@ -3174,7 +3690,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
         db.exec(
           `UPDATE import_items SET status = ?, expense_id = NULL, income_id = NULL, fixed_expense_id = NULL,
-           fixed_period = '' WHERE id = ? AND user_id = ? AND status = ?`,
+           fixed_period = '', refund_id = NULL WHERE id = ? AND user_id = ? AND status = ?`,
           [ImportPendiente, id, uid(), ImportConfirmado],
         )
         return {}
@@ -3225,6 +3741,28 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           uid(),
         ])
         return { data: inc }
+      })
+    },
+
+    async ConfirmImportItemAsRefund(id: number, expenseID: number, period: string, amount: string): Promise<RefundResult> {
+      return db.transaction((): RefundResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const kind = requireKind(pending.item, ImportKindCredit)
+        if (kind) return { error: kind }
+        const parsed = amountOrError(amount)
+        if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+        const notPesos = requirePesos(pending.item, parsed.amount)
+        if (notPesos) return { error: notPesos }
+        const res = insertRefund(expenseID, period, amount, pending.item.description)
+        if (res.error || !res.data) return res
+        db.exec('UPDATE import_items SET status = ?, refund_id = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          res.data.id,
+          id,
+          uid(),
+        ])
+        return res
       })
     },
 
@@ -3352,14 +3890,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         out.push({ type: 'savingsgoal', id: g.id, description: g.name, amount: g.targetAmount, deletedAt: g.deletedAt ?? '' })
       }
 
-      const { fixed, amountsByID } = loadFixed(true)
+      const { fixed, amountsByID, uf } = loadFixed(true)
       const now = currentPeriod()
       for (const fe of fixed) {
         out.push({
           type: 'fixedexpense',
           id: fe.id,
           description: fe.description,
-          amount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
+          // In pesos, like every trash amount.
+          amount: fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, fixedDisplayPeriod(fe, now)).clp.toString(),
           deletedAt: fe.deletedAt ?? '',
         })
       }

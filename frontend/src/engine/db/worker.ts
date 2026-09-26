@@ -9,6 +9,7 @@ import { runMigrations } from '@/engine/db/migrator'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession, createUsersService } from '@/engine/users/service'
 import { inspectBackup, type ImportSummary } from '@/engine/db/importCheck'
+import { compareSync, markShared, readSync } from '@/engine/db/syncstate'
 
 export type { ImportSummary } from '@/engine/db/importCheck'
 
@@ -16,7 +17,12 @@ export const DB_PATH = '/app-finance.sqlite3'
 
 export interface WorkerApi {
   call(service: 'finance' | 'users', method: string, args: unknown[]): Promise<unknown>
-  exportDb(): Promise<Uint8Array>
+  // exportDb records this device's pending changes in the sync vector (the
+  // file may reach the desktop), then returns the database file.
+  exportDb(deviceId: string): Promise<Uint8Array>
+  // inspectDb checks a file like importDb would and says how it relates to the
+  // data here (ImportSummary.sync), without touching anything.
+  inspectDb(bytes: Uint8Array, deviceId: string): Promise<ImportSummary>
   // importDb checks the file in memory first (see inspectBackup), then replaces
   // the whole database, restoring the previous one if anything fails, and
   // reports what came in. The caller must reload the page afterwards (also
@@ -50,7 +56,7 @@ const ready = (async () => {
     finance: createFinanceService(db, session),
     users: createUsersService(db, session),
   }
-  return { sqlite3, services, poolUtil, handle }
+  return { sqlite3, services, poolUtil, handle, db }
 })()
 
 const api: WorkerApi = {
@@ -66,9 +72,17 @@ const api: WorkerApi = {
     return fn.apply(svc, args)
   },
 
-  async exportDb() {
-    const { poolUtil } = await ready
+  async exportDb(deviceId) {
+    const { poolUtil, db } = await ready
+    markShared(db, deviceId)
     return poolUtil.exportFile(DB_PATH)
+  },
+
+  async inspectDb(bytes, deviceId) {
+    const { sqlite3, db } = await ready
+    const summary = inspectBackup(sqlite3, bytes) // throws ImportRejected
+    const local = readSync(db)
+    return { ...summary, sync: compareSync(local.vector, local.dirty, deviceId, summary.vector) }
   },
 
   async importDb(bytes) {

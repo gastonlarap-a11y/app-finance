@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { formatThousands, parseThousands } from '@/lib/format'
+import { formatThousands, formatUF, parseDecimalInput, parseThousands } from '@/lib/format'
+
+describe('formatUF', () => {
+  it('usa coma decimal y hasta 4 decimales', () => {
+    expect(formatUF('12.5')).toBe('UF 12,5')
+    expect(formatUF('1234.5678')).toBe('UF 1.234,5678')
+    expect(formatUF('3')).toBe('UF 3')
+    expect(formatUF('NaN')).toBe('UF 0')
+  })
+})
+
+describe('parseDecimalInput', () => {
+  it('lee decimales en formato es-CL o con punto', () => {
+    expect(parseDecimalInput('12,5')).toBe('12.5')
+    expect(parseDecimalInput('1.234,56')).toBe('1234.56')
+    expect(parseDecimalInput('12.5')).toBe('12.5')
+    expect(parseDecimalInput(' 007 ')).toBe('7')
+  })
+  it('rechaza lo que no es un número positivo', () => {
+    for (const bad of ['', 'abc', '-3', '1,2,3', '1e5', '12,']) expect(parseDecimalInput(bad)).toBe('')
+  })
+})
 
 describe('formatThousands', () => {
   it.each([
