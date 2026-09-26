@@ -147,6 +147,7 @@ export function MonthView() {
   const balanceTone = summary.alcanza ? 'success' : 'danger'
   const budgetByCategory = new Map<string, BudgetStatus>(summary.presupuestos.map((b) => [b.category, b]))
   const overBudget = summary.presupuestos.filter((b) => b.over)
+  const nearBudget = summary.presupuestos.filter((b) => b.near)
 
   // Built from the movimientos themselves (not summary.porTarjeta) so a card that
   // was since soft-deleted still shows up as a filter option for its past charges.
@@ -176,6 +177,18 @@ export function MonthView() {
             <span key={b.categoryId}>
               {i > 0 && ', '}
               <strong>{b.category}</strong> ({formatCLP(b.spent)} de {formatCLP(b.budget)})
+            </span>
+          ))}
+          .
+        </div>
+      )}
+      {nearBudget.length > 0 && (
+        <div role="status" className="rounded-base bg-warning/10 px-4 py-3 text-sm text-amber-200 ring-1 ring-warning/30">
+          Cerca del tope (80 % o más) en{' '}
+          {nearBudget.map((b, i) => (
+            <span key={b.categoryId}>
+              {i > 0 && ', '}
+              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(b.budget)})
             </span>
           ))}
           .
@@ -449,7 +462,10 @@ export function MonthView() {
                           <span className="w-40 shrink-0 truncate text-slate-300">{c.category}</span>
                           <div className="flex-1">
                             {budget ? (
-                              <Bar fill={ratio(budget.spent, budget.budget)} tone={budget.over ? 'danger' : 'success'} />
+                              <Bar
+                                fill={ratio(budget.spent, budget.budget)}
+                                tone={budget.over ? 'danger' : budget.near ? 'warning' : 'success'}
+                              />
                             ) : (
                               <Bar fill={ratio(c.total, summary.gastos)} />
                             )}
@@ -457,7 +473,9 @@ export function MonthView() {
                           <span className="w-28 shrink-0 text-right tabular-nums">{formatCLP(c.total)}</span>
                         </div>
                         {budget && (
-                          <div className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : 'text-slate-500'}`}>
+                          <div
+                            className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : budget.near ? 'text-warning' : 'text-slate-500'}`}
+                          >
                             {budget.over
                               ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(budget.budget)}`
                               : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(budget.budget)}`}

@@ -731,6 +731,9 @@ function duplicateReviewable(it: ImportItem): boolean {
   return it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
 }
 
+// budgetAlertPercent mirrors Go: the share of a cap that raises the early warning.
+const budgetAlertPercent = 80
+
 // refundWindowDays / refundReviewable mirror the Go refund suggestion: a pending
 // CLP bank credit is matched to purchases up to 120 days before it.
 const refundWindowDays = 120
@@ -2098,13 +2101,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return budgetsInEffect(period).map((v) => {
       const budget = Money.fromString(v.amount)
       const spent = catTotals.get(v.category) ?? Money.zero()
+      const over = spent.gt(budget)
       return {
         categoryId: v.categoryId,
         category: v.category,
         budget: budget.toString(),
         spent: spent.toString(),
         remaining: budget.sub(spent).toString(),
-        over: spent.gt(budget),
+        over,
+        // Mirrors Go's nearCap: 80 % of a positive cap, the usual early warning.
+        near: !over && budget.gt(Money.zero()) && spent.mulInt(100).gte(budget.mulInt(budgetAlertPercent)),
       }
     })
   }

@@ -113,14 +113,25 @@ func (s *FinanceService) budgetStatuses(ctx context.Context, uid int64, period s
 	out := make([]BudgetStatus, 0, len(views))
 	for _, v := range views {
 		spent := catTotals[v.Category]
+		over := spent.GT(v.Amount)
 		out = append(out, BudgetStatus{
 			CategoryID: v.CategoryID,
 			Category:   v.Category,
 			Budget:     v.Amount,
 			Spent:      spent,
 			Remaining:  v.Amount.Sub(spent),
-			Over:       spent.GT(v.Amount),
+			Over:       over,
+			Near:       !over && nearCap(spent, v.Amount),
 		})
 	}
 	return out, nil
+}
+
+// budgetAlertPercent is the share of a monthly cap that raises the early
+// warning — the 80 % most budgeting apps (YNAB, Mint) alert at.
+const budgetAlertPercent = 80
+
+// nearCap reports whether spent has reached budgetAlertPercent of a positive cap.
+func nearCap(spent, budget types.Decimal) bool {
+	return budget.GT(types.Zero()) && spent.MulInt(100).GTE(budget.MulInt(budgetAlertPercent))
 }

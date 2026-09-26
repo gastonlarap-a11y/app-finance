@@ -207,6 +207,7 @@ export interface BudgetStatus {
   spent: string
   remaining: string // negative when over budget
   over: boolean
+  near: boolean // spent 80 % or more of the cap, without exceeding it
 }
 
 export interface CategoryBudgetView {

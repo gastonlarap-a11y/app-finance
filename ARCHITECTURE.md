@@ -135,7 +135,9 @@ The effective-dated lookup is generic (`effectiveDated` rows → `latestAsOf` / 
 so `cumulativeBalanceBefore` (and every summary that carries the balance forward) no longer grows with
 the history length. **Category budgets** (`category_budgets`, `budget.go`) reuse the same scheme keyed
 by `category_id` (renames keep the budget; the rows ride along with the category into the trash);
-`MonthlySummary.Presupuestos` compares each cap in effect with the month's `PorCategoria` total.
+`MonthlySummary.Presupuestos` compares each cap in effect with the month's `PorCategoria` total:
+`Over` past the cap, `Near` from 80 % of it (`budgetAlertPercent`, the usual early warning), shown as
+red and amber alerts atop the month view.
 
 **Performance (measured, not guessed).** `backend/finance/bench_test.go` seeds 5 years of history
 (≈3.000 expenses, cuotas, fixed expenses, a statement a month, 200 inbox items) and times the hot
