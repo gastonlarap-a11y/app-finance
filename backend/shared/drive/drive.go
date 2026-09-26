@@ -132,10 +132,20 @@ func (m *Manager) saveToken(t *oauth2.Token) error {
 }
 
 // ErrReconnect means Google no longer honors the stored refresh token (revoked
-// by the user, or expired — Google expires them after 7 days while an OAuth
-// app is in "Testing"). The token is dropped, so Ajustes shows Drive as
+// by the user, expired — Google expires them after 7 days while an OAuth app
+// is in "Testing" — or issued to another OAuth client, e.g. before the app's
+// client was replaced). The token is dropped, so Ajustes shows Drive as
 // disconnected and offers to connect again.
 var ErrReconnect = errors.New("hay que volver a conectar Google Drive: hazlo en Ajustes → Respaldo")
+
+// staleRefreshToken reports a refresh the stored token can never pass again:
+// invalid_grant (revoked or expired) and unauthorized_client (the token
+// belongs to another OAuth client). Anything else — offline, a 5xx — may
+// succeed later, so the token is kept.
+func staleRefreshToken(err error) bool {
+	re, ok := errors.AsType[*oauth2.RetrieveError](err)
+	return ok && (re.ErrorCode == "invalid_grant" || re.ErrorCode == "unauthorized_client")
+}
 
 // Connect runs the loopback OAuth flow: it opens the user's browser (via openBrowser)
 // to Google's consent screen and waits for the redirect to capture the code.
@@ -250,7 +260,7 @@ func (m *Manager) service(ctx context.Context) (*gdrive.Service, error) {
 	ts := m.oauthConfig("").TokenSource(ctx, tok)
 	refreshed, err := ts.Token()
 	if err != nil {
-		if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok && re.ErrorCode == "invalid_grant" {
+		if staleRefreshToken(err) {
 			if rmErr := os.Remove(prefs.TokenPath(m.appName)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 				slog.Warn("drive: borrar token revocado", "err", rmErr)
 			}
