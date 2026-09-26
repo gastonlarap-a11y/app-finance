@@ -8,6 +8,7 @@ import type { Sqlite3Static } from '@sqlite.org/sqlite-wasm'
 import { wrapOo1Db } from '@/engine/db/sqlite'
 import { NewerSchemaError, runMigrations } from '@/engine/db/migrator'
 import { asNullableString, asNumber, asString, type SqlDb } from '@/engine/db/types'
+import { readSync, type SyncRelation, type Vector } from '@/engine/db/syncstate'
 
 // ImportSummary is what the imported file actually turned out to contain. The
 // UI shows it because "imported fine but you are looking at a month the backup
@@ -23,6 +24,10 @@ export interface ImportSummary {
   // Period range holding data, YYYY-MM, null when the file has no movements.
   firstPeriod: string | null
   lastPeriod: string | null
+  // The file's sync vector, and how it relates to the data in this browser
+  // (filled by the worker's inspectDb; null when not compared).
+  vector: Vector
+  sync: SyncRelation | null
 }
 
 // ImportRejected carries the Spanish sentence the backup screen shows.
@@ -116,5 +121,7 @@ export function summarize(db: SqlDb, migrated: number): ImportSummary {
     migrated,
     firstPeriod: asNullableString(periods?.first),
     lastPeriod: asNullableString(periods?.last),
+    vector: readSync(db).vector,
+    sync: null,
   }
 }

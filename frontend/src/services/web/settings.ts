@@ -15,7 +15,7 @@ import type {
   SettingsServiceContract,
   StateResult,
 } from '@/services/contract'
-import { exportDbBytes, importDbBytes } from '@/services/web/worker-client'
+import { exportDbBytes, importDbBytes, inspectDbBytes } from '@/services/web/worker-client'
 import type { ImportSummary } from '@/engine/db/worker'
 
 export type { ImportSummary }
@@ -107,6 +107,12 @@ export async function exportDb(): Promise<Blob> {
   // latter, and navigator.canShare rejects what it cannot type — which would
   // drop an installed PWA (no download UI) to a link that goes nowhere.
   return new Blob([copy], { type: 'application/octet-stream' })
+}
+
+// inspectDb checks a file and says how it relates to the data here (sync), so
+// the user can confirm before importDb replaces anything.
+export async function inspectDb(bytes: Uint8Array): Promise<ImportSummary> {
+  return inspectDbBytes(bytes)
 }
 
 // importDb replaces the local database with the given file's contents and

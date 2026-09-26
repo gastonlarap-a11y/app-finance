@@ -885,6 +885,9 @@ export interface BackupSummary {
   firstPeriod: string // YYYY-MM; '' when it has no movements
   lastPeriod: string
   migrations: number // schema updates applied to bring it up to date
+  // How it relates to the data here: 'igual' | 'mas-nueva' | 'mas-antigua' |
+  // 'divergente' (backend/shared/db/syncstate.go); '' when not compared.
+  sync: string
 }
 
 export type InspectResult = Result<BackupSummary>

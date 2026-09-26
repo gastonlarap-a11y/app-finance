@@ -569,3 +569,31 @@ Constraints, all verified on macOS with the real bundle and the real updater cod
 - Windows installs per user (`INSTALL_SCOPE: user`) so the exe can be replaced without UAC.
 - The PWA (web build) updates through its service worker (prompted, see §17);
   `services/web/updates.ts` is a stub.
+
+## 20. Desktop ⇄ iPad handoff (sync state)
+
+Desktop and iPad hold separate copies of the same `.sqlite` file. They move it by hand: a Drive
+backup or an exported file goes one way, a restore or a web import brings it in on the other side.
+The app never merges two copies. It only tells the user, before anything is replaced, how the
+incoming copy relates to the local one, so a copy with changes made elsewhere is never overwritten
+silently.
+
+- **Version vector (`sync_vector(device_id, edits)`)**: how many shared rounds of edits each
+  device has put into this copy. `sync_state.dirty` flips to 1 on any write to a user-data table,
+  through 72 SQLite triggers (insert, update and delete on 24 tables, migration
+  `20260926026_sync_state`). The triggers live in the schema, so the Go and TS engines share them.
+- **`MarkShared`** runs before a copy leaves the device: the desktop backup `Runner.Run` and the web
+  `exportDb`. If `dirty` is 1, it bumps this device's counter and clears the flag, in one
+  transaction. A copy made with no edits since the last share leaves the vector as it was.
+- **`CompareSync(local, dirty, device, incoming)`** returns `igual`, `mas-nueva`, `mas-antigua` or
+  `divergente`, using the usual vector dominance. It has one twist: when this device has unshared
+  edits (`dirty`), a copy that only matches its vector is `mas-antigua`, and one that also brings
+  another device's edits is `divergente`. `InspectBackup` (desktop) and `inspectDb` (web) fill
+  `sync` in the summary, and `SyncNoticeBox` turns it into the confirmation's warning.
+- **The device id lives outside the DB**, in desktop `prefs.json` (`prefs.DeviceID`, `escritorio-…`)
+  and in web `localStorage` (`web-…`). A restored copy therefore never brings the other device's
+  identity with it.
+- **Why not automatic merge or sync:** it would need a server, or both devices reaching the same
+  Drive file. The web build has no OAuth client, and `drive.file` only shows a file to the OAuth
+  client that created it, so the iPad cannot read the desktop's backup without a Google Cloud setup
+  per user. The zero-cost constraint rules out a server.

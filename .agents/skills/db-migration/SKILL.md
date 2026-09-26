@@ -24,6 +24,9 @@ by bun/migrate. The numeric filename prefix (`YYYYMMDDNNN`) sets **global** orde
    inside a transaction: dropping a rebuilt table that other tables reference runs their
    `ON DELETE CASCADE` and wipes the children. Only rebuild leaf tables that way; for a referenced
    table, add columns instead or stop and design the rebuild explicitly.
+   **A new user-data table needs its sync triggers**: `sync_dirty_<table>_ins|upd|del`, each running
+   `UPDATE sync_state SET dirty = 1 WHERE id = 1`; copy them from `20260926026_sync_state.tx.up.sql`.
+   A rebuilt table loses its triggers, so recreate them after the rebuild.
 4. **Register the embed.FS** in `backend/shared/db/migrator.go` **only when adding a new domain**
    `embed.FS`; extra `.sql` files inside an already-registered domain need no migrator change.
 5. **Update the bun models** (struct tags) for the changed columns, and add/adjust an isolation test
