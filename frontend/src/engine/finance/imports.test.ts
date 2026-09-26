@@ -137,6 +137,22 @@ describe('StageImport', () => {
   })
 })
 
+describe('cartola CSV', () => {
+  it('se concilia con la alerta de correo y no se duplica al reimportar', async () => {
+    await stage({ source: 'email', issuer: 'bancochile', items: [candidate({ date: '2026-09-01', description: 'COMPRA LIDER', amount: '25990' })] })
+    const csv: ImportBatch = {
+      source: 'csv',
+      issuer: 'Banco de Chile',
+      items: [
+        candidate({ date: '2026-09-01', description: 'COMPRA LIDER', amount: '25990', kind: 'gasto' }),
+        candidate({ date: '2026-09-02', description: 'TRASPASO DE: EMPRESA', amount: '1500000', kind: 'abono' }),
+      ],
+    }
+    expect(await stage(csv)).toEqual({ added: 1, duplicates: 0, reconciled: 1 })
+    expect(await stage(csv)).toEqual({ added: 0, duplicates: 2, reconciled: 0 })
+  })
+})
+
 describe('revisión de la bandeja', () => {
   it('confirmar crea el gasto y aprende la regla', async () => {
     const card = await finance.CreateCard('Itaú Visa', '1000000', 24, '1234')

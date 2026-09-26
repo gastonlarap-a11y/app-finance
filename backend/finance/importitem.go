@@ -12,6 +12,7 @@ import (
 const (
 	ImportSourceEmail      = "email"       // correo de alerta de compra
 	ImportSourcePDFAccount = "pdf_account" // cartola de cuenta corriente
+	ImportSourceCSV        = "csv"         // cartola exportada a CSV por cualquier banco (columnas mapeadas por el usuario)
 	ImportSourcePDFCard    = "pdf_card"    // estado de cuenta de tarjeta de crédito
 )
 

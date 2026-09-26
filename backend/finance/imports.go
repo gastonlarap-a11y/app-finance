@@ -28,8 +28,8 @@ const (
 )
 
 // sourceFamily groups sources that describe the same movement independently:
-// an email alert and a statement line are two sightings of one purchase, two
-// lines of the same statement never are.
+// an email alert and a statement line (PDF or CSV) are two sightings of one
+// purchase, two lines of the same statement never are.
 func sourceFamily(source string) string {
 	if source == ImportSourceEmail {
 		return "email"
@@ -164,7 +164,7 @@ func findReconcileMatch(ctx context.Context, db bun.IDB, uid int64, item *Import
 // the same day stay two items while re-importing the same file adds nothing.
 func validateBatch(uid int64, batch ImportBatch) ([]ImportItem, *shared.AppError) {
 	switch batch.Source {
-	case ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard:
+	case ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard, ImportSourceCSV:
 	default:
 		return nil, shared.NewError(shared.ErrValidation, "origen de importación inválido: "+batch.Source)
 	}
