@@ -17,6 +17,7 @@ import type {
   Reconciliation,
   Refund,
   SavingsContribution,
+  Tag,
   SavingsGoal,
   Settings,
 } from '@/services/contract'
@@ -86,6 +87,15 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     fixedExpenseId: asNullableNumber(r.fixed_expense_id),
     fixedPeriod: asString(r.fixed_period),
     refundId: asNullableNumber(r.refund_id),
+  }
+}
+
+export function rowToTag(r: SqlRow): Tag {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    name: asString(r.name),
+    createdAt: asString(r.created_at),
   }
 }
 

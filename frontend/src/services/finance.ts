@@ -66,6 +66,8 @@ export type {
   RecurringSuggestion,
   Refund,
   RefundResult,
+  Tag,
+  TagView,
   SalaryResult,
   SavingsContribution,
   SavingsGoal,

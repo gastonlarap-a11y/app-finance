@@ -164,6 +164,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if refund.Error != nil {
 		t.Fatalf("CreateRefund: %v", refund.Error)
 	}
+	if r := fin.SetExpenseTags(ctx, expense.Data.ID, []string{"Salud"}); r.Error != nil {
+		t.Fatalf("SetExpenseTags: %v", r.Error)
+	}
+	tags, err := fin.ListTags(ctx)
+	if err != nil || len(tags) != 1 {
+		t.Fatalf("ListTags = %+v (err %v), want 1", tags, err)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -207,6 +214,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"ConfirmImportItemAsRefund", func() finance.OpResult {
 			return finance.OpResult{Error: fin.ConfirmImportItemAsRefund(ctx, creditID, expense.Data.ID, period, "1").Error}
 		}},
+		{"SetExpenseTags", func() finance.OpResult { return fin.SetExpenseTags(ctx, expense.Data.ID, []string{"x"}) }},
+		{"RenameTag", func() finance.OpResult { return fin.RenameTag(ctx, tags[0].ID, "x") }},
+		{"DeleteTag", func() finance.OpResult { return fin.DeleteTag(ctx, tags[0].ID) }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {
@@ -276,6 +286,12 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) != 0 {
 		t.Fatalf("Camila UFMonthsNeeded = %v (err %v), want none (the UF expense is Gastón's)", need, err)
+	}
+	if tags, err := fin.ListTags(ctx); err != nil || len(tags) != 0 {
+		t.Fatalf("Camila ListTags = %+v (err %v), want none", tags, err)
+	}
+	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Tag: "Salud"}); r.Error != nil || r.Data.Count != 0 {
+		t.Fatalf("Camila search by Gastón's tag = %+v, want nothing", r)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

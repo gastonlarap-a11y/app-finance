@@ -1321,10 +1321,22 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	sum.Ingresos = sum.Salary.Add(sum.Extras)
 	sum.Disponible = sum.Acumulado.Add(sum.Ingresos)
 
+	expenseIDs := make([]int64, 0, len(insts))
+	for _, inst := range insts {
+		expenseIDs = append(expenseIDs, inst.ExpenseID)
+	}
+	tagsOf, err := s.tagsByExpense(ctx, uid, expenseIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	catTotals := map[string]types.Decimal{}
 	gastoMesByCard := map[int64]types.Decimal{}
 	add := func(mv Movimiento) {
 		mv.Category = categoryOrDefault(mv.Category)
+		if mv.Tags = tagsOf[mv.ExpenseID]; mv.Tags == nil || mv.Source != SourceCuota {
+			mv.Tags = []string{}
+		}
 		if mv.CardID != nil {
 			if c, ok := cardByID[*mv.CardID]; ok {
 				mv.CardName = c.Name

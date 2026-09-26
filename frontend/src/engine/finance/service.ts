@@ -64,6 +64,7 @@ import type {
   StageSummary,
   TrashItem,
   TrashResult,
+  TagView,
   TrendMonth,
   UFValueInput,
   YearMonth,
@@ -101,6 +102,7 @@ import {
 } from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
+import { cleanTagName, normalizeTags, tagKey } from '@/engine/finance/tags'
 import {
   HintCardPayment,
   HintNone,
@@ -144,6 +146,7 @@ import {
   rowToPeriodSalary,
   rowToReconciliation,
   rowToRefund,
+  rowToTag,
   rowToSavingsContribution,
   rowToSavingsGoal,
   rowToSettings,
@@ -1701,6 +1704,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         date: null,
         ufAmount: fe.currency === CurrencyUF ? charge.original.toString() : null,
         estimado: charge.estimated,
+        tags: [],
       })
     }
     return out
@@ -1772,6 +1776,40 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return total
   }
 
+  // ---------- tags (mirror backend/finance/tag.go) ----------
+
+  // ensureTag returns the id of the profile's tag named `name` (any case),
+  // creating it with that spelling when it does not exist.
+  function ensureTag(name: string): number {
+    const found = db.query('SELECT id FROM tags WHERE user_id = ? AND name_key = ?', [uid(), tagKey(name)])[0]
+    if (found) return asNumber(found.id)
+    const row = db.query('INSERT INTO tags (user_id, name, name_key, created_at) VALUES (?, ?, ?, ?) RETURNING id', [
+      uid(),
+      name,
+      tagKey(name),
+      nowIso(),
+    ])[0]
+    if (!row) throw new Error('INSERT tags RETURNING produced no row')
+    return asNumber(row.id)
+  }
+
+  // tagsByExpense maps each of the given expenses to its tag names, sorted by key.
+  function tagsByExpense(ids: readonly number[]): Map<number, string[]> {
+    const out = new Map<number, string[]>()
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return out
+    for (const r of db.query(
+      `SELECT et.expense_id, tg.name FROM expense_tags AS et JOIN tags AS tg ON tg.id = et.tag_id
+       WHERE tg.user_id = ? AND et.expense_id IN (${unique.map(() => '?').join(', ')})`,
+      [uid(), ...unique],
+    )) {
+      const id = asNumber(r.expense_id)
+      out.set(id, [...(out.get(id) ?? []), asString(r.name)])
+    }
+    for (const list of out.values()) list.sort((a, b) => compareStrings(tagKey(a), tagKey(b)))
+    return out
+  }
+
   // ---------- refunds (mirror backend/finance/refund.go) ----------
 
   interface RefundRow {
@@ -1837,6 +1875,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       date: null,
       ufAmount: null,
       estimado: false,
+      tags: [],
     }
   }
 
@@ -2739,6 +2778,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         )
         .map(rowToInstallment)
       const exById = expenseMapActive(insts.map((i) => i.expenseId))
+      const tagsOf = tagsByExpense(insts.map((i) => i.expenseId))
 
       let extras = Money.zero()
       for (const inc of incomes) extras = extras.add(Money.fromString(inc.amount))
@@ -2774,6 +2814,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           date: null,
           ufAmount: null,
           estimado: false,
+          tags: tagsOf.get(inst.expenseId) ?? [],
         }
         let cat = uncategorized
         if (ex) {
@@ -3144,6 +3185,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         where.push('category = ?')
         params.push(category)
       }
+      const tag = f.tag.trim().split(/\s+/).join(' ')
+      if (tag !== '') {
+        where.push(`id IN (SELECT et.expense_id FROM expense_tags AS et JOIN tags AS tg ON tg.id = et.tag_id
+          WHERE tg.user_id = ? AND tg.name_key = ?)`)
+        params.push(uid(), tagKey(tag))
+      }
       if (f.cardId != null) {
         where.push('card_id = ?')
         params.push(f.cardId)
@@ -3154,6 +3201,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       const clause = where.join(' AND ')
       const count = asNumber(db.query(`SELECT COUNT(*) AS n FROM expenses WHERE ${clause}`, params)[0]?.n)
+      // The sum covers every match, not just this page.
+      let sum = Money.zero()
+      for (const r of db.query(`SELECT installment_amount, installments_total FROM expenses WHERE ${clause}`, params)) {
+        sum = sum.add(Money.fromString(asString(r.installment_amount)).mulInt(Math.max(asNumber(r.installments_total), 1)))
+      }
       const expenses = db
         .query(`SELECT * FROM expenses WHERE ${clause} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`, [
           ...params,
@@ -3179,6 +3231,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       }
       const cardByID = cardMapAll()
+      const tagsOf = tagsByExpense(expenses.map((e) => e.id))
       const items: ExpenseHit[] = expenses.map((ex) => {
         const sp = spans.get(ex.id)
         return {
@@ -3188,9 +3241,55 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           lastPeriod: sp?.last ?? '',
           total: Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1)).toString(),
           paidCount: sp?.paid ?? 0,
+          tags: tagsOf.get(ex.id) ?? [],
         }
       })
-      return { data: { items, count } }
+      return { data: { items, count, sum: sum.toString() } }
+    },
+
+    // ---------- tags (mirror backend/finance/tag.go) ----------
+
+    async SetExpenseTags(expenseID: number, names: string[]): Promise<OpResult> {
+      const clean = normalizeTags(names)
+      if (clean.error || !clean.names) return { error: clean.error ?? newError(ErrValidation, 'etiquetas inválidas') }
+      const cleanNames = clean.names
+      return db.transaction((): OpResult => {
+        const owned = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        const tagIDs = cleanNames.map(ensureTag)
+        db.exec('DELETE FROM expense_tags WHERE expense_id = ?', [expenseID])
+        for (const id of tagIDs) db.exec('INSERT INTO expense_tags (expense_id, tag_id) VALUES (?, ?)', [expenseID, id])
+        return {}
+      })
+    },
+
+    async ListTags(): Promise<TagView[]> {
+      return db
+        .query(
+          `SELECT tg.*, (
+             SELECT COUNT(*) FROM expense_tags AS et JOIN expenses AS e ON e.id = et.expense_id
+             WHERE et.tag_id = tg.id AND e.deleted_at IS NULL
+           ) AS count
+           FROM tags AS tg WHERE tg.user_id = ? ORDER BY tg.name_key`,
+          [uid()],
+        )
+        .map((r) => ({ ...rowToTag(r), count: asNumber(r.count) }))
+    },
+
+    async RenameTag(id: number, name: string): Promise<OpResult> {
+      const clean = cleanTagName(name)
+      if (clean.error || clean.name === undefined) return { error: clean.error ?? newError(ErrValidation, 'etiqueta inválida') }
+      const taken = db.query('SELECT 1 FROM tags WHERE user_id = ? AND name_key = ? AND id <> ?', [uid(), tagKey(clean.name), id])
+      if (taken.length > 0) return { error: newError(ErrConflict, 'ya existe una etiqueta con ese nombre') }
+      db.exec('UPDATE tags SET name = ?, name_key = ? WHERE id = ? AND user_id = ?', [clean.name, tagKey(clean.name), id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'etiqueta no encontrada') }
+      return {}
+    },
+
+    async DeleteTag(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM tags WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'etiqueta no encontrada') }
+      return {}
     },
 
     // ---------- savings goals ----------

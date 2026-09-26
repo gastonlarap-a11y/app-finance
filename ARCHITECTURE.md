@@ -187,6 +187,14 @@ web CSP) and stores them with `SetUFValues`. `fixedTotal` keeps the carried bala
 expenses O(amount changes) (`sumAsOf`) and walks billing months for the rest. Paying or linking a
 bank charge to a month off the schedule is refused (`requireBillsIn`).
 
+**Tags** (`tag.go`, migration `20260926025`), like Monarch's tags or Actual's #tags: labels across
+categories (viaje, trabajo, deducible). `tags(user_id, name, name_key)` (the lowercase key keeps
+"Viaje" and "viaje" one tag) and `expense_tags(expense_id, tag_id)`, which has no `user_id` and is
+written only after proving the expense is the profile's (`SetExpenseTags` replaces an expense's set:
+at most 10 tags of up to 30 characters). They show on the month's movimientos; `SearchExpenses`
+filters by one and returns `Sum`, the total of every match (not just the page) — "¿cuánto costó el
+viaje?". Renaming onto another tag's name is refused; deleting a tag removes it from its expenses.
+
 **Refunds** (`refund.go`, migration `20260926024`), as YNAB and Monarch treat them: `refunds(expense_id,
 period, amount)` is money returned for one expense (a store return, a bank reversal), partial or
 total, never more than the expense cost (`insertRefund`). It is a negative movimiento of the month it

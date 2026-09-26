@@ -7,6 +7,7 @@ import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, periodLabel } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
+import { TagsSection } from './TagsSection'
 
 export function CategoriesView() {
   const version = useVersion('ledger')
@@ -37,6 +38,7 @@ export function CategoriesView() {
   const { categories, budgetById } = query.data
 
   return (
+    <div className="space-y-5">
     <Section
       title="Categorías"
       action={
@@ -118,6 +120,8 @@ export function CategoriesView() {
         />
       )}
     </Section>
+    <TagsSection />
+    </div>
   )
 }
 
