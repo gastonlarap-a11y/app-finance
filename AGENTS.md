@@ -89,7 +89,8 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Savings contributions are a monthly outflow**: they lower `Disponible`/`Balance` and the carried
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
-  (`liveGoalContributions`), like installments of a deleted expense.
+  (`liveGoalContributions`), like installments of a deleted expense. A withdrawal is a negative
+  contribution (`WithdrawSavings`); a goal's balance never goes below zero.
 - **Carried balance restarts at a reconciliation**: `cumulativeBalanceBefore` = latest
   `reconciliations` row before the month (real closing balance; the opening balance is one on the
   month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to

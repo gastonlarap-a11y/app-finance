@@ -16,7 +16,7 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { greaterThan, isNegative, isZero, ratio } from '@/lib/money'
+import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
 import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
 import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
 import { ExpenseForm } from './ExpenseForm'
@@ -201,7 +201,9 @@ export function MonthView() {
           hint={
             isZero(summary.ahorro)
               ? 'Se arrastra al próximo mes'
-              : `Tras ahorrar ${formatCLP(summary.ahorro)} · se arrastra al próximo mes`
+              : isNegative(summary.ahorro)
+                ? `Con ${formatCLP(subtract('0', summary.ahorro))} retirados del ahorro · se arrastra al próximo mes`
+                : `Tras ahorrar ${formatCLP(summary.ahorro)} · se arrastra al próximo mes`
           }
         />
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />

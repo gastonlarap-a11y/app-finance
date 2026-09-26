@@ -265,7 +265,8 @@ type SavingsGoalView struct {
 	Remaining     types.Decimal         `json:"remaining"`
 	MonthsLeft    int                   `json:"monthsLeft"`
 	MonthlyNeeded types.Decimal         `json:"monthlyNeeded"`
-	Contributions []SavingsContribution `json:"contributions"` // newest first
+	Overdue       bool                  `json:"overdue"`       // pasó su mes objetivo sin completarse
+	Contributions []SavingsContribution `json:"contributions"` // newest first; withdrawals are negative
 }
 
 // --- Spending trend ---

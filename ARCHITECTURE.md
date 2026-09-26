@@ -161,7 +161,10 @@ fixed expenses vs. salary, reusing the last known salary for months without one)
 `savings_contributions` (per month, hard delete, ride along with their goal). Contributions are an
 outflow of their month: `MonthlySummary.Ahorro`, `Balance = Disponible − Gastos − Ahorro`,
 `Alcanza = Disponible ≥ Gastos + Ahorro`, and they are subtracted in `cumulativeBalanceBefore`, the
-year view and the forecast. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
+year view and the forecast. A withdrawal (`WithdrawSavings`) is a negative contribution: the same sums
+give the money back to its month, and a goal never goes below zero (withdrawing more than it holds, or
+deleting a contribution a withdrawal relies on, is refused). A goal past its target month and still
+short is `Overdue`, flagged in the Ahorro view. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
 average of the earlier months of a 2–24-month window, overall and per category (`spendingByMonth`).
 `DetectRecurring` (`recurring.go`) groups one-off expenses of the last 6 months by merchant (or
 description), keeps amounts within ±15 % of the group median and suggests those seen in ≥ 3 months

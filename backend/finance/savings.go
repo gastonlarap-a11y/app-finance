@@ -2,6 +2,9 @@ package finance
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -135,16 +138,88 @@ func (s *FinanceService) AddSavingsContribution(ctx context.Context, goalID int6
 	return SavingsContributionResult{Data: c}
 }
 
-// DeleteSavingsContribution removes a contribution for good (a mistyped entry
-// is simply re-added; contributions have no trash of their own). Contributions
-// of a goal in the trash ride along with it and stay untouched until restored.
+// WithdrawSavings takes `amount` out of a (live, own) goal in `period`: stored
+// as a negative contribution, it gives the money back to that month's
+// disponible and to the carried balance through the same sums as a
+// contribution. A goal never goes below zero.
+func (s *FinanceService) WithdrawSavings(ctx context.Context, goalID int64, period, amount string) SavingsContributionResult {
+	if !validPeriod(period) {
+		return SavingsContributionResult{Error: invalidPeriod()}
+	}
+	amt, aerr := parseAmount(amount)
+	if aerr != nil {
+		return SavingsContributionResult{Error: aerr}
+	}
+	if amt.IsZero() {
+		return SavingsContributionResult{Error: shared.NewError(shared.ErrValidation, "el retiro debe ser mayor a 0")}
+	}
+	uid := s.uid()
+	c := &SavingsContribution{UserID: uid, GoalID: goalID, Period: period, Amount: types.Zero().Sub(amt)}
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		ok, err := tx.NewSelect().Model((*SavingsGoal)(nil)).Where("id = ? AND user_id = ?", goalID, uid).Exists(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return shared.NewError(shared.ErrNotFound, "meta no encontrada")
+		}
+		saved, err := goalBalance(ctx, tx, goalID)
+		if err != nil {
+			return err
+		}
+		if amt.GT(saved) {
+			return shared.NewError(shared.ErrValidation, fmt.Sprintf("no puedes retirar más de lo ahorrado en la meta (%s)", saved))
+		}
+		_, err = tx.NewInsert().Model(c).Returning("*").Exec(ctx)
+		return err
+	})
+	if err != nil {
+		return SavingsContributionResult{Error: appErr(err)}
+	}
+	return SavingsContributionResult{Data: c}
+}
+
+// goalBalance is what a goal holds: its contributions minus its withdrawals.
+func goalBalance(ctx context.Context, db bun.IDB, goalID int64) (types.Decimal, error) {
+	saved, err := sumAmounts(ctx, db.NewSelect().Model((*SavingsContribution)(nil)).Where("goal_id = ?", goalID))
+	if err != nil {
+		return types.Zero(), fmt.Errorf("goal %d balance: %w", goalID, err)
+	}
+	return saved, nil
+}
+
+// DeleteSavingsContribution removes a contribution or withdrawal for good (a
+// mistyped entry is simply re-added; they have no trash of their own), unless
+// that would leave the goal below zero (delete the withdrawal first).
+// Contributions of a goal in the trash ride along with it until restored.
 func (s *FinanceService) DeleteSavingsContribution(ctx context.Context, id int64) OpResult {
 	uid := s.uid()
-	res, err := s.db.NewDelete().Model((*SavingsContribution)(nil)).
-		Where("id = ? AND user_id = ?", id, uid).
-		Where("goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)", uid).
-		Exec(ctx)
-	return OpResult{Error: requireOne(res, err, "aporte no encontrado")}
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		c := new(SavingsContribution)
+		err := tx.NewSelect().Model(c).
+			Where("id = ? AND user_id = ?", id, uid).
+			Where("goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)", uid).
+			Scan(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			return shared.NewError(shared.ErrNotFound, "aporte no encontrado")
+		}
+		if err != nil {
+			return fmt.Errorf("loading contribution: %w", err)
+		}
+		saved, err := goalBalance(ctx, tx, c.GoalID)
+		if err != nil {
+			return err
+		}
+		if saved.Sub(c.Amount).IsNegative() {
+			return shared.NewError(shared.ErrConflict, "la meta quedaría negativa: elimina primero el retiro")
+		}
+		_, err = tx.NewDelete().Model((*SavingsContribution)(nil)).Where("id = ?", id).Exec(ctx)
+		return err
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
 }
 
 // ListSavingsGoals returns the live goals with their progress and the monthly
@@ -187,6 +262,8 @@ func (s *FinanceService) listSavingsGoals(ctx context.Context, uid int64, now st
 			v.MonthsLeft = monthsBetween(now, g.TargetPeriod) + 1 // the current month counts
 			v.MonthlyNeeded = v.Remaining.DivCeil(int64(v.MonthsLeft))
 		}
+		// Past its target month and still short: the UI flags it.
+		v.Overdue = g.TargetPeriod != "" && g.TargetPeriod < now && !v.Remaining.IsZero()
 		out = append(out, v)
 	}
 	return out, nil

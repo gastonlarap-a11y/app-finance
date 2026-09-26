@@ -243,6 +243,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.AddSavingsContribution(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila AddSavingsContribution on Gastón's goal = %+v, want NOT_FOUND", r.Error)
 	}
+	if r := fin.WithdrawSavings(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("Camila WithdrawSavings on Gastón's goal = %+v, want NOT_FOUND", r.Error)
+	}
 	if r := fin.DeleteSavingsContribution(ctx, contrib.Data.ID); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila DeleteSavingsContribution on Gastón's row = %+v, want NOT_FOUND", r.Error)
 	}
