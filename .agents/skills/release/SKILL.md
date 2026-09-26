@@ -29,6 +29,9 @@ latest GitHub Release and update themselves from two extra assets the workflow p
 that break the bundle's signature seal once extracted) and `app-finance-windows-amd64.exe`. Both
 **must be listed in `SHA256SUMS.txt`** and **signed** (`<asset>.sig`, made by the workflow's `sign`
 job): the app refuses to install an artifact without a checksum or a valid Ed25519 signature.
+Keep those asset names (the macOS one is matched as platform `darwin` + arch `universal`). The
+version the app compares against is `info.version` in `build/config.yml` (embedded by `main.go`),
+so the tag must equal it — the workflow already enforces that.
 
 Update signing key (free, no service involved):
 - Public key: `backend/updates/update_signing.pub` (committed, embedded in the app).
@@ -43,9 +46,6 @@ Update signing key (free, no service involved):
   (`git show <previous tag>:backend/updates/update_signing.pub`), since the step refuses a secret
   that does not pair with the committed key. Swap the secret to the new key only after that release
   is out.
-Keep those asset names (the macOS one is matched as platform `darwin` + arch `universal`). The
-version the app compares against is `info.version` in `build/config.yml` (embedded by `main.go`),
-so the tag must equal it — the workflow already enforces that.
 
 1. **Pre-flight**: `task check` (vet + lint + typecheck + tests + web build) and
    `cd frontend && npm run build` must pass (under the Claude Code sandbox use
