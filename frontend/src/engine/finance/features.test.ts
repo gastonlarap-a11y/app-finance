@@ -222,6 +222,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     // UF values are public data, but which months are needed depends on the profile.
     ok(await finance.CreateFixedExpense('Arriendo', '', null, reconciled, '10', 12, 'UF'))
     expect((await finance.UFMonthsNeeded())[0]).toBe(reconciled)
+    const refund = ok(await finance.CreateRefund(expense.data!.id, period, '1000', '')).data!
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -238,6 +239,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.GetCardStatement(imported.statementId),
       () => finance.DeleteCardStatement(imported.statementId),
       () => finance.DeleteReconciliation(reconciled),
+      () => finance.CreateRefund(expense.data!.id, period, '1', ''),
+      () => finance.DeleteRefund(refund.id),
+      () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {

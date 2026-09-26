@@ -160,6 +160,10 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) == 0 || need[0] != reconciled {
 		t.Fatalf("Gastón UFMonthsNeeded = %v (err %v), want it to start at %s", need, err, reconciled)
 	}
+	refund := fin.CreateRefund(ctx, expense.Data.ID, period, "1000", "")
+	if refund.Error != nil {
+		t.Fatalf("CreateRefund: %v", refund.Error)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -196,6 +200,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		}},
 		{"DeleteCardStatement", func() finance.OpResult { return fin.DeleteCardStatement(ctx, imported.Data.StatementID) }},
 		{"DeleteReconciliation", func() finance.OpResult { return fin.DeleteReconciliation(ctx, reconciled) }},
+		{"CreateRefund", func() finance.OpResult {
+			return finance.OpResult{Error: fin.CreateRefund(ctx, expense.Data.ID, period, "1", "").Error}
+		}},
+		{"DeleteRefund", func() finance.OpResult { return fin.DeleteRefund(ctx, refund.Data.ID) }},
+		{"ConfirmImportItemAsRefund", func() finance.OpResult {
+			return finance.OpResult{Error: fin.ConfirmImportItemAsRefund(ctx, creditID, expense.Data.ID, period, "1").Error}
+		}},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {

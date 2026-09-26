@@ -89,6 +89,16 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 	if err != nil {
 		return nil, err
 	}
+	// Refunds already recorded in the horizon come back into the account
+	// (added to Libre, as in the month and year views).
+	refunds, err := s.refundsIn(ctx, uid, from, to)
+	if err != nil {
+		return nil, err
+	}
+	refundedIn := map[string]types.Decimal{}
+	for _, r := range refunds {
+		refundedIn[r.Period] = refundedIn[r.Period].Add(r.Amount)
+	}
 	// A past month of the horizon may already be reconciled: from its close on,
 	// the projection starts from the real balance.
 	realByMonth, err := s.reconciliationsIn(ctx, uid, from, to)
@@ -114,7 +124,7 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		}
 		ingresos := salary.Add(extras[period])
 		comprometido := cuotas[period].Add(fijos)
-		libre := ingresos.Sub(comprometido).Sub(ahorro[period])
+		libre := ingresos.Sub(comprometido).Sub(ahorro[period]).Add(refundedIn[period])
 		saldo = saldo.Add(libre)
 		if closing, ok := realByMonth[period]; ok {
 			saldo = closing

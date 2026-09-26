@@ -49,6 +49,7 @@ import type {
   OpResult,
   PeriodSalary,
   ReconciliationResult,
+  RefundResult,
   RecurringResult,
   RecurringSuggestion,
   SalaryResult,
@@ -122,6 +123,7 @@ import {
   LineVoluntary,
   SourceCuota,
   SourceFijo,
+  SourceReembolso,
   StatementInternational,
   StatementNational,
   StatusPagado,
@@ -141,6 +143,7 @@ import {
   rowToMerchantRule,
   rowToPeriodSalary,
   rowToReconciliation,
+  rowToRefund,
   rowToSavingsContribution,
   rowToSavingsGoal,
   rowToSettings,
@@ -728,6 +731,14 @@ function duplicateReviewable(it: ImportItem): boolean {
   return it.status === ImportPendiente && it.kind !== ImportKindCredit && it.currency === 'CLP'
 }
 
+// refundWindowDays / refundReviewable mirror the Go refund suggestion: a pending
+// CLP bank credit is matched to purchases up to 120 days before it.
+const refundWindowDays = 120
+
+function refundReviewable(it: ImportItem): boolean {
+  return it.status === ImportPendiente && it.kind === ImportKindCredit && it.currency === 'CLP'
+}
+
 // clpAmountOf mirrors the Go helper: the item's amount in pesos (its own for a
 // CLP item, the suggested conversion for a USD one), or null when unknown.
 function clpAmountOf(it: ImportItem, suggestedClp: string): Money | null {
@@ -1082,6 +1093,38 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       }
       return best
+    }
+  }
+
+  // refundFinder mirrors Go's refundCandidates + refundOf: live expenses dated up
+  // to refundWindowDays before any reviewable credit, loaded once (newest
+  // first); a credit takes the most recent purchase named like it, costing at
+  // least the credit, on its card when both know one.
+  function refundFinder(items: ImportItem[]): (item: ImportItem, cardId: number | null) => Expense | null {
+    const days = (ymd: string) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000
+    const reviewable = items.filter(refundReviewable).map((it) => it.date)
+    if (reviewable.length === 0) return () => null
+    const shift = (ymd: string, n: number) => new Date((days(ymd) + n) * 86_400_000).toISOString().slice(0, 10)
+    const from = shift(reviewable.reduce((a, b) => (b < a ? b : a)), -refundWindowDays)
+    const to = shift(reviewable.reduce((a, b) => (b > a ? b : a)), 1)
+    const cands = db
+      .query('SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL AND date >= ? AND date < ? ORDER BY date DESC, id DESC', [
+        uid(),
+        from,
+        to,
+      ])
+      .map(rowToExpense)
+    return (item, cardId) => {
+      const amount = Money.fromString(item.amount)
+      const day = days(item.date)
+      for (const ex of cands) {
+        const purchased = days(ex.date.slice(0, 10))
+        if (purchased > day || day - purchased > refundWindowDays) continue
+        if (cardId != null && ex.cardId != null && ex.cardId !== cardId) continue
+        if (Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal).cmp(amount) < 0) continue
+        if (namesMatch(ex.merchant, item.description) || namesMatch(ex.description, item.description)) return ex
+      }
+      return null
     }
   }
 
@@ -1442,6 +1485,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     for (const mv of fixedChargesFor(period)) {
       if (mv.cardId != null) add(mv.cardId, Money.fromString(mv.amount))
     }
+    // A refund to a card is a credit on its statement.
+    for (const r of refundsIn(period, period)) {
+      if (r.cardId != null) add(r.cardId, Money.zero().sub(r.amount))
+    }
     return out
   }
 
@@ -1557,13 +1604,42 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
        LEFT JOIN expenses AS e ON e.id = ii.expense_id
        LEFT JOIN incomes AS inc ON inc.id = ii.income_id
        LEFT JOIN fixed_expenses AS f ON f.id = ii.fixed_expense_id
+       LEFT JOIN refunds AS rf ON rf.id = ii.refund_id
+       LEFT JOIN expenses AS rfe ON rfe.id = rf.expense_id
        WHERE ii.user_id = ? AND ii.status = ?
          AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
          AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
-         AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`,
+         AND (f.id IS NULL OR f.deleted_at IS NOT NULL)
+         AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)`,
       [uid(), ImportConfirmado],
     )
     return new Set(rows.map((r) => asNumber(r.id)))
+  }
+
+  // insertRefund mirrors the Go helper (call inside a transaction): the expense
+  // must be the profile's and live, and its refunds never exceed what it cost.
+  function insertRefund(expenseID: number, period: string, amount: string, description: string): RefundResult {
+    if (!validPeriod(period)) return { error: invalidPeriodError() }
+    const parsed = amountOrError(amount)
+    if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+    if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el reembolso debe ser mayor a 0') }
+    const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
+    if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+    const ex = rowToExpense(row)
+    const refunded = sumAmounts('SELECT amount FROM refunds WHERE expense_id = ?', [expenseID])
+    const total = Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal)
+    if (refunded.add(parsed.amount).gt(total)) {
+      return {
+        error: newError(ErrValidation, `el reembolso supera lo que queda por devolver de ese gasto (${total.sub(refunded).toString()})`),
+      }
+    }
+    const desc = description.trim() !== '' ? description.trim() : 'Reembolso: ' + ex.description
+    const inserted = db.query(
+      `INSERT INTO refunds (user_id, expense_id, period, amount, description, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+      [uid(), expenseID, period, parsed.amount.toString(), desc, nowIso()],
+    )[0]
+    if (!inserted) throw new Error('INSERT refunds RETURNING produced no row')
+    return { data: rowToRefund(inserted) }
   }
 
   // applyMonthAmount mirrors the Go helper: `amount` becomes the fixed
@@ -1608,6 +1684,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         installmentId: 0,
         expenseId: 0,
         fixedId: fe.id,
+        refundId: null,
         description: fe.description,
         category: fe.category,
         merchant: '',
@@ -1692,6 +1769,74 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return total
   }
 
+  // ---------- refunds (mirror backend/finance/refund.go) ----------
+
+  interface RefundRow {
+    id: number
+    expenseId: number
+    period: string
+    amount: Money
+    description: string
+    category: string
+    merchant: string
+    cardId: number | null
+  }
+
+  // refundsIn lists the live refunds (expense not in the trash) arrived in [from, to].
+  function refundsIn(from: string, to: string): RefundRow[] {
+    return db
+      .query(
+        `SELECT rf.id, rf.expense_id, rf.period, rf.amount, rf.description, e.category, e.merchant, e.card_id
+         FROM refunds AS rf JOIN expenses AS e ON e.id = rf.expense_id
+         WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ? AND e.deleted_at IS NULL
+         ORDER BY rf.id`,
+        [uid(), from, to],
+      )
+      .map((r) => ({
+        id: asNumber(r.id),
+        expenseId: asNumber(r.expense_id),
+        period: asString(r.period),
+        amount: Money.fromString(asString(r.amount)),
+        description: asString(r.description),
+        category: asString(r.category),
+        merchant: asString(r.merchant),
+        cardId: r.card_id == null ? null : asNumber(r.card_id),
+      }))
+  }
+
+  // refundsBetween sums the live refunds of the months strictly between `after` and `before`.
+  function refundsBetween(after: string, before: string): Money {
+    return sumAmounts(
+      `SELECT amount FROM refunds WHERE user_id = ? AND period > ? AND period < ?
+       AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+      [uid(), after, before],
+    )
+  }
+
+  // refundMovimiento: a negative, already-received charge in its expense's category and card.
+  function refundMovimiento(r: RefundRow): Movimiento {
+    return {
+      source: SourceReembolso,
+      installmentId: 0,
+      expenseId: r.expenseId,
+      fixedId: null,
+      refundId: r.id,
+      description: r.description,
+      category: r.category,
+      merchant: r.merchant,
+      cardId: r.cardId,
+      cardName: '',
+      kind: SourceReembolso,
+      number: 1,
+      total: 1,
+      amount: Money.zero().sub(r.amount).toString(),
+      status: StatusPagado,
+      date: null,
+      ufAmount: null,
+      estimado: false,
+    }
+  }
+
   // ---------- reconciliations (mirror backend/finance/reconciliation.go) ----------
 
   // reconciliationBefore is the latest reconciliation strictly before `period`.
@@ -1751,8 +1896,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         [user, after, before, user],
       ),
     )
-    // Savings contributions left the account too.
-    return total.sub(sumFixedBetween(after, before)).sub(sumContributions('period > ? AND period < ?', [after, before]))
+    // Savings contributions left the account too; refunds came back into it.
+    return total
+      .sub(sumFixedBetween(after, before))
+      .sub(sumContributions('period > ? AND period < ?', [after, before]))
+      .add(refundsBetween(after, before))
   }
 
   // ---------- savings helpers ----------
@@ -1858,6 +2006,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       .map(rowToInstallment)
     const exById = expenseMapActive(insts.map((i) => i.expenseId))
     for (const inst of insts) add(inst.period, exById.get(inst.expenseId)?.category ?? '', Money.fromString(inst.amount))
+    for (const r of refundsIn(from, to)) add(r.period, r.category, Money.zero().sub(r.amount))
     const { fixed, amountsByID, uf } = loadFixed(false)
     for (let p = from; p <= to; p = addMonths(p, 1)) {
       for (const fe of fixed) {
@@ -2598,6 +2747,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           installmentId: inst.id,
           expenseId: 0,
           fixedId: null,
+          refundId: null,
           description: '',
           category: '',
           merchant: '',
@@ -2634,8 +2784,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amount))
       }
 
-      // Recurring fixed expenses billed this month fold into the same totals.
-      for (const mv of fixedChargesFor(period)) {
+      // Recurring fixed expenses billed this month fold into the same totals, and
+      // so do the refunds that arrived (negative, net of their category and card).
+      for (const mv of [...fixedChargesFor(period), ...refundsIn(period, period).map(refundMovimiento)]) {
         const cat = mv.category !== '' ? mv.category : uncategorized
         mv.category = cat
         const amount = Money.fromString(mv.amount)
@@ -2751,6 +2902,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           byCat.add(fe.category, period, amt)
         }
       }
+      // Refunds lower their month's gastos and their expense's category.
+      for (const r of refundsIn(prefix + '01', prefix + '12')) {
+        const neg = Money.zero().sub(r.amount)
+        gastosByMonth.set(r.period, (gastosByMonth.get(r.period) ?? Money.zero()).add(neg))
+        byCat.add(r.category, r.period, neg)
+      }
 
       const ahorroByMonth = savingsByMonth(prefix + '01', prefix + '12')
       const months: YearMonth[] = []
@@ -2842,6 +2999,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       let saldo = cumulativeBalanceBefore(fromPeriod).amount
       // A past month of the horizon may already be reconciled.
       const realByMonth = reconciliationsIn(fromPeriod, to)
+      const refundedIn = new Map<string, Money>()
+      for (const r of refundsIn(fromPeriod, to)) refundedIn.set(r.period, (refundedIn.get(r.period) ?? Money.zero()).add(r.amount))
       const data: ForecastMonth[] = []
       for (let i = 0; i < months; i++) {
         const period = addMonths(fromPeriod, i)
@@ -2856,7 +3015,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const cuotasMes = cuotas.get(period) ?? Money.zero()
         const comprometido = cuotasMes.add(fijos)
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
-        const libre = ingresos.sub(comprometido).sub(ahorro)
+        // Refunds already recorded come back into the account, as in the month view.
+        const libre = ingresos.sub(comprometido).sub(ahorro).add(refundedIn.get(period) ?? Money.zero())
         saldo = realByMonth.get(period) ?? saldo.add(libre)
         data.push({
           period,
@@ -2871,6 +3031,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         })
       }
       return { data }
+    },
+
+    // ---------- refunds (reembolsos) ----------
+
+    async CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult> {
+      return db.transaction((): RefundResult => insertRefund(expenseID, period, amount, description))
+    },
+
+    async DeleteRefund(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM refunds WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'reembolso no encontrado') }
+      return {}
     },
 
     // ---------- reconciliations (conciliación) ----------
@@ -3201,11 +3373,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const suggestFixed = status === ImportPendiente ? fixedSuggester() : null
       const reopenable = status === ImportConfirmado ? reopenableIds() : new Set<number>()
       const findDuplicate = duplicateFinder(items)
+      const findRefunded = refundFinder(items)
       const matchedByID = matchedItemsOf(items)
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
         const dup = duplicateReviewable(it) ? findDuplicate(it, card?.id ?? null) : null
+        const refunded = refundReviewable(it) ? findRefunded(it, card?.id ?? null) : null
         const suggestedClp = suggestClp(it, fx)
         const fixedPeriod = billingPeriodOf(it, card?.billingDay ?? 0)
         const fixed =
@@ -3229,6 +3403,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           suggestedFixedId: fixed?.id ?? null,
           suggestedFixedDescription: fixed?.description ?? '',
           suggestedFixedPeriod: fixed ? fixedPeriod : '',
+          suggestedRefundExpenseId: refunded?.id ?? null,
+          suggestedRefundDescription: refunded?.description ?? '',
           reopenable: reopenable.has(it.id),
         }
       })
@@ -3365,7 +3541,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
         db.exec(
           `UPDATE import_items SET status = ?, expense_id = NULL, income_id = NULL, fixed_expense_id = NULL,
-           fixed_period = '' WHERE id = ? AND user_id = ? AND status = ?`,
+           fixed_period = '', refund_id = NULL WHERE id = ? AND user_id = ? AND status = ?`,
           [ImportPendiente, id, uid(), ImportConfirmado],
         )
         return {}
@@ -3416,6 +3592,28 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           uid(),
         ])
         return { data: inc }
+      })
+    },
+
+    async ConfirmImportItemAsRefund(id: number, expenseID: number, period: string, amount: string): Promise<RefundResult> {
+      return db.transaction((): RefundResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const kind = requireKind(pending.item, ImportKindCredit)
+        if (kind) return { error: kind }
+        const parsed = amountOrError(amount)
+        if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+        const notPesos = requirePesos(pending.item, parsed.amount)
+        if (notPesos) return { error: notPesos }
+        const res = insertRefund(expenseID, period, amount, pending.item.description)
+        if (res.error || !res.data) return res
+        db.exec('UPDATE import_items SET status = ?, refund_id = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          res.data.id,
+          id,
+          uid(),
+        ])
+        return res
       })
     },
 

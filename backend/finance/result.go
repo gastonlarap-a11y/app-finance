@@ -78,10 +78,11 @@ const (
 // Movimiento is one row of a month's view: either an installment joined with its
 // expense/card (Source="cuota") or a recurring fixed expense (Source="fijo").
 type Movimiento struct {
-	Source        string        `json:"source"`        // "cuota" | "fijo"
+	Source        string        `json:"source"`        // "cuota" | "fijo" | "reembolso"
 	InstallmentID int64         `json:"installmentId"` // 0 para fijos
 	ExpenseID     int64         `json:"expenseId"`     // 0 para fijos
 	FixedID       *int64        `json:"fixedId"`       // set sólo para fijos
+	RefundID      *int64        `json:"refundId"`      // set sólo para reembolsos (monto negativo)
 	Description   string        `json:"description"`
 	Category      string        `json:"category"`
 	Merchant      string        `json:"merchant"`
@@ -145,6 +146,11 @@ type ReconciliationStatus struct {
 	SaldoReal  types.Decimal `json:"saldoReal"`
 	Calculado  types.Decimal `json:"calculado"`  // Balance del mes
 	Diferencia types.Decimal `json:"diferencia"` // saldoReal − calculado (negativo: falta plata)
+}
+
+type RefundResult struct {
+	Data  *Refund          `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
 }
 
 type ReconciliationResult struct {
@@ -229,7 +235,7 @@ type ForecastMonth struct {
 	Ahorro          types.Decimal `json:"ahorro"`       // aportes a metas ya registrados para ese mes
 	Ingresos        types.Decimal `json:"ingresos"`
 	IngresoEstimado bool          `json:"ingresoEstimado"` // sin sueldo cargado: se usa el último conocido
-	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido − ahorro
+	Libre           types.Decimal `json:"libre"`           // ingresos − comprometido − ahorro + reembolsos ya registrados
 	SaldoProyectado types.Decimal `json:"saldoProyectado"` // saldo acumulado al cierre si sólo ocurre lo comprometido
 }
 
@@ -387,6 +393,10 @@ type ImportItemView struct {
 	SuggestedFixedID          *int64 `json:"suggestedFixedId"`
 	SuggestedFixedDescription string `json:"suggestedFixedDescription"`
 	SuggestedFixedPeriod      string `json:"suggestedFixedPeriod"`
+	// A pending bank credit that looks like the refund of a recent purchase
+	// (same name, not more than it cost): ConfirmImportItemAsRefund links it.
+	SuggestedRefundExpenseID   *int64 `json:"suggestedRefundExpenseId"`
+	SuggestedRefundDescription string `json:"suggestedRefundDescription"`
 	// A confirmed item whose expense or income went to the trash can go back
 	// to review (RestoreImportItem).
 	Reopenable bool `json:"reopenable"`
