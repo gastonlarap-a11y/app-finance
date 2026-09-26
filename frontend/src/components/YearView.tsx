@@ -1,6 +1,7 @@
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { FinanceService, type CategoryYearRow, type YearSummary } from '@/services/finance'
-import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom, tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
 import { formatCLP, monthLabel, yearOf } from '@/lib/format'
@@ -18,12 +19,12 @@ function hasActivity(data: YearSummary): boolean {
 
 export function YearView() {
   const [period, setPeriod] = useAtom(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   const setTab = useSetAtom(tabAtom)
   const year = yearOf(period)
 
-  const query = useQuery(`${year}:${refresh}`, async () => {
+  const query = useQuery(`${year}:${version}`, async () => {
     const res = await FinanceService.YearSummary(year)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'resumen vacío')
     return res.data
@@ -34,7 +35,7 @@ export function YearView() {
     setTab('mes')
   }
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const data = query.data
   if (!data) return <Spinner />
   const stale = query.status === 'loading'

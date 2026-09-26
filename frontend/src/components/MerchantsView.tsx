@@ -1,29 +1,30 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, type Merchant } from '@/services/finance'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { Button, Empty, Field, Modal, QueryError, Section, Spinner, inputCls } from './ui'
 
 export function MerchantsView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  // Merchants carry the categorization rules the import inbox applies.
+  const reload = () => invalidate('ledger', 'imports')
   const [editing, setEditing] = useState<Merchant | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [confirmId, setConfirmId] = useState<number | null>(null)
   const [query, setQuery] = useState('')
 
-  const merchantsQuery = useQuery(String(refresh), () => FinanceService.ListMerchants())
+  const merchantsQuery = useQuery(version, () => FinanceService.ListMerchants())
 
   async function remove(id: number) {
     setConfirmId(null)
     const res = await FinanceService.DeleteMerchant(id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(res)) reload()
   }
 
   if (merchantsQuery.status === 'error') {
-    return <QueryError message={merchantsQuery.error} onRetry={() => bump((n) => n + 1)} />
+    return <QueryError message={merchantsQuery.error} onRetry={reload} />
   }
   if (!merchantsQuery.data) return <Spinner />
   const merchants = merchantsQuery.data
@@ -98,7 +99,7 @@ export function MerchantsView() {
         <MerchantForm
           merchant={editing}
           onClose={() => setShowForm(false)}
-          onSaved={() => bump((n) => n + 1)}
+          onSaved={reload}
         />
       )}
     </Section>

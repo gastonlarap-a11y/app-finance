@@ -1,7 +1,8 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { FinanceService } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
@@ -9,11 +10,11 @@ import { Button, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
 
 export function IncomePanel() {
   const period = useAtomValue(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
 
-  const key = `${period}:${refresh}`
+  const key = `${period}:${version}`
   const query = useQuery(key, async () => {
     const [sal, extras] = await Promise.all([FinanceService.GetSalary(period), FinanceService.ListIncomes(period)])
     // A failed salary read must surface as an error, never as "0": saving that

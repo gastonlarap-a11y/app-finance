@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import {
   FinanceService,
   SOURCE_FIJO,
@@ -9,7 +9,8 @@ import {
   type Movimiento,
   type OpResult,
 } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
@@ -31,11 +32,11 @@ function movKey(m: Movimiento): string {
 
 export function MonthView() {
   const period = useAtomValue(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
 
-  const query = useQuery(`${period}:${refresh}`, async () => {
+  const query = useQuery(`${period}:${version}`, async () => {
     const [summary, expenses, cats, mers] = await Promise.all([
       FinanceService.MonthlySummary(period),
       FinanceService.ListExpenses(period),
@@ -117,7 +118,8 @@ export function MonthView() {
 
   async function removeExpense(expenseId: number) {
     setConfirmExpId(null)
-    if (!failed(await FinanceService.DeleteExpense(expenseId))) reload()
+    // Its import item (if any) reopens and its statement lines unlink.
+    if (!failed(await FinanceService.DeleteExpense(expenseId))) invalidate('ledger', 'imports')
   }
 
   function editExpense(expenseId: number) {
@@ -191,7 +193,7 @@ export function MonthView() {
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
 
-      <StatementBanner period={period} refresh={refresh} />
+      <StatementBanner period={period} />
 
       <div className="grid gap-5 lg:grid-cols-4">
         <div className="lg:col-span-3">
@@ -406,7 +408,7 @@ export function MonthView() {
           )}
 
           <div className="mt-5">
-            <TrendPanel period={period} refresh={refresh} />
+            <TrendPanel period={period} />
           </div>
         </div>
 

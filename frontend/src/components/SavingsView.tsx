@@ -1,7 +1,8 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { FinanceService, type SavingsGoalView } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { isZero, ratio } from '@/lib/money'
@@ -12,16 +13,16 @@ import { Bar, Button, Empty, Field, IconButton, Modal, MoneyInput, QueryError, S
 // month (they lower disponible and the carried balance) but show apart from
 // gastos and never count against category budgets.
 export function SavingsView() {
-  const refresh = useAtomValue(refreshAtom)
+  const version = useVersion('ledger')
   const period = useAtomValue(periodAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
   const [editing, setEditing] = useState<SavingsGoalView | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [contributeTo, setContributeTo] = useState<SavingsGoalView | null>(null)
   const [confirmId, setConfirmId] = useState<number | null>(null)
 
-  const query = useQuery(String(refresh), () => FinanceService.ListSavingsGoals())
+  const query = useQuery(version, () => FinanceService.ListSavingsGoals())
 
   async function remove(id: number) {
     setConfirmId(null)
