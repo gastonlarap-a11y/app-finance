@@ -28,6 +28,7 @@ beforeEach(async () => {
 const filter = (f: Partial<ExpenseFilter> = {}): ExpenseFilter => ({
   text: '',
   category: '',
+  tag: '',
   cardId: null,
   fromPeriod: '',
   toPeriod: '',

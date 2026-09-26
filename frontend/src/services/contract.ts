@@ -145,6 +145,7 @@ export interface Movimiento {
   date: string | null
   ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
   estimado: boolean // amount rests on an estimated UF value
+  tags: string[] // tags of the expense behind a cuota
 }
 
 export interface CategoryTotal {
@@ -343,6 +344,7 @@ export interface ExportTable {
 export interface ExpenseFilter {
   text: string
   category: string
+  tag: string // tag name, any case; '' = any
   cardId: number | null
   fromPeriod: string
   toPeriod: string
@@ -357,11 +359,25 @@ export interface ExpenseHit {
   lastPeriod: string
   total: string
   paidCount: number
+  tags: string[]
 }
 
 export interface ExpenseSearch {
   items: ExpenseHit[]
   count: number
+  sum: string // Σ total of every match, not only this page
+}
+
+// Tag: a label across categories (viaje, trabajo, deducible).
+export interface Tag {
+  id: number
+  userId: number
+  name: string
+  createdAt: string
+}
+
+export interface TagView extends Tag {
+  count: number // live expenses carrying it
 }
 
 // ---------- import inbox ----------
@@ -776,6 +792,11 @@ export interface FinanceServiceContract {
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
+
+  SetExpenseTags(expenseID: number, names: string[]): Promise<OpResult>
+  ListTags(): Promise<TagView[]>
+  RenameTag(id: number, name: string): Promise<OpResult>
+  DeleteTag(id: number): Promise<OpResult>
 
   ListSavingsGoals(): Promise<SavingsGoalView[]>
   CreateSavingsGoal(name: string, targetAmount: string, targetPeriod: string): Promise<SavingsGoalResult>

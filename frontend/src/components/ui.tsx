@@ -265,6 +265,20 @@ export function Bar({ fill, tone = 'primary' }: { fill: number; tone?: 'primary'
   )
 }
 
+// TagChips shows an expense's tags (renders nothing without tags).
+export function TagChips({ tags }: { tags: readonly string[] }) {
+  if (tags.length === 0) return null
+  return (
+    <span className="mt-0.5 flex flex-wrap gap-1">
+      {tags.map((t) => (
+        <span key={t} className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">
+          #{t}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="rounded-base bg-surface p-6 text-center text-slate-500">{children}</div>
 }

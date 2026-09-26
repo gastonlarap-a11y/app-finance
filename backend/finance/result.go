@@ -99,6 +99,8 @@ type Movimiento struct {
 	UFAmount *types.Decimal `json:"ufAmount"`
 	// Estimado: Amount rests on an estimated UF value (month not downloaded yet).
 	Estimado bool `json:"estimado"`
+	// Tags of the expense behind a cuota (always a list, empty when none).
+	Tags []string `json:"tags"`
 }
 
 type CategoryTotal struct {
@@ -326,6 +328,7 @@ type RecurringResult struct {
 type ExpenseFilter struct {
 	Text       string `json:"text"` // descripción o comercio (contiene)
 	Category   string `json:"category"`
+	Tag        string `json:"tag"` // nombre de etiqueta (sin distinguir mayúsculas); "" = cualquiera
 	CardID     *int64 `json:"cardId"`
 	FromPeriod string `json:"fromPeriod"` // YYYY-MM
 	ToPeriod   string `json:"toPeriod"`   // YYYY-MM
@@ -342,11 +345,13 @@ type ExpenseHit struct {
 	LastPeriod  string        `json:"lastPeriod"`
 	Total       types.Decimal `json:"total"` // monto cuota × cuotas
 	PaidCount   int           `json:"paidCount"`
+	Tags        []string      `json:"tags"`
 }
 
 type ExpenseSearch struct {
-	Items []ExpenseHit `json:"items"`
-	Count int          `json:"count"` // total de coincidencias (para paginar)
+	Items []ExpenseHit  `json:"items"`
+	Count int           `json:"count"` // total de coincidencias (para paginar)
+	Sum   types.Decimal `json:"sum"`   // Σ total de todas las coincidencias, no sólo de esta página
 }
 
 type ExpenseSearchResult struct {

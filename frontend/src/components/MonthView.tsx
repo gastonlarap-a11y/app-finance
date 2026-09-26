@@ -18,7 +18,7 @@ import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
 import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
-import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
+import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
@@ -318,6 +318,7 @@ export function MonthView() {
                                 <span className="block max-w-[220px] truncate" title={m.description}>
                                   {m.description}
                                 </span>
+                                <TagChips tags={m.tags} />
                               </td>
                               <td className="hidden py-2 text-slate-400 md:table-cell">
                                 <span className="block max-w-[140px] truncate" title={m.category}>
@@ -546,7 +547,11 @@ export function MonthView() {
           cards={summary.porTarjeta.map((t) => t.card)}
           categories={categories}
           merchants={merchants}
-          target={editing ? { mode: 'edit', expense: editing } : { mode: 'create' }}
+          target={
+            editing
+              ? { mode: 'edit', expense: editing, tags: summary.movimientos.find((m) => m.expenseId === editing.id)?.tags ?? [] }
+              : { mode: 'create' }
+          }
           onClose={() => setShowForm(false)}
           onSaved={reload}
         />
