@@ -125,6 +125,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Effective-dated values** (fixed-expense amounts, category budgets): rows apply from
   `effective_from` onward; resolve with `latestAsOf`/`resolveAsOf`, sum ranges with `sumAsOf`
   (`backend/finance/fixedexpense.go`, mirrored in `frontend/src/engine/finance/fixedexpense.ts`).
+- **Sync state (invariant)**: desktop⇄iPad copies are compared with a version vector
+  (`sync_vector` plus `sync_state.dirty`, `backend/shared/db/syncstate.go`, mirrored in
+  `engine/db/syncstate.ts`). Every new user-data table needs its three `sync_dirty_*` triggers in its
+  migration. `MarkShared` runs before a copy leaves the device (backup, web export). The device id
+  never lives in the DB. See `ARCHITECTURE.md` §20.
 - **Soft delete** (bun `soft_delete`) on cards/categories/incomes/expenses/fixed_expenses/users;
   deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore. Children of a
   trashed parent are frozen (no paying its cuotas, no deleting its contributions); an edit may keep

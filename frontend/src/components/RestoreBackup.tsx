@@ -7,6 +7,7 @@ import { SettingsService, type BackupFile, type BackupSummary } from '@/services
 import { errMsg } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
 import { Button, Empty, Modal, QueryError, Spinner } from './ui'
+import { SyncNoticeBox } from './SyncNoticeBox'
 
 const KIND_LABEL: Record<string, string> = {
   respaldo: 'Respaldo',
@@ -213,6 +214,7 @@ function ConfirmRestore({
           Es de una versión anterior de la app: se pondrá al día al restaurarlo.
         </p>
       )}
+      <SyncNoticeBox sync={s.sync} />
       <p className="mt-3 text-sm text-slate-300">
         Se reemplazarán <strong>todos</strong> tus datos actuales. Antes se guardará una copia de ellos para poder
         volver atrás.

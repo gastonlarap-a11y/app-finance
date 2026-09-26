@@ -22,6 +22,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/db"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/drive"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/prefs"
 )
@@ -150,6 +151,11 @@ func (r *Runner) LastBackup() *time.Time {
 func (r *Runner) Run(ctx context.Context) (Info, error) {
 	if r.freshDB.Load() && r.LastBackup() != nil {
 		return Info{}, ErrFreshDatabase
+	}
+	// The copy may reach another device (Drive, a synced folder): record this
+	// computer's pending changes in the sync vector first, so the copy carries them.
+	if err := db.MarkShared(ctx, r.db, prefs.DeviceID(r.appName)); err != nil {
+		return Info{}, err
 	}
 	local, err := snapshotRotating(ctx, r.db, r.localDir, r.dbFile, keepBackups)
 	if err != nil {

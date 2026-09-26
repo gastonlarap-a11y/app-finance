@@ -237,12 +237,19 @@ func (s *Service) DownloadDriveBackup(ctx context.Context) ChooseFolderResult {
 	return ChooseFolderResult{Path: path}
 }
 
-// InspectBackup checks a backup and reports what it holds; nothing changes.
+// InspectBackup checks a backup and reports what it holds and how it relates
+// to the current data (Summary.Sync: restoring an older or diverged copy drops
+// changes made here); nothing changes.
 func (s *Service) InspectBackup(ctx context.Context, path string) InspectResult {
 	summary, err := backup.Inspect(ctx, s.cfg.DBPath(), strings.TrimSpace(path))
 	if err != nil {
 		return InspectResult{Error: restoreError(err)}
 	}
+	local, dirty, err := db.ReadSync(ctx, s.db)
+	if err != nil {
+		return InspectResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	summary.Sync = db.CompareSync(local, dirty, prefs.DeviceID(s.appName), summary.Vector)
 	return InspectResult{Data: &summary}
 }
 
