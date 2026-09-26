@@ -154,8 +154,50 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
 
-  publish:
+  # Signs the in-app update artifacts (backend/updates refuses unsigned ones).
+  # Its own job so the signing key never shares a runner with the build, which
+  # ran npm install scripts and the whole toolchain: here only the Go standard
+  # library runs (tools/updatesign). The key lives in the `release`
+  # environment, whose deployment policy admits only v* tags.
+  sign:
     needs: installers
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: installers
+          path: bin
+      # Fails when the secret does not pair with the committed public key: a
+      # release the installed apps could not verify is never published.
+      - name: Sign the update artifacts
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          go run ./tools/updatesign sign -pub backend/updates/update_signing.pub \
+            bin/app-finance-darwin-universal.zip bin/app-finance-windows-amd64.exe
+          go run ./tools/updatesign verify -pub backend/updates/update_signing.pub \
+            bin/app-finance-darwin-universal.zip bin/app-finance-windows-amd64.exe
+      - name: Upload signatures
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signatures
+          if-no-files-found: error
+          path: |
+            bin/app-finance-darwin-universal.zip.sig
+            bin/app-finance-windows-amd64.exe.sig
+
+  publish:
+    needs: [installers, sign]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -165,6 +207,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: installers
+          path: bin
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signatures
           path: bin
       - name: Publish GitHub Release
         env:
@@ -177,7 +223,8 @@ jobs:
           Desde la versión 0.3.0 la app avisa sola cuando hay una versión nueva: pulsa **Actualizar** y
           luego **Reiniciar y actualizar** (respalda antes si tienes activado el respaldo al cerrar).
           Los archivos `app-finance-darwin-universal.zip` y `app-finance-windows-amd64.exe` son los que
-          usa ese actualizador; para instalar a mano usa el `.dmg` o el `-setup.exe`.
+          usa ese actualizador; para instalar a mano usa el `.dmg` o el `-setup.exe`. Van firmados
+          (`.sig`, Ed25519) y la app rechaza cualquier actualización cuya firma no verifique.
 
           ## Instalación manual
 
@@ -218,4 +265,5 @@ jobs:
             --generate-notes \
             bin/App-Finance-*.dmg bin/App-Finance-*-setup.exe \
             bin/app-finance-darwin-universal.zip bin/app-finance-windows-amd64.exe \
+            bin/app-finance-darwin-universal.zip.sig bin/app-finance-windows-amd64.exe.sig \
             bin/SHA256SUMS.txt

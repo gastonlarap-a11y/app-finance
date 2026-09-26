@@ -1,7 +1,9 @@
 package updates
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 )
 
@@ -43,12 +46,22 @@ func (f *fakeEngine) Restart(context.Context) error {
 	return f.restartErr
 }
 
+// testKey stands in for the release signing key (the real one never leaves
+// the release workflow); the harness trusts its public half.
+var testKey = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
+
+// verified is a release as the signed provider hands it over: digest from
+// SHA256SUMS.txt plus a valid signature over it.
 func verified(version string) *updater.Release {
+	digest := bytes.Repeat([]byte{0xab}, 32)
 	return &updater.Release{
-		Version:      version,
-		Notes:        "notas",
-		Artifact:     updater.Artifact{Filename: "app-finance-darwin-universal.zip", Size: 42},
-		Verification: &updater.Verification{DigestAlgo: "sha256", Digest: []byte{1, 2, 3}},
+		Version:  version,
+		Notes:    "notas",
+		Artifact: updater.Artifact{Filename: "app-finance-darwin-universal.zip", Size: 42},
+		Verification: &updater.Verification{
+			DigestAlgo: "sha256", Digest: digest,
+			SignatureAlgo: sigAlgo, Signature: ed25519.Sign(testKey, digest),
+		},
 	}
 }
 
@@ -98,6 +111,7 @@ func newHarness(t *testing.T) *harness {
 		Restarting: h.restarting,
 	})
 	h.svc.engine = h.eng
+	h.svc.pub = testKey.Public().(ed25519.PublicKey)
 	h.svc.goos = "darwin"
 	app := filepath.Join(t.TempDir(), "app-finance.app", "Contents", "MacOS")
 	if err := os.MkdirAll(app, 0o755); err != nil {
@@ -205,17 +219,47 @@ func TestInstallTargetAndBlocker(t *testing.T) {
 func TestCheckKeepsOnlyVerifiableReleases(t *testing.T) {
 	h := newHarness(t)
 
-	h.eng.rel = &updater.Release{Version: "0.4.0"} // no SHA256SUMS entry
-	st := h.svc.CheckForUpdate(t.Context()).Data
-	if st.Available != nil || !strings.Contains(st.LastError, "checksum") || st.LastChecked == nil {
-		t.Fatalf("unverifiable release state = %+v, want refused with a checksum error", st)
+	otherKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize))
+	refused := []struct {
+		name  string
+		edit  func(v *updater.Verification) *updater.Verification
+		error string
+	}{
+		{name: "no SHA256SUMS entry", edit: func(*updater.Verification) *updater.Verification { return nil }, error: "checksum"},
+		{name: "unsigned", edit: func(v *updater.Verification) *updater.Verification {
+			v.Signature, v.SignatureAlgo = nil, ""
+			return v
+		}, error: "no está firmada"},
+		{name: "signed by another key", edit: func(v *updater.Verification) *updater.Verification {
+			v.Signature = ed25519.Sign(otherKey, v.Digest)
+			return v
+		}, error: "firma"},
+		{name: "signature over another digest", edit: func(v *updater.Verification) *updater.Verification {
+			v.Digest = bytes.Repeat([]byte{0xcd}, 32)
+			return v
+		}, error: "firma"},
+		{name: "unexpected algorithm", edit: func(v *updater.Verification) *updater.Verification {
+			v.SignatureAlgo = "ecdsa-p256"
+			return v
+		}, error: "firma"},
 	}
-	if r := h.svc.InstallUpdate(t.Context()); r.Error == nil || r.Error.Code != "NOT_FOUND" {
-		t.Fatalf("InstallUpdate of an unverifiable release = %+v, want NOT_FOUND", r.Error)
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			rel := verified("0.4.0")
+			rel.Verification = tt.edit(rel.Verification)
+			h.eng.rel = rel
+			st := h.svc.CheckForUpdate(t.Context()).Data
+			if st.Available != nil || !strings.Contains(st.LastError, tt.error) || st.LastChecked == nil {
+				t.Fatalf("state = %+v, want refused with an error mentioning %q", st, tt.error)
+			}
+			if r := h.svc.InstallUpdate(t.Context()); r.Error == nil || r.Error.Code != "NOT_FOUND" {
+				t.Fatalf("InstallUpdate of a refused release = %+v, want NOT_FOUND", r.Error)
+			}
+		})
 	}
 
 	h.eng.rel = verified("0.4.0")
-	st = h.svc.CheckForUpdate(t.Context()).Data
+	st := h.svc.CheckForUpdate(t.Context()).Data
 	if st.Available == nil || st.Available.Version != "0.4.0" || st.Available.Size != 42 || st.LastError != "" {
 		t.Fatalf("verifiable release state = %+v", st)
 	}
@@ -317,6 +361,20 @@ func TestInstallGuards(t *testing.T) {
 	waitPhase(t, h.svc, PhaseIdle)
 	if st := h.svc.state(); !strings.Contains(st.LastError, "checksum mismatch") || st.Available == nil {
 		t.Fatalf("after a failed download = %+v, want the error and the release still offered", st)
+	}
+}
+
+func TestDisabledWithoutSigningKey(t *testing.T) {
+	s := NewService(Options{CurrentVersion: "0.3.0", Repository: "owner/repo"})
+	s.pub = nil // what an unreadable embedded key leaves
+	if err := s.ServiceStartup(t.Context(), application.ServiceOptions{}); err != nil {
+		t.Fatalf("ServiceStartup: %v", err)
+	}
+	if s.engine != nil {
+		t.Fatal("updates were enabled without a key to verify them")
+	}
+	if r := s.CheckForUpdate(t.Context()); r.Error == nil {
+		t.Fatal("CheckForUpdate without a signing key = ok")
 	}
 }
 

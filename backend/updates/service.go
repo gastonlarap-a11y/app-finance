@@ -1,18 +1,21 @@
 // Package updates keeps the desktop app current from its GitHub Releases:
 // it checks on startup and every checkEvery, and when the user accepts it
-// downloads the release for this platform, verifies it against the release's
-// SHA256SUMS.txt, and restarts into it (Wails v3 pkg/updater swaps the .app
-// bundle / .exe through a helper process and relaunches it).
+// downloads the release for this platform, verifies its SHA-256 against the
+// release's SHA256SUMS.txt and its Ed25519 signature against the public key
+// embedded at build time (signing.go), and restarts into it (Wails v3
+// pkg/updater swaps the .app bundle / .exe through a helper process and
+// relaunches it).
 //
-// Two guarantees on top of Wails' updater:
-//   - a release without a checksum for its artifact is never installed (the
-//     updater itself would install it unverified);
+// Guarantees on top of Wails' updater:
+//   - a release without a checksum or a valid signature for its artifact is
+//     never installed (the updater itself would install an unsigned one);
 //   - the close-time backup runs before quitting, not in OnShutdown: the
 //     helper aborts the swap if the app takes more than 30 s to exit.
 package updates
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -71,6 +74,9 @@ type Service struct {
 	engine engine
 	exe    func() (string, error)
 	goos   string
+	// pub verifies release signatures; nil (an unreadable embedded key)
+	// disables updates rather than installing unverified ones.
+	pub ed25519.PublicKey
 
 	mu          sync.Mutex
 	phase       string
@@ -87,7 +93,13 @@ func NewService(opts Options) *Service {
 	if opts.Restarting == nil {
 		opts.Restarting = new(atomic.Bool)
 	}
-	return &Service{opts: opts, exe: os.Executable, goos: runtime.GOOS, phase: PhaseIdle, bgCtx: context.Background()}
+	s := &Service{opts: opts, exe: os.Executable, goos: runtime.GOOS, phase: PhaseIdle, bgCtx: context.Background()}
+	pub, err := parseSigningKey(signingPublicKeyPEM)
+	if err != nil {
+		slog.Error("updates: signing key unusable, updates disabled", "err", err)
+	}
+	s.pub = pub
+	return s
 }
 
 func (s *Service) ServiceName() string { return "UpdatesService" }
@@ -99,8 +111,11 @@ func (s *Service) ServiceStartup(ctx context.Context, _ application.ServiceOptio
 		slog.Warn("updates: version unknown, update checks disabled")
 		return nil
 	}
+	if s.pub == nil {
+		return nil // NewService logged why
+	}
 	if s.engine == nil {
-		u, err := newEngine(s.opts, s.goos)
+		u, err := newEngine(s.opts, s.goos, s.pub)
 		if err != nil {
 			slog.Error("updates: disabled", "err", err)
 			return nil // the app works without updates
@@ -129,12 +144,18 @@ func (s *Service) ServiceShutdown() error {
 // newEngine initializes app.Updater. The macOS release ships one universal
 // .app, published as app-finance-darwin-universal.zip, so on macOS the asset
 // is picked by "universal" instead of the running CPU architecture.
-func newEngine(opts Options, goos string) (engine, error) {
+// PublicKey is the updater's only trust anchor: it rejects a download whose
+// signature does not verify over the digest of the bytes it received.
+func newEngine(opts Options, goos string, pub ed25519.PublicKey) (engine, error) {
 	gh, err := github.New(github.Config{Repository: opts.Repository, ChecksumAsset: checksumAsset})
 	if err != nil {
 		return nil, fmt.Errorf("github provider: %w", err)
 	}
-	cfg := updater.Config{CurrentVersion: opts.CurrentVersion, Providers: []updater.Provider{gh}}
+	cfg := updater.Config{
+		CurrentVersion: opts.CurrentVersion,
+		Providers:      []updater.Provider{newSignedProvider(gh, nil)},
+		PublicKey:      pub,
+	}
 	if goos == "darwin" {
 		cfg.Arch = "universal"
 	}
@@ -173,7 +194,7 @@ func (s *Service) changed() {
 }
 
 // check asks the feed for a newer release and keeps it pending only when it
-// carries a checksum to verify the download against.
+// carries a checksum and a signature that verifies under the embedded key.
 func (s *Service) check(ctx context.Context) error {
 	s.mu.Lock()
 	if busy(s.phase) {
@@ -202,8 +223,9 @@ func (s *Service) check(ctx context.Context) error {
 	if rel == nil {
 		return nil
 	}
-	if rel.Verification == nil || len(rel.Verification.Digest) == 0 {
-		s.lastError = fmt.Sprintf("La versión %s no publica el checksum de su descarga (%s): por seguridad no se instalará.", rel.Version, checksumAsset)
+	if problem := signatureProblem(rel, s.pub); problem != "" {
+		s.lastError = problem
+		slog.Warn("updates: release refused", "version", rel.Version, "reason", problem)
 		return nil
 	}
 	s.pending = rel

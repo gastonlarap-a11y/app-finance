@@ -27,7 +27,22 @@ latest GitHub Release and update themselves from two extra assets the workflow p
 `app-finance-darwin-universal.zip` (the signed `.app` zipped with
 `ditto -c -k --norsrc --noextattr --noacl --keepParent`; plain `ditto` adds `._*` AppleDouble files
 that break the bundle's signature seal once extracted) and `app-finance-windows-amd64.exe`. Both
-**must be listed in `SHA256SUMS.txt`**: the app refuses to install an artifact without a checksum.
+**must be listed in `SHA256SUMS.txt`** and **signed** (`<asset>.sig`, made by the workflow's `sign`
+job): the app refuses to install an artifact without a checksum or a valid Ed25519 signature.
+
+Update signing key (free, no service involved):
+- Public key: `backend/updates/update_signing.pub` (committed, embedded in the app).
+- Private key: the `UPDATE_SIGNING_KEY` secret of the `release` environment (deployment policy: `v*`
+  tags only), plus the owner's offline backup. If it is lost, installed apps can no longer
+  auto-update: users must install the next release by hand.
+- Sign/verify by hand: `UPDATE_SIGNING_KEY="$(cat key.pem)" go run ./tools/updatesign sign -pub
+  backend/updates/update_signing.pub FILE…` and `go run ./tools/updatesign verify -pub … FILE…`.
+- Rotation (leak or schedule): `updatesign keygen` a new pair, commit the new `.pub`, and release
+  it **signed with the old key** (installed apps only trust the old one). For that one release the
+  `sign` job's `-pub` must point at the old key
+  (`git show <previous tag>:backend/updates/update_signing.pub`), since the step refuses a secret
+  that does not pair with the committed key. Swap the secret to the new key only after that release
+  is out.
 Keep those asset names (the macOS one is matched as platform `darwin` + arch `universal`). The
 version the app compares against is `info.version` in `build/config.yml` (embedded by `main.go`),
 so the tag must equal it — the workflow already enforces that.

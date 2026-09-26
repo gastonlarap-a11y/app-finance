@@ -104,9 +104,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   repo) — `frontend/scripts/pdf-runs.mjs` dumps a PDF's positioned text runs. See `ARCHITECTURE.md` §18.
 - **In-app updates** (`backend/updates`, Wails `pkg/updater`): `main()` must call
   `updater.HandleHelperMode()` before anything else; the app version is `info.version` of the
-  embedded `build/config.yml`; a release artifact without an entry in `SHA256SUMS.txt` is never
-  installed; the close-time backup runs in `RestartToUpdate`, not `OnShutdown` (the updater's helper
-  aborts if the app takes > 30 s to quit). Release asset names/zip flags: `release` skill.
+  embedded `build/config.yml`; a release artifact without an entry in `SHA256SUMS.txt` or a valid
+  Ed25519 `<artifact>.sig` (key pinned in `backend/updates/update_signing.pub`, signed in the
+  release workflow's `sign` job by `tools/updatesign`) is never installed; the close-time backup runs
+  in `RestartToUpdate`, not `OnShutdown` (the updater's helper aborts if the app takes > 30 s to
+  quit). Release asset names/zip flags and key rotation: `release` skill.
 - **Export**: views build an `ExportTable` (`frontend/src/lib/exportTables.ts`, money as decimal
   strings); `@/services/reports` writes it — desktop via `ReportsService.SaveTable` (.xlsx + native
   Save dialog; blob downloads are unreliable in the webview), web via CSV + Share Sheet.
