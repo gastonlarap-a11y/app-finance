@@ -113,6 +113,7 @@ import {
   ImportKindCredit,
   ImportKindExpense,
   ImportPendiente,
+  ImportSourceCSV,
   ImportSourceEmail,
   ImportSourcePDFAccount,
   ImportSourcePDFCard,
@@ -442,7 +443,7 @@ function validateCandidate(
 // candidate is invalid, and keys each item by its stable fields plus its
 // ordinal among identical candidates of the batch.
 function validateBatch(batch: ImportBatch): { items?: StagedItem[]; error?: ReturnType<typeof newError> } {
-  if (![ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard].includes(batch.source)) {
+  if (![ImportSourceEmail, ImportSourcePDFAccount, ImportSourcePDFCard, ImportSourceCSV].includes(batch.source)) {
     return { error: newError(ErrValidation, 'origen de importación inválido: ' + batch.source) }
   }
   const issuer = batch.issuer.trim().toLowerCase()

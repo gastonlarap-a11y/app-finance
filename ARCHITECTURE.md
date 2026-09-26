@@ -472,6 +472,15 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
 Movements detected by the bank reach the app through **one reviewed inbox** — nothing becomes an
 expense until the user confirms it:
 
+- **CSV of any bank** (`frontend/src/lib/statements/csv.ts` + `components/CsvImport.tsx`), the file
+  import of YNAB, Actual and Monarch: every Chilean bank exports its cartola to Excel/CSV, so instead
+  of a parser per layout the user maps the columns once (fecha, descripción, and a signed monto, a
+  column of card charges, or separate cargos/abonos). The reader detects the delimiter (`;` `,` tab)
+  and the encoding (UTF-8, else Windows-1252), reads es-CL dates and amounts, skips title/total rows,
+  and stages the rows with source `csv` (statement family: it reconciles with alert emails and
+  re-importing adds nothing). Bank-specific PDF/email parsers still need an anonymized real sample
+  of that bank's document.
+
 - **Inbox** (`backend/finance/importitem.go` + `imports.go`, mirrored in the TS engine):
   `import_items` rows move `pendiente → confirmado` (new expense via `ConfirmImportItem`, or an
   existing one via `LinkImportItem`) or `→ descartado`. `StageCandidates(ctx, idb, uid, batch)` is

@@ -42,6 +42,7 @@ export const SourceReembolso = 'reembolso' // a refund: negative movimiento
 export const ImportSourceEmail = 'email'
 export const ImportSourcePDFAccount = 'pdf_account'
 export const ImportSourcePDFCard = 'pdf_card'
+export const ImportSourceCSV = 'csv' // a cartola exported to CSV by any bank (lib/statements/csv.ts)
 export const ImportPendiente = 'pendiente'
 export const ImportConfirmado = 'confirmado'
 export const ImportDescartado = 'descartado'

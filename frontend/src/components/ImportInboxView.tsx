@@ -44,6 +44,7 @@ const SOURCE_LABEL: Record<string, string> = {
   email: 'Correo',
   pdf_account: 'Cartola',
   pdf_card: 'Estado de cuenta TC',
+  csv: 'Cartola CSV',
 }
 
 const isCredit = (it: ImportItemView) => it.kind === 'abono'
