@@ -135,6 +135,7 @@ describe('aislamiento de ahorro y tendencias', () => {
     expect(tr.current).toBe('0')
     expect(tr.categories).toEqual([])
     expect((await finance.AddSavingsContribution(goal.id, '2030-01', '1')).error?.code).toBe('NOT_FOUND')
+    expect((await finance.WithdrawSavings(goal.id, '2030-01', '1')).error?.code).toBe('NOT_FOUND')
     expect((await finance.DeleteSavingsContribution(contrib.id)).error?.code).toBe('NOT_FOUND')
     expect((await finance.DeleteSavingsGoal(goal.id)).error?.code).toBe('NOT_FOUND')
   })

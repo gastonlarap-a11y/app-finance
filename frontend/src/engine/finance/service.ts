@@ -1961,9 +1961,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         remaining: remaining.toString(),
         monthsLeft,
         monthlyNeeded: monthlyNeeded.toString(),
+        // Past its target month and still short: the UI flags it.
+        overdue: g.targetPeriod !== '' && g.targetPeriod < now && !remaining.isZero(),
         contributions,
       }
     })
+  }
+
+  // goalBalance is what a goal holds: its contributions minus its withdrawals.
+  function goalBalance(goalID: number): Money {
+    return sumAmounts('SELECT amount FROM savings_contributions WHERE goal_id = ?', [goalID])
   }
 
   function validateGoal(
@@ -3247,16 +3254,52 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       })
     },
 
-    // Contributions of a goal in the trash stay untouched until it is restored.
+    // WithdrawSavings mirrors the Go method: a negative contribution, never
+    // more than the goal holds.
+    async WithdrawSavings(goalID: number, period: string, amount: string): Promise<SavingsContributionResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el retiro debe ser mayor a 0') }
+      const amt = parsed.amount
+      return db.transaction((): SavingsContributionResult => {
+        const owned = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+          goalID,
+          uid(),
+        ])
+        if (owned.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        const saved = goalBalance(goalID)
+        if (amt.gt(saved)) {
+          return { error: newError(ErrValidation, `no puedes retirar más de lo ahorrado en la meta (${saved.toString()})`) }
+        }
+        const row = db.query(
+          `INSERT INTO savings_contributions (user_id, goal_id, period, amount, created_at)
+           VALUES (?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), goalID, period, Money.zero().sub(amt).toString(), nowIso()],
+        )[0]
+        if (!row) throw new Error('INSERT savings_contributions RETURNING produced no row')
+        return { data: rowToSavingsContribution(row) }
+      })
+    },
+
+    // Contributions of a goal in the trash stay untouched until it is restored;
+    // deleting one may never leave its goal below zero.
     async DeleteSavingsContribution(id: number): Promise<OpResult> {
       const user = uid()
-      db.exec(
-        `DELETE FROM savings_contributions WHERE id = ? AND user_id = ?
-         AND goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)`,
-        [id, user, user],
-      )
-      if (db.changes() === 0) return { error: newError(ErrNotFound, 'aporte no encontrado') }
-      return {}
+      return db.transaction((): OpResult => {
+        const row = db.query(
+          `SELECT * FROM savings_contributions WHERE id = ? AND user_id = ?
+           AND goal_id IN (SELECT id FROM savings_goals WHERE user_id = ? AND deleted_at IS NULL)`,
+          [id, user, user],
+        )[0]
+        if (!row) return { error: newError(ErrNotFound, 'aporte no encontrado') }
+        const c = rowToSavingsContribution(row)
+        if (goalBalance(c.goalId).sub(Money.fromString(c.amount)).isNegative()) {
+          return { error: newError(ErrConflict, 'la meta quedaría negativa: elimina primero el retiro') }
+        }
+        db.exec('DELETE FROM savings_contributions WHERE id = ?', [id])
+        return {}
+      })
     },
 
     // ---------- spending trend ----------

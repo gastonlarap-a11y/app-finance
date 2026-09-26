@@ -283,7 +283,8 @@ export interface SavingsGoalView extends SavingsGoal {
   remaining: string
   monthsLeft: number
   monthlyNeeded: string // 0 without target month, once reached, or when it passed
-  contributions: SavingsContribution[] // newest first
+  overdue: boolean // past its target month and still short
+  contributions: SavingsContribution[] // newest first; withdrawals are negative
 }
 
 // ---------- spending trend ----------
@@ -781,6 +782,7 @@ export interface FinanceServiceContract {
   DeleteSavingsGoal(id: number): Promise<OpResult>
   RestoreSavingsGoal(id: number): Promise<OpResult>
   AddSavingsContribution(goalID: number, period: string, amount: string): Promise<SavingsContributionResult>
+  WithdrawSavings(goalID: number, period: string, amount: string): Promise<SavingsContributionResult>
   DeleteSavingsContribution(id: number): Promise<OpResult>
 
   SpendingTrend(period: string, months: number): Promise<SpendingTrendResult>
