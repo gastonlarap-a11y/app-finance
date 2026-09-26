@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { FinanceService } from '@/services/finance'
-import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom, tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { compare, isNegative, isZero, maxAbs, ratio, sum } from '@/lib/money'
 import { formatCLP, periodLabel } from '@/lib/format'
@@ -15,18 +16,18 @@ type Horizon = (typeof HORIZONS)[number]
 // (the last known one when a month has none yet).
 export function ForecastView() {
   const [period, setPeriod] = useAtom(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   const setTab = useSetAtom(tabAtom)
   const [months, setMonths] = useState<Horizon>(12)
 
-  const query = useQuery(`${period}:${months}:${refresh}`, async () => {
+  const query = useQuery(`${period}:${months}:${version}`, async () => {
     const res = await FinanceService.CommitmentsForecast(period, months)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'proyección vacía')
     return res.data
   })
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const data = query.data
   if (!data) return <Spinner />
   const stale = query.status === 'loading'

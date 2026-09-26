@@ -166,9 +166,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   the contract (`FinanceService: FinanceServiceContract = Bound`), so the desktop typecheck proves
   the bindings match `contract.ts`. Regenerate after signature changes.
 - **Frontend data loading**: `useQuery(key, load)` (`lib/useQuery.ts`) — encode every input
-  (period, `refreshAtom`…) in the key; it drops stale responses and turns rejections into an error
-  state (`QueryError`). Mutations call `failed(res)` (toast via `lib/notify.ts`, never
-  `window.alert`) and bump `refreshAtom`. Atoms hold UI state only — never server data.
+  (period, `useVersion(...topics)`…) in the key; it drops stale responses and turns rejections into
+  an error state (`QueryError`). Mutations call `failed(res)` (toast via `lib/notify.ts`, never
+  `window.alert`) and `useInvalidate()(...topics)` for what they changed (`atoms/refresh.ts`:
+  ledger | imports | profiles | settings | mail; no topic = all, e.g. a profile switch). Atoms hold
+  UI state only — never server data.
 - **Dialogs**: `Modal` is a native `<dialog>` (focus trap, Escape); icon-only buttons use
   `IconButton` (mandatory accessible label). React Compiler is on: no manual `useCallback`/`useMemo`.
 - **Go⇄TS parity (invariant)**: adding or changing a bound method in `finance`/`users` requires the

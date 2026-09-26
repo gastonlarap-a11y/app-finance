@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import { FinanceService, KIND_UNICO, type ExpenseFilter } from '@/services/finance'
-import { periodAtom, refreshAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom, tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
@@ -23,8 +24,8 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export function SearchView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
   const setPeriod = useSetAtom(periodAtom)
   const setTab = useSetAtom(tabAtom)
 
@@ -36,7 +37,7 @@ export function SearchView() {
   const [limit, setLimit] = useState(PAGE)
   const debouncedText = useDebounced(text.trim(), DEBOUNCE_MS)
 
-  const options = useQuery(`options:${refresh}`, async () => {
+  const options = useQuery(`options:${version}`, async () => {
     const [cats, cards] = await Promise.all([FinanceService.ListCategories(), FinanceService.ListCards()])
     return { categories: cats.map((c) => c.name), cards }
   })
@@ -50,7 +51,7 @@ export function SearchView() {
     limit,
     offset: 0,
   }
-  const results = useQuery(`${JSON.stringify(filter)}:${refresh}`, async () => {
+  const results = useQuery(`${JSON.stringify(filter)}:${version}`, async () => {
     const res = await FinanceService.SearchExpenses(filter)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'búsqueda vacía')
     return res.data
@@ -132,7 +133,7 @@ export function SearchView() {
       </Section>
 
       {results.status === 'error' ? (
-        <QueryError message={results.error} onRetry={() => bump((n) => n + 1)} />
+        <QueryError message={results.error} onRetry={() => invalidate('ledger')} />
       ) : !data ? (
         <Empty>Buscando…</Empty>
       ) : data.count === 0 ? (

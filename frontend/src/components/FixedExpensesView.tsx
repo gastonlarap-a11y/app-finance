@@ -1,7 +1,8 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { FinanceService, type Card, type FixedExpenseView } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
@@ -10,8 +11,9 @@ import { RecurringSuggestions } from './RecurringSuggestions'
 
 export function FixedExpensesView() {
   const period = useAtomValue(periodAtom)
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
 
   const [editing, setEditing] = useState<FixedExpenseView | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -19,7 +21,7 @@ export function FixedExpensesView() {
   const [confirmCancel, setConfirmCancel] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
-  const query = useQuery(String(refresh), async () => {
+  const query = useQuery(version, async () => {
     const [items, cards, cats] = await Promise.all([
       FinanceService.ListFixedExpenses(),
       FinanceService.ListCards(),
@@ -28,25 +30,25 @@ export function FixedExpensesView() {
     return { items, cards, categories: cats.map((c) => c.name) }
   })
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
   if (!query.data) return <Spinner />
   const { items, cards, categories } = query.data
 
   async function cancelFrom(id: number) {
     setConfirmCancel(null)
     const res = await FinanceService.EndFixedExpense(id, period)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(res)) reload()
   }
 
   async function remove(id: number) {
     setConfirmDelete(null)
     const res = await FinanceService.DeleteFixedExpense(id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(res)) reload()
   }
 
   return (
     <div className="space-y-5">
-    <RecurringSuggestions period={period} refresh={refresh} />
+    <RecurringSuggestions period={period} />
     <Section
       title="Gastos fijos mensuales"
       action={
@@ -133,7 +135,7 @@ export function FixedExpensesView() {
           categories={categories}
           defaultPeriod={period}
           onClose={() => setShowForm(false)}
-          onSaved={() => bump((n) => n + 1)}
+          onSaved={reload}
         />
       )}
 
@@ -142,7 +144,7 @@ export function FixedExpensesView() {
           fixed={amountFor}
           period={period}
           onClose={() => setAmountFor(null)}
-          onSaved={() => bump((n) => n + 1)}
+          onSaved={reload}
         />
       )}
     </Section>

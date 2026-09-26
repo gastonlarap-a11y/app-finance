@@ -1,6 +1,5 @@
-import { useSetAtom } from 'jotai'
 import { FinanceService, type TrendMonth } from '@/services/finance'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { maxAbs, pctChange, ratio } from '@/lib/money'
 import { formatCLP, monthLabel } from '@/lib/format'
@@ -45,15 +44,16 @@ function Sparkline({ months }: { months: TrendMonth[] }) {
 
 // TrendPanel compares the month's spending with the previous month and the
 // average of the months before it — overall and per category.
-export function TrendPanel({ period, refresh }: { period: string; refresh: number }) {
-  const bump = useSetAtom(refreshAtom)
-  const query = useQuery(`${period}:${refresh}`, async () => {
+export function TrendPanel({ period }: { period: string }) {
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const query = useQuery(`${period}:${version}`, async () => {
     const res = await FinanceService.SpendingTrend(period, WINDOW)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'tendencia vacía')
     return res.data
   })
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const tr = query.data
   if (!tr) return null
   // Backend sorts by this month's spend; the top rows are the ones worth reading.

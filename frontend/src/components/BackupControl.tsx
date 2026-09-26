@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { SettingsService, type SettingsState } from '@/services/settings'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
@@ -35,12 +34,12 @@ export function BackupControl() {
 
 function DriveBackupControl() {
   const [busy, setBusy] = useState(false)
-  // Settings changes elsewhere (e.g. connecting Drive) bump refreshAtom, which
-  // refetches this header control — it never re-mounts on its own.
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  // Settings changes elsewhere (e.g. connecting Drive) invalidate 'settings',
+  // which refetches this header control — it never re-mounts on its own.
+  const version = useVersion('settings')
+  const invalidate = useInvalidate()
 
-  const query = useQuery(String(refresh), async () => (await SettingsService.GetState()).data ?? undefined)
+  const query = useQuery(version, async () => (await SettingsService.GetState()).data ?? undefined)
   const state = query.data
 
   async function backupNow() {
@@ -57,7 +56,7 @@ function DriveBackupControl() {
           'success',
         )
       }
-      bump((n) => n + 1)
+      invalidate('settings')
     } catch (err) {
       notify('Respaldo: ' + (err instanceof Error ? err.message : String(err)))
     } finally {

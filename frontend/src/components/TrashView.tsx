@@ -1,7 +1,6 @@
-import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, type OpResult, type TrashItem } from '@/services/finance'
 import { UsersService } from '@/services/users'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate } from '@/lib/format'
@@ -29,11 +28,11 @@ const RESTORE_BY_TYPE: Record<string, (id: number) => Promise<OpResult>> = {
 }
 
 export function TrashView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('ledger', 'profiles')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger', 'profiles')
 
-  const query = useQuery(String(refresh), async () => {
+  const query = useQuery(version, async () => {
     const [trash, deletedUsers] = await Promise.all([FinanceService.ListTrash(), UsersService.ListDeletedUsers()])
     if (trash.error) throw new Error(trash.error.message)
     return { items: trash.data ?? [], deletedUsers }
@@ -41,11 +40,11 @@ export function TrashView() {
 
   async function restoreItem(item: TrashItem) {
     const restore = RESTORE_BY_TYPE[item.type]
-    if (restore && !failed(await restore(item.id))) reload()
+    if (restore && !failed(await restore(item.id))) invalidate('ledger')
   }
 
   async function restoreUser(id: number) {
-    if (!failed(await UsersService.RestoreUser(id))) reload()
+    if (!failed(await UsersService.RestoreUser(id))) invalidate('profiles')
   }
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />

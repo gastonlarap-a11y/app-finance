@@ -1,5 +1,5 @@
 import { useState, type ReactNode, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import {
   FinanceService,
   KIND_CUOTAS,
@@ -10,7 +10,8 @@ import {
   type OpResult,
 } from '@/services/finance'
 import type { ImportStatus } from '@/services/contract'
-import { refreshAtom, tabAtom } from '@/atoms/finance'
+import { tabAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { MailSyncService } from '@/services/mailsync'
 import { IS_WEB } from '@/lib/platform'
 import { syncStatusText } from './MailSettings'
@@ -78,8 +79,8 @@ function confirmAsSuggested(it: ImportItemView) {
 // PendingImportsBadge shows on the Importar tab how many movements await
 // review; it renders nothing when the inbox is empty or cannot be read.
 export function PendingImportsBadge() {
-  const refresh = useAtomValue(refreshAtom)
-  const query = useQuery(String(refresh), async () => (await FinanceService.ListImportItems('pendiente')).data?.length ?? 0)
+  const version = useVersion('imports')
+  const query = useQuery(version, async () => (await FinanceService.ListImportItems('pendiente')).data?.length ?? 0)
   const n = query.data ?? 0
   if (n === 0) return null
   return (
@@ -93,15 +94,16 @@ export function PendingImportsBadge() {
 }
 
 export function ImportInboxView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const version = useVersion('imports', 'ledger')
+  const invalidate = useInvalidate()
+  // Confirming, linking or importing writes expenses/incomes/payments too.
+  const reload = () => invalidate('imports', 'ledger')
   const [status, setStatus] = useState<ImportStatus>('pendiente')
   const [confirming, setConfirming] = useState<ImportItemView | null>(null)
   const [asIncome, setAsIncome] = useState<ImportItemView | null>(null)
   const [busyId, setBusyId] = useState<number | 'bulk' | null>(null)
 
-  const query = useQuery(`${status}:${refresh}`, async () => {
+  const query = useQuery(`${status}:${version}`, async () => {
     const [items, cards, categories, merchants, rules] = await Promise.all([
       FinanceService.ListImportItems(status),
       FinanceService.ListCards(),
@@ -161,7 +163,7 @@ export function ImportInboxView() {
         }
       >
         <div className="mb-4 space-y-3">
-          {!IS_WEB && <MailSyncStatus refresh={refresh} onSynced={reload} />}
+          {!IS_WEB && <MailSyncStatus onSynced={() => invalidate('imports', 'mail')} />}
           <StatementImport onImported={reload} />
         </div>
 
@@ -290,10 +292,11 @@ function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; o
 
 // MailSyncStatus shows when the bank's alert emails were last read and lets
 // the user read them now (desktop only; the outcome arrives as an event).
-function MailSyncStatus({ refresh, onSynced }: { refresh: number; onSynced: () => void }) {
+function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
   const setTab = useSetAtom(tabAtom)
   const [requested, setRequested] = useState(false)
-  const query = useQuery(String(refresh), async () => (await MailSyncService.GetMailState()).data ?? null)
+  const version = useVersion('mail')
+  const query = useQuery(version, async () => (await MailSyncService.GetMailState()).data ?? null)
   const st = query.data
   if (!st) return null
   if (!st.configured) {

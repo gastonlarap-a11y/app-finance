@@ -1,7 +1,6 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
 import { FinanceService, type Card } from '@/services/finance'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
@@ -9,21 +8,23 @@ import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, 
 import { CardStatementsSection } from './CardStatements'
 
 export function CardsView() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  // Card names and billing days also show in the statements section below.
+  const reload = () => invalidate('ledger', 'imports')
   const [editing, setEditing] = useState<Card | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [confirmId, setConfirmId] = useState<number | null>(null)
 
-  const query = useQuery(String(refresh), () => FinanceService.ListCards())
+  const query = useQuery(version, () => FinanceService.ListCards())
 
   async function remove(id: number) {
     setConfirmId(null)
     const res = await FinanceService.DeleteCard(id)
-    if (!failed(res)) bump((n) => n + 1)
+    if (!failed(res)) reload()
   }
 
-  if (query.status === 'error') return <QueryError message={query.error} onRetry={() => bump((n) => n + 1)} />
+  if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
   if (!query.data) return <Spinner />
   const cards = query.data
 
@@ -86,7 +87,7 @@ export function CardsView() {
           <CardForm
             card={editing}
             onClose={() => setShowForm(false)}
-            onSaved={() => bump((n) => n + 1)}
+            onSaved={reload}
           />
         )}
       </Section>

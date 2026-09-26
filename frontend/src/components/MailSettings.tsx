@@ -1,6 +1,5 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { refreshAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { MailSyncService, type MailState } from '@/services/mailsync'
 import type { OpResult } from '@/services/contract'
 import { failed } from '@/lib/result'
@@ -25,10 +24,10 @@ export function syncStatusText(st: MailState): string {
 // MailSettings configures the IMAP mailbox the bank alerts are read from
 // (desktop only). The password is sent once and kept in the OS keychain.
 export function MailSettings() {
-  const refresh = useAtomValue(refreshAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
-  const query = useQuery(String(refresh), async () => {
+  const version = useVersion('mail')
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('mail')
+  const query = useQuery(version, async () => {
     const res = await MailSyncService.GetMailState()
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'estado del correo no disponible')
     return res.data

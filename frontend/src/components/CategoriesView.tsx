@@ -1,23 +1,24 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { FinanceService, type Category, type CategoryBudgetView } from '@/services/finance'
-import { periodAtom, refreshAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, periodLabel } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
 
 export function CategoriesView() {
-  const refresh = useAtomValue(refreshAtom)
+  const version = useVersion('ledger')
   const period = useAtomValue(periodAtom)
-  const bump = useSetAtom(refreshAtom)
-  const reload = () => bump((n) => n + 1)
+  const invalidate = useInvalidate()
+  const reload = () => invalidate('ledger')
   const [editing, setEditing] = useState<Category | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [budgetFor, setBudgetFor] = useState<Category | null>(null)
   const [confirmId, setConfirmId] = useState<number | null>(null)
 
-  const query = useQuery(`${period}:${refresh}`, async () => {
+  const query = useQuery(`${period}:${version}`, async () => {
     const [categories, budgets] = await Promise.all([
       FinanceService.ListCategories(),
       FinanceService.ListCategoryBudgets(period),
