@@ -116,6 +116,10 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
 - **Export**: views build an `ExportTable` (`frontend/src/lib/exportTables.ts`, money as decimal
   strings); `@/services/reports` writes it — desktop via `ReportsService.SaveTable` (.xlsx + native
   Save dialog; blob downloads are unreliable in the webview), web via CSV + Share Sheet.
+- **Fixed-expense charges go through `fixedCharge`** (Go `uf.go`, TS `engine/finance/fixedexpense.ts`):
+  a fixed expense bills only where `billsIn` (its `interval_months` schedule) and converts UF amounts
+  with that month's `uf_values` row. Never read `resolveAsOf` of a fixed expense as a peso charge.
+  UF values are downloaded by the frontend (`lib/uf.ts`, mindicador.cl), never by the backend.
 - **Effective-dated values** (fixed-expense amounts, category budgets): rows apply from
   `effective_from` onward; resolve with `latestAsOf`/`resolveAsOf`, sum ranges with `sumAsOf`
   (`backend/finance/fixedexpense.go`, mirrored in `frontend/src/engine/finance/fixedexpense.ts`).

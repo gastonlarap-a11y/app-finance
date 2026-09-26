@@ -5,9 +5,49 @@ import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
+import { currentPeriod, formatCLP, formatUF, parseDecimalInput, periodLabel } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
 import { RecurringSuggestions } from './RecurringSuggestions'
+
+// Billing frequencies (backend/finance/fixedexpense.go validIntervals).
+const FREQUENCIES: readonly { months: number; label: string }[] = [
+  { months: 1, label: 'Mensual' },
+  { months: 2, label: 'Bimestral' },
+  { months: 3, label: 'Trimestral' },
+  { months: 4, label: 'Cuatrimestral' },
+  { months: 6, label: 'Semestral' },
+  { months: 12, label: 'Anual' },
+]
+
+function frequencyLabel(months: number): string {
+  return FREQUENCIES.find((f) => f.months === months)?.label ?? `Cada ${months} meses`
+}
+
+// amountLabel shows a fixed expense's current amount in its currency, with the
+// peso equivalent for UF.
+function amountLabel(fe: FixedExpenseView): string {
+  return fe.currency === 'UF' ? `${formatUF(fe.currentAmount)} (≈ ${formatCLP(fe.currentAmountClp)})` : formatCLP(fe.currentAmount)
+}
+
+// AmountInput takes pesos (thousands mask) or UF (decimals), keeping the value
+// as the plain decimal string the backend reads.
+function AmountInput({ currency, value, onChange }: { currency: string; value: string; onChange: (v: string) => void }) {
+  const [typed, setTyped] = useState(value.replace('.', ','))
+  if (currency !== 'UF') return <MoneyInput value={value} onChange={onChange} placeholder="9990" required />
+  return (
+    <input
+      className={inputCls}
+      inputMode="decimal"
+      value={typed}
+      onChange={(e) => {
+        setTyped(e.target.value)
+        onChange(parseDecimalInput(e.target.value))
+      }}
+      placeholder="12,5"
+      required
+    />
+  )
+}
 
 export function FixedExpensesView() {
   const period = useAtomValue(periodAtom)
@@ -50,7 +90,7 @@ export function FixedExpensesView() {
     <div className="space-y-5">
     <RecurringSuggestions period={period} />
     <Section
-      title="Gastos fijos mensuales"
+      title="Gastos fijos"
       action={
         <Button
           onClick={() => {
@@ -63,9 +103,9 @@ export function FixedExpensesView() {
       }
     >
       <p className="mb-3 text-xs text-slate-500">
-        Suscripciones y servicios que se cobran cada mes automáticamente. Al cambiar un monto, sólo
-        aplica desde el mes seleccionado ({periodLabel(period)}) en adelante; los meses anteriores no
-        se modifican.
+        Suscripciones, servicios y seguros que se cobran solos: cada mes, trimestre, año… en pesos o en
+        UF (se convierte con el valor de la UF de cada mes). Al cambiar un monto, sólo aplica desde el
+        mes seleccionado ({periodLabel(period)}) en adelante; los meses anteriores no se modifican.
       </p>
 
       {items.length === 0 ? (
@@ -86,9 +126,10 @@ export function FixedExpensesView() {
                     ))}
                 </div>
                 <div className="text-xs text-slate-500">
-                  {formatCLP(fe.currentAmount)} · {fe.category || 'Sin categoría'}
+                  {amountLabel(fe)} · {frequencyLabel(fe.intervalMonths)} · {fe.category || 'Sin categoría'}
                   {fe.cardName ? ` · ${fe.cardName}` : ''} · desde {fe.startPeriod}
                   {fe.endPeriod ? ` · hasta ${fe.endPeriod}` : ''}
+                  {fe.intervalMonths > 1 && fe.nextPeriod !== '' && ` · próximo cobro: ${periodLabel(fe.nextPeriod)}`}
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -173,6 +214,8 @@ function FixedExpenseForm({
   const [category, setCategory] = useState(fixed?.category ?? '')
   const [cardId, setCardId] = useState<string>(fixed?.cardId != null ? String(fixed.cardId) : '')
   const [startPeriod, setStartPeriod] = useState(fixed?.startPeriod ?? defaultPeriod)
+  const [intervalMonths, setIntervalMonths] = useState(fixed?.intervalMonths ?? 1)
+  const [currency, setCurrency] = useState(fixed?.currency ?? 'CLP')
   const [busy, setBusy] = useState(false)
 
   const categoryOptions =
@@ -185,7 +228,7 @@ function FixedExpenseForm({
       const card = cardId === '' ? null : Number(cardId)
       const res = fixed
         ? await FinanceService.UpdateFixedExpense(fixed.id, description, category, card)
-        : await FinanceService.CreateFixedExpense(description, category, card, startPeriod, amount)
+        : await FinanceService.CreateFixedExpense(description, category, card, startPeriod, amount, intervalMonths, currency)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -202,14 +245,43 @@ function FixedExpenseForm({
         </Field>
 
         {!editing && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Monto mensual">
-              <MoneyInput value={amount} onChange={setAmount} placeholder="9990" required />
-            </Field>
-            <Field label="Desde el mes">
-              <input type="month" className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} required />
-            </Field>
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Frecuencia">
+                <Select value={String(intervalMonths)} onChange={(e) => setIntervalMonths(Number(e.target.value))}>
+                  {FREQUENCIES.map((f) => (
+                    <option key={f.months} value={String(f.months)}>
+                      {f.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Moneda">
+                <Select
+                  value={currency}
+                  onChange={(e) => {
+                    setCurrency(e.target.value)
+                    setAmount('')
+                  }}
+                >
+                  <option value="CLP">Pesos</option>
+                  <option value="UF">UF (arriendo, dividendo, isapre)</option>
+                </Select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={currency === 'UF' ? 'Monto en UF' : 'Monto'}>
+                <AmountInput key={currency} currency={currency} value={amount} onChange={setAmount} />
+              </Field>
+              <Field label={intervalMonths > 1 ? 'Primer cobro' : 'Desde el mes'}>
+                <input type="month" className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} required />
+              </Field>
+            </div>
+            <p className="text-xs text-slate-500">
+              La frecuencia y la moneda no se pueden cambiar después: cambiarías cobros ya registrados.
+              {currency === 'UF' && ' El valor de la UF se descarga solo (mindicador.cl) y en meses sin valor se estima con el último.'}
+            </p>
+          </>
         )}
 
         <div className="grid grid-cols-2 gap-3">
@@ -292,8 +364,8 @@ function AmountModal({
           El nuevo monto aplica desde <strong>{periodLabel(period)}</strong> en adelante. Los meses
           anteriores conservan su valor.
         </p>
-        <Field label="Nuevo monto mensual">
-          <MoneyInput value={amount} onChange={setAmount} placeholder="12000" autoFocus required />
+        <Field label={fixed.currency === 'UF' ? 'Nuevo monto en UF' : 'Nuevo monto'}>
+          <AmountInput currency={fixed.currency} value={amount} onChange={setAmount} />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>

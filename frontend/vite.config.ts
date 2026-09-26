@@ -51,7 +51,8 @@ export default defineConfig(({ mode }) => {
                   "style-src 'self' 'unsafe-inline'",
                   "img-src 'self' data: blob:",
                   "font-src 'self' data:",
-                  "connect-src 'self' blob: data:",
+                  // mindicador.cl: UF values for fixed expenses priced in UF (lib/uf.ts).
+                  "connect-src 'self' blob: data: https://mindicador.cl",
                   "manifest-src 'self'",
                   "object-src 'none'",
                   "base-uri 'self'",

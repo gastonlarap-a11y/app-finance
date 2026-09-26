@@ -60,9 +60,11 @@ type FixedExpenseResult struct {
 // been ended (cancelled).
 type FixedExpenseView struct {
 	FixedExpense
-	CurrentAmount types.Decimal `json:"currentAmount"` // monto vigente hoy
-	CardName      string        `json:"cardName"`
-	Active        bool          `json:"active"`
+	CurrentAmount    types.Decimal `json:"currentAmount"`    // monto vigente hoy, en su moneda (Currency)
+	CurrentAmountCLP types.Decimal `json:"currentAmountClp"` // el mismo en pesos (UF al valor del mes)
+	NextPeriod       string        `json:"nextPeriod"`       // próximo mes que cobra ("" si ya terminó)
+	CardName         string        `json:"cardName"`
+	Active           bool          `json:"active"`
 }
 
 // --- Summary view models ---
@@ -91,6 +93,11 @@ type Movimiento struct {
 	Amount        types.Decimal `json:"amount"`
 	Status        string        `json:"status"`
 	Date          *time.Time    `json:"date"` // nil para gastos fijos
+	// UFAmount is the charge in UF when the fixed expense is priced in UF (Amount
+	// is its conversion to pesos); nil otherwise.
+	UFAmount *types.Decimal `json:"ufAmount"`
+	// Estimado: Amount rests on an estimated UF value (month not downloaded yet).
+	Estimado bool `json:"estimado"`
 }
 
 type CategoryTotal struct {

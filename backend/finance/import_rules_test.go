@@ -130,7 +130,7 @@ func TestReopenConfirmedItemAfterTrash(t *testing.T) {
 func TestFixedExpenseSuggestionAndLink(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)
-	fe := s.CreateFixedExpense(ctx, "Plan Entel", "Servicios", nil, "2026-07", "17000")
+	fe := s.CreateFixedExpense(ctx, "Plan Entel", "Servicios", nil, "2026-07", "17000", 1, CurrencyCLP)
 	mustOK(t, "CreateFixedExpense", fe.Error)
 
 	bill := stageOne(t, s, ImportCandidate{Date: "2026-08-05", Description: "ENTEL PCS PAGO ENSANTIAGO C", Amount: "16990"})

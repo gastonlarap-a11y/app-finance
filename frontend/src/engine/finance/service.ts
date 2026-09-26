@@ -64,6 +64,7 @@ import type {
   TrashItem,
   TrashResult,
   TrendMonth,
+  UFValueInput,
   YearMonth,
   YearSummary,
   YearSummaryResult,
@@ -82,7 +83,21 @@ import {
   validPeriod,
   type DateParts,
 } from '@/engine/finance/period'
-import { activeIn, latestAsOf, resolveAsOf, sumAsOf, type EffectiveDated } from '@/engine/finance/fixedexpense'
+import {
+  activeIn,
+  billsIn,
+  CurrencyCLP,
+  CurrencyUF,
+  fixedCharge,
+  fixedTotal,
+  interval,
+  latestAsOf,
+  nextBilling,
+  resolveAsOf,
+  UFRates,
+  validIntervals,
+  type EffectiveDated,
+} from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
 import {
@@ -1466,6 +1481,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   interface LoadedFixed {
     fixed: FixedExpense[]
     amountsByID: Map<number, FixedExpenseAmountRow[]>
+    uf: UFRates
+  }
+
+  // loadUF reads the stored UF values (public data: no user_id).
+  function loadUF(): UFRates {
+    const values = new Map<string, Money>()
+    for (const r of db.query('SELECT period, value FROM uf_values', [])) {
+      values.set(asString(r.period), Money.fromString(asString(r.value)))
+    }
+    return new UFRates(values)
   }
 
   function loadFixed(deletedOnly: boolean): LoadedFixed {
@@ -1486,14 +1511,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         else amountsByID.set(a.fixedExpenseId, [a])
       }
     }
-    return { fixed, amountsByID }
+    return { fixed, amountsByID, uf: loadUF() }
   }
 
   // fixedSuggester mirrors Go's fixedIndex.suggest: the live fixed expense whose
   // still-unpaid month the item most likely bills — same name, amount within
   // the tolerance (closest wins), same card when both name one.
   function fixedSuggester(): (it: ImportItem, period: string, cardId: number | null, clp: Money | null) => FixedExpense | null {
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     const paid = new Set<string>()
     if (fixed.length > 0) {
       const placeholders = fixed.map(() => '?').join(', ')
@@ -1510,10 +1535,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       let best: FixedExpense | null = null
       let bestGap: Money | null = null
       for (const fe of fixed) {
-        if (!activeIn(fe, period) || paid.has(`${fe.id}|${period}`)) continue
+        if (!billsIn(fe, period) || paid.has(`${fe.id}|${period}`)) continue
         if (fe.cardId != null && cardId != null && fe.cardId !== cardId) continue
         if (!namesMatch(fe.description, it.description)) continue
-        const gap = amountGap(clp, resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+        const gap = amountGap(clp, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp)
         if (gap === null) continue
         if (bestGap === null || gap.cmp(bestGap) < 0) {
           best = fe
@@ -1564,7 +1589,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // fixedChargesFor builds the movimientos for fixed expenses billed in `period`.
   function fixedChargesFor(period: string): Movimiento[] {
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     const paid = new Set(
       db
         .query(
@@ -1576,7 +1601,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     )
     const out: Movimiento[] = []
     for (const fe of fixed) {
-      if (!activeIn(fe, period)) continue
+      if (!billsIn(fe, period)) continue
+      const charge = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period)
       out.push({
         source: SourceFijo,
         installmentId: 0,
@@ -1590,9 +1616,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         kind: SourceFijo,
         number: 1,
         total: 1,
-        amount: resolveAsOf(amountsByID.get(fe.id) ?? [], period).toString(),
+        amount: charge.clp.toString(),
         status: paid.has(fe.id) ? StatusPagado : StatusPendiente,
         date: null,
+        ufAmount: fe.currency === CurrencyUF ? charge.original.toString() : null,
+        estimado: charge.estimated,
       })
     }
     return out
@@ -1600,19 +1628,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // sumFixedBetween totals fixed-expense charges of the months strictly between
   // `after` ('' = from the start) and `before` (carry-forward of the running
-  // balance). Each amount stretch is multiplied out (sumAsOf), so the cost does
-  // not grow with the months elapsed.
+  // balance); fixedTotal keeps monthly CLP independent of the months elapsed.
   function sumFixedBetween(after: string, before: string): Money {
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     let total = Money.zero()
     const last = addMonths(before, -1)
-    const firstAfter = after === '' ? '' : addMonths(after, 1)
+    const first = after === '' ? '' : addMonths(after, 1)
     for (const fe of fixed) {
       if (!validPeriod(fe.startPeriod)) continue
-      const start = fe.startPeriod > firstAfter ? fe.startPeriod : firstAfter
-      let end = last
-      if (fe.endPeriod !== '' && fe.endPeriod < end) end = fe.endPeriod
-      total = total.add(sumAsOf(amountsByID.get(fe.id) ?? [], start, end))
+      total = total.add(fixedTotal(fe, amountsByID.get(fe.id) ?? [], uf, first, last))
     }
     return total
   }
@@ -1642,6 +1666,20 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
     if (fe.endPeriod !== '' && period > fe.endPeriod) {
       return newError(ErrValidation, `no se puede ${action} en ${period}: el gasto fijo terminó en ${fe.endPeriod}`)
+    }
+    return null
+  }
+
+  // requireBillsIn mirrors the Go helper: a payment (or a linked bank charge)
+  // in a month off the fixed expense's schedule would never show up.
+  function requireBillsIn(fe: FixedExpense, period: string, action: string): ReturnType<typeof newError> | null {
+    const outside = requireActiveIn(fe, period, action)
+    if (outside) return outside
+    if (!billsIn(fe, period)) {
+      return newError(
+        ErrValidation,
+        `no se puede ${action} en ${period}: el gasto fijo cobra cada ${interval(fe)} meses (próximo: ${nextBilling(fe, period)})`,
+      )
     }
     return null
   }
@@ -1820,10 +1858,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       .map(rowToInstallment)
     const exById = expenseMapActive(insts.map((i) => i.expenseId))
     for (const inst of insts) add(inst.period, exById.get(inst.expenseId)?.category ?? '', Money.fromString(inst.amount))
-    const { fixed, amountsByID } = loadFixed(false)
+    const { fixed, amountsByID, uf } = loadFixed(false)
     for (let p = from; p <= to; p = addMonths(p, 1)) {
       for (const fe of fixed) {
-        if (activeIn(fe, p)) add(p, fe.category, resolveAsOf(amountsByID.get(fe.id) ?? [], p))
+        if (billsIn(fe, p)) add(p, fe.category, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, p).clp)
       }
     }
     return { totals, byCat }
@@ -2320,13 +2358,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     // ---------- fixed expenses (recurring) ----------
 
     async ListFixedExpenses(): Promise<FixedExpenseView[]> {
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
       const cardByID = cardMapAll()
       const now = currentPeriod()
       const out: FixedExpenseView[] = fixed.map((fe) => {
+        const charge = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, fixedDisplayPeriod(fe, now))
         return {
           ...fe,
-          currentAmount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
+          currentAmount: charge.original.toString(),
+          currentAmountClp: charge.clp.toString(),
+          nextPeriod: nextBilling(fe, now),
           cardName: fe.cardId != null ? (cardByID.get(fe.cardId)?.name ?? '') : '',
           active: activeIn(fe, now),
         }
@@ -2341,10 +2382,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       cardID: number | null,
       startPeriod: string,
       amount: string,
+      intervalMonths: number,
+      currency: string,
     ): Promise<FixedExpenseResult> {
       const desc = description.trim()
       if (desc === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
       if (!validPeriod(startPeriod)) return { error: newError(ErrValidation, 'período inicial inválido (use YYYY-MM)') }
+      if (!validIntervals.includes(intervalMonths)) {
+        return { error: newError(ErrValidation, 'frecuencia inválida (cada 1, 2, 3, 4, 6 o 12 meses)') }
+      }
+      if (currency !== CurrencyCLP && currency !== CurrencyUF) {
+        return { error: newError(ErrValidation, 'moneda inválida (CLP o UF)') }
+      }
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
@@ -2354,9 +2403,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       return db.transaction((): FixedExpenseResult => {
         const row = db.query(
-          `INSERT INTO fixed_expenses (user_id, description, category, card_id, start_period, created_at)
-           VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-          [uid(), desc, category.trim(), cardID, startPeriod, nowIso()],
+          `INSERT INTO fixed_expenses (user_id, description, category, card_id, start_period, interval_months, currency, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), desc, category.trim(), cardID, startPeriod, intervalMonths, currency, nowIso()],
         )[0]
         if (!row) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
         const fe = rowToFixedExpense(row)
@@ -2367,6 +2416,48 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         ])
         return { data: fe }
       })
+    },
+
+    // UFMonthsNeeded mirrors the Go method: billing months of the profile's UF
+    // fixed expenses, up to next month, without a stored UF value.
+    async UFMonthsNeeded(): Promise<string[]> {
+      const { fixed, uf } = loadFixed(false)
+      const horizon = addMonths(currentPeriod(), 1)
+      const need = new Set<string>()
+      for (const fe of fixed) {
+        if (fe.currency !== CurrencyUF || !validPeriod(fe.startPeriod)) continue
+        const last = fe.endPeriod !== '' && fe.endPeriod < horizon ? fe.endPeriod : horizon
+        for (let p = fe.startPeriod; p <= last; p = addMonths(p, interval(fe))) {
+          if (!uf.has(p)) need.add(p)
+        }
+      }
+      return [...need].sort(compareStrings)
+    },
+
+    async SetUFValues(values: UFValueInput[]): Promise<OpResult> {
+      const rows: Array<{ period: string; value: string }> = []
+      for (const v of values) {
+        if (!validPeriod(v.period)) return { error: invalidPeriodError() }
+        let value: Money
+        try {
+          value = Money.fromString(v.value.trim())
+        } catch {
+          return { error: newError(ErrValidation, 'valor UF inválido: ' + v.value) }
+        }
+        if (value.isZero() || value.isNegative()) return { error: newError(ErrValidation, 'valor UF inválido: ' + v.value) }
+        rows.push({ period: v.period, value: value.toString() })
+      }
+      const now = nowIso()
+      db.transaction(() => {
+        for (const r of rows) {
+          db.exec(
+            `INSERT INTO uf_values (period, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (period) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+            [r.period, r.value, now],
+          )
+        }
+      })
+      return {}
     },
 
     async UpdateFixedExpense(
@@ -2449,7 +2540,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
         if (paid) {
           // Marking needs a month it bills in; unmarking is always allowed.
-          const outside = requireActiveIn(fe, period, 'marcarlo pagado')
+          const outside = requireBillsIn(fe, period, 'marcarlo pagado')
           if (outside) return { error: outside }
           db.exec(
             `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
@@ -2518,6 +2609,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           amount: inst.amount,
           status: inst.status,
           date: null,
+          ufAmount: null,
+          estimado: false,
         }
         let cat = uncategorized
         if (ex) {
@@ -2648,12 +2741,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
 
       // Fold recurring fixed expenses into each month's gastos and categories.
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
       for (let m = 1; m <= 12; m++) {
         const period = prefix + String(m).padStart(2, '0')
         for (const fe of fixed) {
-          if (!activeIn(fe, period)) continue
-          const amt = resolveAsOf(amountsByID.get(fe.id) ?? [], period)
+          if (!billsIn(fe, period)) continue
+          const amt = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp
           gastosByMonth.set(period, (gastosByMonth.get(period) ?? Money.zero()).add(amt))
           byCat.add(fe.category, period, amt)
         }
@@ -2721,7 +2814,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         cuotas.set(inst.period, (cuotas.get(inst.period) ?? Money.zero()).add(Money.fromString(inst.amount)))
       }
 
-      const { fixed, amountsByID } = loadFixed(false)
+      const { fixed, amountsByID, uf } = loadFixed(false)
 
       // Every salary up to the horizon: the ones before `fromPeriod` only seed
       // the "last known salary" used to estimate months without one.
@@ -2754,7 +2847,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const period = addMonths(fromPeriod, i)
         let fijos = Money.zero()
         for (const fe of fixed) {
-          if (activeIn(fe, period)) fijos = fijos.add(resolveAsOf(amountsByID.get(fe.id) ?? [], period))
+          // Future months have no UF value yet: fixedCharge uses the latest known one.
+          if (billsIn(fe, period)) fijos = fijos.add(fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp)
         }
         const known = salaryByMonth.get(period)
         if (known) lastKnown = known
@@ -3234,7 +3328,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (wrongKind) return { error: wrongKind }
         const fe = ownFixedExpense(fixedID)
         if (!fe) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
-        const outside = requireActiveIn(fe, period, 'enlazarlo')
+        const outside = requireBillsIn(fe, period, 'enlazarlo')
         if (outside) return { error: outside }
         const taken = db.query(
           'SELECT 1 FROM import_items WHERE user_id = ? AND fixed_expense_id = ? AND fixed_period = ?',
@@ -3449,14 +3543,15 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         out.push({ type: 'savingsgoal', id: g.id, description: g.name, amount: g.targetAmount, deletedAt: g.deletedAt ?? '' })
       }
 
-      const { fixed, amountsByID } = loadFixed(true)
+      const { fixed, amountsByID, uf } = loadFixed(true)
       const now = currentPeriod()
       for (const fe of fixed) {
         out.push({
           type: 'fixedexpense',
           id: fe.id,
           description: fe.description,
-          amount: resolveAsOf(amountsByID.get(fe.id) ?? [], fixedDisplayPeriod(fe, now)).toString(),
+          // In pesos, like every trash amount.
+          amount: fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, fixedDisplayPeriod(fe, now)).clp.toString(),
           deletedAt: fe.deletedAt ?? '',
         })
       }

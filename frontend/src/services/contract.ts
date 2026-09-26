@@ -106,14 +106,24 @@ export interface FixedExpense {
   cardId: number | null
   startPeriod: string
   endPeriod: string
+  intervalMonths: number // bills every N months from startPeriod (1, 2, 3, 4, 6, 12)
+  currency: string // 'CLP' | 'UF': currency of its amounts
   createdAt: string
   deletedAt?: string | null
 }
 
 export interface FixedExpenseView extends FixedExpense {
-  currentAmount: string
+  currentAmount: string // in its currency
+  currentAmountClp: string // the same in pesos (UF at the month's value)
+  nextPeriod: string // next month it bills ('' when it has ended)
   cardName: string
   active: boolean
+}
+
+// One month's UF value (pesos per UF on day 1), as downloaded by lib/uf.ts.
+export interface UFValueInput {
+  period: string // YYYY-MM
+  value: string
 }
 
 export interface Movimiento {
@@ -132,6 +142,8 @@ export interface Movimiento {
   amount: string
   status: string
   date: string | null
+  ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
+  estimado: boolean // amount rests on an estimated UF value
 }
 
 export interface CategoryTotal {
@@ -719,6 +731,7 @@ export interface FinanceServiceContract {
   ListFixedExpenses(): Promise<FixedExpenseView[]>
   CreateFixedExpense(
     description: string, category: string, cardID: number | null, startPeriod: string, amount: string,
+    intervalMonths: number, currency: string,
   ): Promise<FixedExpenseResult>
   UpdateFixedExpense(
     id: number, description: string, category: string, cardID: number | null,
@@ -728,6 +741,8 @@ export interface FinanceServiceContract {
   DeleteFixedExpense(id: number): Promise<OpResult>
   RestoreFixedExpense(id: number): Promise<OpResult>
   SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult>
+  UFMonthsNeeded(): Promise<string[]>
+  SetUFValues(values: UFValueInput[]): Promise<OpResult>
 
   MonthlySummary(period: string): Promise<MonthlySummaryResult>
   YearSummary(year: number): Promise<YearSummaryResult>

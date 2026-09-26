@@ -28,7 +28,7 @@ async function monthly(period: string): Promise<MonthlySummary> {
 //   Jan: sueldo 1.000.000, gasto 300.000, fixed 10.000    → +690.000
 //   Feb: sueldo 1.000.000, gasto 200.000, fixed 10.000, ahorro 50.000
 async function seedHistory() {
-  ok(await finance.CreateFixedExpense('Luz', 'Hogar', null, '2025-11', '10000'))
+  ok(await finance.CreateFixedExpense('Luz', 'Hogar', null, '2025-11', '10000', 1, 'CLP'))
   const goal = ok(await finance.CreateSavingsGoal('Viaje', '1000000', '')).data!
   ok(await finance.AddSavingsContribution(goal.id, '2025-11', '20000'))
   ok(await finance.AddSavingsContribution(goal.id, '2026-02', '50000'))

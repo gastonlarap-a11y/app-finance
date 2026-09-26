@@ -5,6 +5,7 @@ import { useInvalidate } from '@/atoms/refresh'
 import { onMailSyncDone } from '@/services/mailsync'
 import { UsersService } from '@/services/users'
 import { notify } from '@/lib/notify'
+import { useUFSync } from '@/lib/uf'
 import { IS_WEB } from '@/lib/platform'
 import { UpdateBanner } from '@/components/UpdateNotice'
 import { WebUpdateBanner } from '@/components/WebUpdateBanner'
@@ -76,6 +77,7 @@ function App() {
   const [tab, setTab] = useAtom(tabAtom)
   const [period, setPeriod] = useAtom(periodAtom)
   useMailSyncNotices()
+  useUFSync()
   const monthNav = MONTH_TABS.has(tab)
   const step = tab === 'anio' ? 12 : 1
 

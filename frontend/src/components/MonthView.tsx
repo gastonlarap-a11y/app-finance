@@ -16,7 +16,7 @@ import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { greaterThan, isNegative, isZero, ratio } from '@/lib/money'
-import { currentPeriod, formatCLP, formatDate, periodLabel } from '@/lib/format'
+import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
 import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
@@ -311,7 +311,18 @@ export function MonthView() {
                                 {isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}
                               </td>
                               <td className="hidden py-2 text-slate-400 md:table-cell">{isFijo ? '—' : formatDate(m.date)}</td>
-                              <td className="py-2 text-right tabular-nums">{formatCLP(m.amount)}</td>
+                              <td className="py-2 text-right tabular-nums">
+                                {formatCLP(m.amount)}
+                                {m.ufAmount !== null && (
+                                  <span
+                                    className="block text-xs text-slate-500"
+                                    title={m.estimado ? 'Valor de la UF estimado: aún no se descarga el de este mes' : undefined}
+                                  >
+                                    {formatUF(m.ufAmount)}
+                                    {m.estimado && ' · estimado'}
+                                  </span>
+                                )}
+                              </td>
                               <td className="py-2 text-center">
                                 <button
                                   type="button"

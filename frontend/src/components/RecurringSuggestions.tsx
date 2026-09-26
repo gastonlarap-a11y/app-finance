@@ -34,7 +34,7 @@ export function RecurringSuggestions({ period }: { period: string }) {
   async function convert(s: RecurringSuggestion) {
     setBusy(keyOf(s))
     try {
-      const res = await FinanceService.CreateFixedExpense(s.description, s.category, s.cardId, s.nextPeriod, s.amount)
+      const res = await FinanceService.CreateFixedExpense(s.description, s.category, s.cardId, s.nextPeriod, s.amount, 1, 'CLP')
       if (failed(res)) return
       notify(`«${s.description}» ahora es un gasto fijo desde ${periodLabel(s.nextPeriod)}.`, 'success')
       invalidate('ledger')

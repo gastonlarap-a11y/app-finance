@@ -845,18 +845,23 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, uid int64, period 
 	for _, p := range pays {
 		paid[p.FixedExpenseID] = true
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]Movimiento, 0, len(fixed))
 	for _, fe := range fixed {
-		if !fe.activeIn(period) {
+		if !fe.billsIn(period) {
 			continue
 		}
 		status := StatusPendiente
 		if paid[fe.ID] {
 			status = StatusPagado
 		}
+		clp, original, estimated := fixedCharge(fe, amountsByID[fe.ID], uf, period)
 		id := fe.ID
-		out = append(out, Movimiento{
+		mv := Movimiento{
 			Source:      SourceFijo,
 			FixedID:     &id,
 			Description: fe.Description,
@@ -865,37 +870,42 @@ func (s *FinanceService) fixedChargesFor(ctx context.Context, uid int64, period 
 			Kind:        SourceFijo,
 			Number:      1,
 			Total:       1,
-			Amount:      resolveAsOf(amountsByID[fe.ID], period),
+			Amount:      clp,
 			Status:      status,
-		})
+			Estimado:    estimated,
+		}
+		if fe.Currency == CurrencyUF {
+			mv.UFAmount = &original
+		}
+		out = append(out, mv)
 	}
 	return out, nil
 }
 
 // sumFixedBetween totals every fixed-expense charge of the months strictly
 // between `after` ("" = from the start) and `before`, used to carry the running
-// balance forward. Each amount stretch is multiplied out (sumAsOf), so the cost
-// does not grow with the months elapsed.
+// balance forward (fixedTotal keeps the monthly CLP case independent of the
+// months elapsed).
 func (s *FinanceService) sumFixedBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, false)
 	if err != nil {
 		return types.Zero(), err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return types.Zero(), err
+	}
 	total := types.Zero()
+	first := ""
+	if after != "" {
+		first = addMonths(after, 1)
+	}
 	last := addMonths(before, -1) // último mes a considerar (inclusive)
 	for _, fe := range fixed {
 		if !validPeriod(fe.StartPeriod) {
 			continue
 		}
-		start := fe.StartPeriod
-		if after != "" {
-			start = max(start, addMonths(after, 1))
-		}
-		end := last
-		if fe.EndPeriod != "" {
-			end = min(end, fe.EndPeriod)
-		}
-		total = total.Add(sumAsOf(amountsByID[fe.ID], start, end))
+		total = total.Add(fixedTotal(fe, amountsByID[fe.ID], uf, first, last))
 	}
 	return total, nil
 }
@@ -918,13 +928,20 @@ func (s *FinanceService) ListFixedExpenses(ctx context.Context) ([]FixedExpenseV
 	if err != nil {
 		return nil, err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := currentPeriod()
 	out := make([]FixedExpenseView, 0, len(fixed))
 	for _, fe := range fixed {
+		clp, original, _ := fixedCharge(fe, amountsByID[fe.ID], uf, fixedDisplayPeriod(fe, now))
 		v := FixedExpenseView{
-			FixedExpense:  fe,
-			CurrentAmount: resolveAsOf(amountsByID[fe.ID], fixedDisplayPeriod(fe, now)),
-			Active:        fe.activeIn(now),
+			FixedExpense:     fe,
+			CurrentAmount:    original,
+			CurrentAmountCLP: clp,
+			NextPeriod:       fe.nextBilling(now),
+			Active:           fe.activeIn(now),
 		}
 		if fe.CardID != nil {
 			if c, ok := cardByID[*fe.CardID]; ok {
@@ -937,8 +954,11 @@ func (s *FinanceService) ListFixedExpenses(ctx context.Context) ([]FixedExpenseV
 	return out, nil
 }
 
+// CreateFixedExpense adds a recurring charge billed every intervalMonths months
+// (1, 2, 3, 4, 6 or 12) from startPeriod, priced in currency (CLP or UF).
 func (s *FinanceService) CreateFixedExpense(
 	ctx context.Context, description, category string, cardID *int64, startPeriod, amount string,
+	intervalMonths int, currency string,
 ) FixedExpenseResult {
 	desc := strings.TrimSpace(description)
 	if desc == "" {
@@ -946,6 +966,12 @@ func (s *FinanceService) CreateFixedExpense(
 	}
 	if !validPeriod(startPeriod) {
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "período inicial inválido (use YYYY-MM)")}
+	}
+	if !slices.Contains(validIntervals, intervalMonths) {
+		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "frecuencia inválida (cada 1, 2, 3, 4, 6 o 12 meses)")}
+	}
+	if currency != CurrencyCLP && currency != CurrencyUF {
+		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "moneda inválida (CLP o UF)")}
 	}
 	amt, aerr := parseAmount(amount)
 	if aerr != nil {
@@ -959,11 +985,13 @@ func (s *FinanceService) CreateFixedExpense(
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{
-		UserID:      uid,
-		Description: desc,
-		Category:    strings.TrimSpace(category),
-		CardID:      cardID,
-		StartPeriod: startPeriod,
+		UserID:         uid,
+		Description:    desc,
+		Category:       strings.TrimSpace(category),
+		CardID:         cardID,
+		StartPeriod:    startPeriod,
+		IntervalMonths: intervalMonths,
+		Currency:       currency,
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(fe).Returning("*").Exec(ctx); err != nil {
@@ -1024,7 +1052,7 @@ func ownFixedExpense(ctx context.Context, db bun.IDB, uid, id int64) (*FixedExpe
 	return fe, nil
 }
 
-// requireActiveIn fails unless the fixed expense bills in period: a payment or an
+// requireActiveIn fails unless period falls within the fixed expense's life: an
 // amount change outside [start, end] would never show up anywhere.
 func requireActiveIn(fe *FixedExpense, period, action string) error {
 	if period < fe.StartPeriod {
@@ -1034,6 +1062,20 @@ func requireActiveIn(fe *FixedExpense, period, action string) error {
 	if fe.EndPeriod != "" && period > fe.EndPeriod {
 		return shared.NewError(shared.ErrValidation,
 			fmt.Sprintf("no se puede %s en %s: el gasto fijo terminó en %s", action, period, fe.EndPeriod))
+	}
+	return nil
+}
+
+// requireBillsIn fails unless the fixed expense charges in period: a payment
+// (or a bank charge linked to it) in a month off its schedule would never show.
+func requireBillsIn(fe *FixedExpense, period, action string) error {
+	if err := requireActiveIn(fe, period, action); err != nil {
+		return err
+	}
+	if !fe.billsIn(period) {
+		return shared.NewError(shared.ErrValidation,
+			fmt.Sprintf("no se puede %s en %s: el gasto fijo cobra cada %d meses (próximo: %s)",
+				action, period, fe.interval(), fe.nextBilling(period)))
 	}
 	return nil
 }
@@ -1125,7 +1167,7 @@ func (s *FinanceService) SetFixedExpensePaid(ctx context.Context, id int64, peri
 			return err
 		}
 		if paid {
-			if err := requireActiveIn(fe, period, "marcarlo pagado"); err != nil {
+			if err := requireBillsIn(fe, period, "marcarlo pagado"); err != nil {
 				return err
 			}
 			now := time.Now()
@@ -1509,13 +1551,17 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 	if err != nil {
 		return nil, err
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for m := 1; m <= 12; m++ {
 		period := prefix + pad2(m)
 		for _, fe := range fixed {
-			if !fe.activeIn(period) {
+			if !fe.billsIn(period) {
 				continue
 			}
-			amt := resolveAsOf(amountsByID[fe.ID], period)
+			amt, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, period)
 			gastosByMonth[period] = gastosByMonth[period].Add(amt)
 			byCat.add(fe.Category, period, amt)
 		}
@@ -1676,9 +1722,13 @@ func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {
 	if err != nil {
 		return TrashResult{Error: internalErr(err)}
 	}
+	uf, err := s.loadUF(ctx)
+	if err != nil {
+		return TrashResult{Error: internalErr(err)}
+	}
 	now := currentPeriod()
 	for _, fe := range fixed {
-		amt := resolveAsOf(amountsByID[fe.ID], fixedDisplayPeriod(fe, now))
+		amt, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, fixedDisplayPeriod(fe, now)) // in pesos, like every trash amount
 		out = append(out, TrashItem{Type: "fixedexpense", ID: fe.ID, Description: fe.Description, Amount: &amt, DeletedAt: *fe.DeletedAt})
 	}
 

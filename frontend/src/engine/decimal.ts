@@ -61,6 +61,12 @@ export class Money {
     return new Money(this.v.neg())
   }
 
+  // mulRound mirrors types.Decimal.MulRound: this × o, half away from zero, whole
+  // units (an amount in UF converted to CLP).
+  mulRound(o: Money): Money {
+    return new Money(this.v.times(o.v).toDecimalPlaces(0, Big.ROUND_HALF_UP))
+  }
+
   // times multiplies by another decimal (e.g. a USD amount by a CLP/USD rate).
   times(o: Money): Money {
     return new Money(this.v.times(o.v))
