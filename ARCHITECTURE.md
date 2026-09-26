@@ -490,6 +490,18 @@ Constraints, all verified on macOS with the real bundle and the real updater cod
 - `updater.HandleHelperMode()` is the first call in `main()` (the helper must not open the DB).
 - Releases whose artifact is missing from `SHA256SUMS.txt` are refused (Wails would install them
   unverified).
+- **Signed updates** (`signing.go`), the model of Sparkle's EdDSA and Tauri's updater: the release
+  workflow signs the SHA-256 digest of each update artifact with Ed25519 and publishes
+  `<artifact>.sig` (base64). The public key is embedded from `update_signing.pub` and is the
+  updater's only trust anchor (`updater.Config.PublicKey`), so whoever controls the release feed can
+  swap the artifact and `SHA256SUMS.txt`, but cannot sign what they swapped in. Wails' GitHub
+  provider never loads signatures, so `signedProvider` fetches the `.sig` next to the artifact URL.
+  `Service.check` refuses unsigned or badly signed releases with a clear message, and Wails verifies
+  again over the digest of the bytes it downloaded. An unreadable embedded key disables updates.
+  Signing runs in its own job (`sign`, stdlib-only `tools/updatesign`) with the key in the `release`
+  environment (v* tags only), away from the build job's npm/toolchain code. Not covered: the
+  signature binds the file, not the version, as in Sparkle and Tauri. Rotating the key means
+  shipping one release signed by the old key that embeds the new public key.
 - The helper aborts if the app takes > 30 s to exit, so the close-time backup runs inside
   `RestartToUpdate` and `OnShutdown` skips it (`Restarting` flag).
 - The macOS zip must be built with `ditto --norsrc --noextattr --noacl`; the extracted bundle keeps

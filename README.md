@@ -317,8 +317,11 @@ frontend o las migraciones. Dependabot (`.github/dependabot.yml`) propone actual
 agrupadas de Go, npm y GitHub Actions (Wails y `@wailsio/runtime` quedan fuera: se suben juntos a mano).
 `.github/workflows/release.yml` publica los instaladores: al subir un tag `vX.Y.Z` compila en macOS el
 `.dmg` universal (Apple Silicon + Intel) y el instalador NSIS de Windows, y los sube como **GitHub
-Release** con `SHA256SUMS.txt`. El tag debe coincidir con `info.version` de `build/config.yml` (el job
-falla si no). Para publicar una versión:
+Release** con `SHA256SUMS.txt`. Los artefactos del actualizador integrado se firman con Ed25519 en un
+job aparte (`sign`): la clave privada es el secreto `UPDATE_SIGNING_KEY` del environment `release`, y
+la pública está en `backend/updates/update_signing.pub`. La app rechaza toda actualización que no esté
+firmada con esa clave. El tag debe coincidir con `info.version` de `build/config.yml` (el job falla si
+no). Para publicar una versión:
 
 ```bash
 # 1. subir la versión en build/config.yml (info.version) y regenerar los assets
