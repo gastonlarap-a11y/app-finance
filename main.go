@@ -136,7 +136,11 @@ func main() {
 		return p.OAuthClientID, p.OAuthClientSecret
 	})
 	backupRunner := backup.NewRunner(bdb, appName, cfg.DBFilename, cfg.BackupLocalDirResolved(), driveMgr, freshDB)
-	settingsSvc := settings.NewService(appName, bdb, cfg, driveMgr, backupRunner)
+	// After a restore, the active profile may not exist in the restored data.
+	afterRestore := func(ctx context.Context) {
+		session.SetActive(users.ResolveActiveID(ctx, bdb, prefs.Load(appName).ActiveUserID))
+	}
+	settingsSvc := settings.NewService(appName, bdb, cfg, driveMgr, backupRunner, afterRestore)
 	// Syncs run in the background and report through a frontend event; the app
 	// exists by the time the first one finishes (it starts after ServiceStartup).
 	mailSvc := mailsync.NewService(bdb, session, mailsync.NewKeychain(appName), mailsync.DefaultParsers(),

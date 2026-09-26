@@ -6,9 +6,12 @@
 import type {
   AppError,
   ApplyFolderResult,
+  BackupFilesResult,
   BackupResult,
   ChooseFolderResult,
+  InspectResult,
   OpResult,
+  RestoreResult,
   SettingsServiceContract,
   StateResult,
 } from '@/services/contract'
@@ -18,8 +21,10 @@ import type { ImportSummary } from '@/engine/db/worker'
 export type { ImportSummary }
 export type {
   ApplyFolderResult,
+  BackupFile,
   BackupInfo,
   BackupResult,
+  BackupSummary,
   ChooseFolderResult,
   OpResult,
   SettingsState,
@@ -68,6 +73,23 @@ export const SettingsService: SettingsServiceContract = {
     return { error: WEB_ONLY }
   },
   async BackupNow(): Promise<BackupResult> {
+    return { error: WEB_ONLY }
+  },
+  // Restoring on web is «Importar respaldo» (importDb below): the same checks,
+  // run by the engine on the file the user picks.
+  async ListBackups(): Promise<BackupFilesResult> {
+    return { error: WEB_ONLY }
+  },
+  async ChooseBackupFile(): Promise<ChooseFolderResult> {
+    return { canceled: true, error: WEB_ONLY }
+  },
+  async DownloadDriveBackup(): Promise<ChooseFolderResult> {
+    return { canceled: true, error: WEB_ONLY }
+  },
+  async InspectBackup(_path: string): Promise<InspectResult> {
+    return { error: WEB_ONLY }
+  },
+  async RestoreBackup(_path: string): Promise<RestoreResult> {
     return { error: WEB_ONLY }
   },
 }

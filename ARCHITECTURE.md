@@ -183,6 +183,20 @@ folder that went missing, e.g. an unsynced cloud folder), the runner refuses to 
 backups exist (`backup.ErrFreshDatabase`), so an empty DB never replaces them. `ApplyDBFolder` requires
 an absolute path, compares with `os.SameFile`, and refuses a folder that already holds a DB.
 
+**Restore (desktop, `backup/restore.go`, Ajustes → Respaldo → «Restaurar un respaldo»).** Sources: the
+backups `List` finds (rotating snapshots, `pre-migrate/`, `pre-restore/`, the older single file), a
+file picked with the native dialog, or the Drive backup (`drive.Manager.Download`, the cached file id
+or the newest file of that name the app can see). A backup is never trusted as is: it is copied to a
+temp file and checked there (SQLite header, `PRAGMA integrity_check`, the App Finance tables, the
+newer-schema guard) and migrated there; `InspectBackup` shows what it holds before the user
+confirms. `RestoreBackup` then copies the live database to `<backups>/pre-restore/` (last 3 kept,
+listed as «Antes de restaurar», so a restore is undone the same way) and overwrites it with
+SQLite's online backup API (modernc's `NewRestore`, reached through `sql.Conn.Raw`) on the app's
+single connection, held for the whole copy — SQLite requires the destination connection to be
+unused meanwhile, and every other query waits. No restart: the runner's fresh-database guard is
+lifted (`MarkRestored`, the way out of a missing DB folder), `main.go`'s `afterRestore` re-resolves
+the active profile, and the frontend reloads. The web build keeps its own import (§17).
+
 Drive calls treat only a real 404, or an item in Drive's trash (emptied after 30 days), as "missing"
 (`isGone`); any other failure aborts the upload, where it used to create a duplicate folder or file
 on every network hiccup. A refresh token Google no longer honors (`invalid_grant`: revoked, or
