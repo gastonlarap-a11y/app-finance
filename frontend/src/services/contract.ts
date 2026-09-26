@@ -165,6 +165,26 @@ export interface MonthlySummary {
   incomes: Income[]
   // Only categories with a cap in effect this month.
   presupuestos: BudgetStatus[]
+  // The reconciled month the carried balance starts from ('' = the whole history).
+  acumuladoDesde: string
+  // This month's real closing balance against the computed one; null until reconciled.
+  conciliacion: ReconciliationStatus | null
+}
+
+// Reconciliation: the real account balance at the close of a month (may be negative).
+export interface Reconciliation {
+  id: number
+  userId: number
+  period: string // YYYY-MM of the close
+  amount: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReconciliationStatus {
+  saldoReal: string
+  calculado: string // the month's balance
+  diferencia: string // saldoReal − calculado (negative: money is missing)
 }
 
 export interface BudgetStatus {
@@ -191,6 +211,7 @@ export interface YearMonth {
   balance: string // ingresos − gastos − ahorro
   saldo: string
   alcanza: boolean
+  conciliado: boolean // saldo is the reconciled real balance, not a sum
 }
 
 export interface YearSummary {
@@ -639,6 +660,7 @@ export type ImportItemsResult = Result<ImportItemView[]>
 export type CardStatementImportResult = Result<CardStatementImport>
 export type CardStatementsResult = Result<CardStatementView[]>
 export type CardStatementDetailResult = Result<CardStatementDetail>
+export type ReconciliationResult = Result<Reconciliation>
 
 // ---------- users ----------
 
@@ -710,6 +732,9 @@ export interface FinanceServiceContract {
   MonthlySummary(period: string): Promise<MonthlySummaryResult>
   YearSummary(year: number): Promise<YearSummaryResult>
   CommitmentsForecast(fromPeriod: string, months: number): Promise<ForecastResult>
+
+  SetReconciliation(period: string, amount: string): Promise<ReconciliationResult>
+  DeleteReconciliation(period: string): Promise<OpResult>
 
   SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult>
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>

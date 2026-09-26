@@ -197,14 +197,15 @@ func (s *FinanceService) savingsIn(ctx context.Context, uid int64, period string
 	return s.sumContributions(ctx, uid, "period = ?", period)
 }
 
-// savingsBefore sums the contributions of live goals for every month before `period`.
-func (s *FinanceService) savingsBefore(ctx context.Context, uid int64, period string) (types.Decimal, error) {
-	return s.sumContributions(ctx, uid, "period < ?", period)
+// savingsBetween sums the contributions of live goals for every month strictly
+// between `after` ("" = from the start) and `before`.
+func (s *FinanceService) savingsBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
+	return s.sumContributions(ctx, uid, "period > ? AND period < ?", after, before)
 }
 
-func (s *FinanceService) sumContributions(ctx context.Context, uid int64, where string, arg any) (types.Decimal, error) {
+func (s *FinanceService) sumContributions(ctx context.Context, uid int64, where string, args ...any) (types.Decimal, error) {
 	return sumAmounts(ctx, s.db.NewSelect().Model((*SavingsContribution)(nil)).
-		Where("user_id = ?", uid).Where(liveGoalContributions).Where(where, arg))
+		Where("user_id = ?", uid).Where(liveGoalContributions).Where(where, args...))
 }
 
 // savingsByMonth sums live-goal contributions per month in [from, to].

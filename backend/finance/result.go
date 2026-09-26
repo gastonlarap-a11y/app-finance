@@ -125,6 +125,24 @@ type MonthlySummary struct {
 	Movimientos  []Movimiento    `json:"movimientos"`
 	Incomes      []Income        `json:"incomes"`
 	Presupuestos []BudgetStatus  `json:"presupuestos"` // sólo categorías con tope vigente
+	// AcumuladoDesde is the reconciled month the carried balance starts from
+	// ("" = it sums the whole history).
+	AcumuladoDesde string `json:"acumuladoDesde"`
+	// Conciliacion compares this month's real closing balance with Balance;
+	// nil until the user reconciles the month.
+	Conciliacion *ReconciliationStatus `json:"conciliacion"`
+}
+
+// ReconciliationStatus is a month's real closing balance against the computed one.
+type ReconciliationStatus struct {
+	SaldoReal  types.Decimal `json:"saldoReal"`
+	Calculado  types.Decimal `json:"calculado"`  // Balance del mes
+	Diferencia types.Decimal `json:"diferencia"` // saldoReal − calculado (negativo: falta plata)
+}
+
+type ReconciliationResult struct {
+	Data  *Reconciliation  `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
 }
 
 // BudgetStatus compares a category's monthly cap with what the month charges to it
@@ -164,6 +182,8 @@ type YearMonth struct {
 	Balance  types.Decimal `json:"balance"` // neto del mes (ingresos − gastos − ahorro)
 	Saldo    types.Decimal `json:"saldo"`   // saldo acumulado al cierre del mes
 	Alcanza  bool          `json:"alcanza"`
+	// Conciliado: Saldo is the real balance the user reconciled, not a sum.
+	Conciliado bool `json:"conciliado"`
 }
 
 type YearSummary struct {

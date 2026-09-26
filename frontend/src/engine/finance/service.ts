@@ -48,6 +48,7 @@ import type {
   Movimiento,
   OpResult,
   PeriodSalary,
+  ReconciliationResult,
   RecurringResult,
   RecurringSuggestion,
   SalaryResult,
@@ -124,6 +125,7 @@ import {
   rowToMerchant,
   rowToMerchantRule,
   rowToPeriodSalary,
+  rowToReconciliation,
   rowToSavingsContribution,
   rowToSavingsGoal,
   rowToSettings,
@@ -1596,18 +1598,21 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return out
   }
 
-  // sumFixedBefore totals fixed-expense charges for all months strictly before
-  // `period` (carry-forward of the running balance). Each amount stretch is
-  // multiplied out (sumAsOf), so the cost does not grow with the months elapsed.
-  function sumFixedBefore(period: string): Money {
+  // sumFixedBetween totals fixed-expense charges of the months strictly between
+  // `after` ('' = from the start) and `before` (carry-forward of the running
+  // balance). Each amount stretch is multiplied out (sumAsOf), so the cost does
+  // not grow with the months elapsed.
+  function sumFixedBetween(after: string, before: string): Money {
     const { fixed, amountsByID } = loadFixed(false)
     let total = Money.zero()
-    const last = addMonths(period, -1)
+    const last = addMonths(before, -1)
+    const firstAfter = after === '' ? '' : addMonths(after, 1)
     for (const fe of fixed) {
       if (!validPeriod(fe.startPeriod)) continue
+      const start = fe.startPeriod > firstAfter ? fe.startPeriod : firstAfter
       let end = last
       if (fe.endPeriod !== '' && fe.endPeriod < end) end = fe.endPeriod
-      total = total.add(sumAsOf(amountsByID.get(fe.id) ?? [], fe.startPeriod, end))
+      total = total.add(sumAsOf(amountsByID.get(fe.id) ?? [], start, end))
     }
     return total
   }
@@ -1641,8 +1646,6 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return null
   }
 
-  // cumulativeBalanceBefore: Σ salaries + Σ extras − Σ gastos for every period
-  // strictly before `period`, summed with Money (never SQL SUM over TEXT).
   // sumAmounts mirrors the Go helper: adds up the amount column of a query,
   // as decimals (never SQLite's float SUM over TEXT).
   function sumAmounts(sql: string, params: SqlValue[]): Money {
@@ -1651,23 +1654,67 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return total
   }
 
-  // cumulativeBalanceBefore reads only amounts: it walks the whole history on
-  // every summary (mirrors Go).
-  function cumulativeBalanceBefore(period: string): Money {
+  // ---------- reconciliations (mirror backend/finance/reconciliation.go) ----------
+
+  // reconciliationBefore is the latest reconciliation strictly before `period`.
+  function reconciliationBefore(period: string): { period: string; amount: Money } | null {
+    const row = db.query(
+      'SELECT period, amount FROM reconciliations WHERE user_id = ? AND period < ? ORDER BY period DESC LIMIT 1',
+      [uid(), period],
+    )[0]
+    return row ? { period: asString(row.period), amount: Money.fromString(asString(row.amount)) } : null
+  }
+
+  // reconciliationsIn maps each reconciled month in [from, to] to its real balance.
+  function reconciliationsIn(from: string, to: string): Map<string, Money> {
+    const out = new Map<string, Money>()
+    for (const r of db.query('SELECT period, amount FROM reconciliations WHERE user_id = ? AND period >= ? AND period <= ?', [
+      uid(),
+      from,
+      to,
+    ])) {
+      out.set(asString(r.period), Money.fromString(asString(r.amount)))
+    }
+    return out
+  }
+
+  // cumulativeBalanceBefore: the running balance carried into `period` and the
+  // reconciled month it starts from ('' when none). Without a reconciliation it
+  // is Σ salaries + Σ extras − Σ gastos − Σ ahorro of every earlier period; with
+  // one, that month's real closing balance plus the same flows after it.
+  function cumulativeBalanceBefore(period: string): { amount: Money; from: string } {
+    const anchor = reconciliationBefore(period)
+    // Every YYYY-MM sorts after '': with no anchor the bound reads the whole history.
+    const after = anchor?.period ?? ''
+    const base = anchor?.amount ?? Money.zero()
+    return { amount: base.add(flowsBetween(after, period)), from: after }
+  }
+
+  // flowsBetween is the net of every month strictly between `after` and
+  // `before`; it reads only amounts (it walks the whole history on every summary).
+  function flowsBetween(after: string, before: string): Money {
     const user = uid()
-    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period < ?', [user, period])
+    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period > ? AND period < ?', [
+      user,
+      after,
+      before,
+    ])
     total = total.add(
-      sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period < ? AND deleted_at IS NULL', [user, period]),
+      sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period > ? AND period < ? AND deleted_at IS NULL', [
+        user,
+        after,
+        before,
+      ]),
     )
     total = total.sub(
       sumAmounts(
-        `SELECT amount FROM installments WHERE user_id = ? AND period < ?
+        `SELECT amount FROM installments WHERE user_id = ? AND period > ? AND period < ?
          AND expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)`,
-        [user, period, user],
+        [user, after, before, user],
       ),
     )
     // Savings contributions left the account too.
-    return total.sub(sumFixedBefore(period)).sub(sumContributions('period < ?', [period]))
+    return total.sub(sumFixedBetween(after, before)).sub(sumContributions('period > ? AND period < ?', [after, before]))
   }
 
   // ---------- savings helpers ----------
@@ -2422,7 +2469,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(period)) return { error: invalidPeriodError() }
 
       const salary = salaryFor(period)
-      const acumulado = cumulativeBalanceBefore(period)
+      const carried = cumulativeBalanceBefore(period)
+      const acumulado = carried.amount
       const incomes = await service.ListIncomes(period)
       const cards = listCardsActive()
       const cardByID = cardMapAll()
@@ -2541,6 +2589,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         movimientos,
         incomes,
         presupuestos: budgetStatuses(period, catTotals),
+        acumuladoDesde: carried.from,
+        conciliacion: null,
+      }
+      const closing = reconciliationsIn(period, period).get(period)
+      if (closing) {
+        data.conciliacion = {
+          saldoReal: closing.toString(),
+          calculado: balance.toString(),
+          diferencia: closing.sub(balance).toString(),
+        }
       }
       return { data }
     },
@@ -2550,7 +2608,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const prefix = `${String(year).padStart(4, '0')}-`
 
       // Carry-in from every period before this year.
-      let saldo = cumulativeBalanceBefore(prefix + '01')
+      let saldo = cumulativeBalanceBefore(prefix + '01').amount
+      // A month reconciled inside the year resets the running balance to the real one.
+      const realByMonth = reconciliationsIn(prefix + '01', prefix + '12')
 
       const salaryByMonth = new Map<string, Money>()
       for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period LIKE ?', [
@@ -2611,6 +2671,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
         const balance = ingresos.sub(gastos).sub(ahorro)
         saldo = saldo.add(balance) // running account balance at month close
+        const closing = realByMonth.get(period)
+        if (closing) saldo = closing
         months.push({
           period,
           ingresos: ingresos.toString(),
@@ -2619,6 +2681,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           balance: balance.toString(),
           saldo: saldo.toString(),
           alcanza: saldo.gte(Money.zero()),
+          conciliado: closing !== undefined,
         })
         totalIngresos = totalIngresos.add(ingresos)
         totalGastos = totalGastos.add(gastos)
@@ -2683,7 +2746,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
 
       const ahorroByMonth = savingsByMonth(fromPeriod, to)
-      let saldo = cumulativeBalanceBefore(fromPeriod)
+      let saldo = cumulativeBalanceBefore(fromPeriod).amount
+      // A past month of the horizon may already be reconciled.
+      const realByMonth = reconciliationsIn(fromPeriod, to)
       const data: ForecastMonth[] = []
       for (let i = 0; i < months; i++) {
         const period = addMonths(fromPeriod, i)
@@ -2698,7 +2763,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const comprometido = cuotasMes.add(fijos)
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
         const libre = ingresos.sub(comprometido).sub(ahorro)
-        saldo = saldo.add(libre)
+        saldo = realByMonth.get(period) ?? saldo.add(libre)
         data.push({
           period,
           cuotas: cuotasMes.toString(),
@@ -2712,6 +2777,38 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         })
       }
       return { data }
+    },
+
+    // ---------- reconciliations (conciliación) ----------
+
+    async SetReconciliation(period: string, amount: string): Promise<ReconciliationResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      if (period > currentPeriod()) {
+        return { error: newError(ErrValidation, 'no se puede conciliar un mes que aún no empieza') }
+      }
+      // Unlike every other amount, a real balance may be negative (an overdraft).
+      let balance: Money
+      try {
+        balance = Money.fromString(amount.trim())
+      } catch {
+        return { error: newError(ErrValidation, 'saldo inválido: ' + amount) }
+      }
+      const now = nowIso()
+      const row = db.query(
+        `INSERT INTO reconciliations (user_id, period, amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, period) DO UPDATE SET amount = EXCLUDED.amount, updated_at = EXCLUDED.updated_at
+         RETURNING *`,
+        [uid(), period, balance.toString(), now, now],
+      )[0]
+      if (!row) return { error: newError(ErrNotFound, 'conciliación no encontrada') }
+      return { data: rowToReconciliation(row) }
+    },
+
+    async DeleteReconciliation(period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      db.exec('DELETE FROM reconciliations WHERE user_id = ? AND period = ?', [uid(), period])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'no hay conciliación para ese mes') }
+      return {}
     },
 
     // ---------- category budgets (presupuestos) ----------

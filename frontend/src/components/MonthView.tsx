@@ -6,6 +6,7 @@ import {
   STATUS_PAGADO,
   type BudgetStatus,
   type Expense,
+  type MonthlySummary,
   type Movimiento,
   type OpResult,
 } from '@/services/finance'
@@ -14,14 +15,15 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { greaterThan, isZero, ratio } from '@/lib/money'
-import { formatCLP, formatDate } from '@/lib/format'
+import { greaterThan, isNegative, isZero, ratio } from '@/lib/money'
+import { currentPeriod, formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
 import { TrendPanel } from './TrendPanel'
 import { StatementBanner } from './CardStatements'
+import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -58,6 +60,7 @@ export function MonthView() {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
   const [filterCategory, setFilterCategory] = useState('')
   const [filterCardId, setFilterCardId] = useState<number | ''>('')
+  const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
 
   function openNewExpense() {
     setEditing(null)
@@ -192,6 +195,8 @@ export function MonthView() {
         />
         <StatCard label="¿Alcanza?" value={summary.alcanza ? 'Sí ✓' : 'No ✕'} tone={balanceTone} />
       </div>
+
+      <ReconciliationBar summary={summary} onOpen={setReconcile} />
 
       <StatementBanner period={period} />
 
@@ -469,6 +474,53 @@ export function MonthView() {
           onSaved={reload}
         />
       )}
+      {reconcile && (
+        <ReconcileDialog
+          mode={reconcile}
+          summary={summary}
+          onClose={() => setReconcile(null)}
+          onSaved={() => {
+            setReconcile(null)
+            reload()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ReconciliationBar says where the carried balance comes from and offers to
+// set the opening balance or reconcile the month's close with the bank.
+function ReconciliationBar({ summary, onOpen }: { summary: MonthlySummary; onOpen: (mode: ReconcileMode) => void }) {
+  const rec = summary.conciliacion
+  const canClose = summary.period <= currentPeriod()
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-base bg-surface px-4 py-3 text-sm ring-1 ring-slate-800">
+      <div className="space-y-0.5">
+        <p className="text-slate-400">
+          {summary.acumuladoDesde
+            ? `Saldo arrastrado desde el cierre conciliado de ${periodLabel(summary.acumuladoDesde)}.`
+            : 'Saldo arrastrado desde el primer mes con datos (sin saldo inicial).'}
+        </p>
+        {rec && (
+          <p>
+            Cierre conciliado: saldo real <strong>{formatCLP(rec.saldoReal)}</strong> · calculado {formatCLP(rec.calculado)} ·{' '}
+            <span className={isZero(rec.diferencia) ? 'text-success' : isNegative(rec.diferencia) ? 'text-danger' : 'text-warning'}>
+              {isZero(rec.diferencia) ? 'cuadra ✓' : `diferencia ${formatCLP(rec.diferencia)}`}
+            </span>
+          </p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Button variant="ghost" onClick={() => onOpen('inicio')}>
+          Saldo inicial
+        </Button>
+        {canClose && (
+          <Button variant="ghost" onClick={() => onOpen('cierre')}>
+            {rec ? 'Editar conciliación' : 'Conciliar cierre'}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
