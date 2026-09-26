@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -334,6 +335,52 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 		return folderID, "", fmt.Errorf("subir archivo a Drive: %w", e)
 	}
 	return folderID, created.Id, nil
+}
+
+// ErrNoRemoteBackup means Drive holds no backup this app uploaded.
+var ErrNoRemoteBackup = errors.New("no hay un respaldo de la app en Google Drive")
+
+// Download saves the Drive backup to dest: the cached fileID while it is still
+// live, else the newest non-trashed file named fileName the app can see (the
+// drive.file scope only shows files this app created).
+func (m *Manager) Download(ctx context.Context, fileName, fileID, dest string) error {
+	svc, err := m.service(ctx)
+	if err != nil {
+		return err
+	}
+	if fileID != "" {
+		gone, err := isGone(ctx, svc, fileID)
+		if err != nil {
+			return err
+		}
+		if gone {
+			fileID = ""
+		}
+	}
+	if fileID == "" {
+		q := fmt.Sprintf("name=%s and trashed=false and mimeType!='application/vnd.google-apps.folder'", quote(fileName))
+		list, err := svc.Files.List().Q(q).OrderBy("modifiedTime desc").PageSize(1).Fields("files(id)").Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("buscando el respaldo en Drive: %w", err)
+		}
+		if len(list.Files) == 0 {
+			return ErrNoRemoteBackup
+		}
+		fileID = list.Files[0].Id
+	}
+	resp, err := svc.Files.Get(fileID).Context(ctx).Download()
+	if err != nil {
+		return fmt.Errorf("descargando el respaldo de Drive: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }() // read to the end below; nothing left to report
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("creando el archivo descargado: %w", err)
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return errors.Join(fmt.Errorf("descargando el respaldo de Drive: %w", err), f.Close())
+	}
+	return f.Close()
 }
 
 // ensureFolder resolves a Drive folder path that may contain "/" separators.

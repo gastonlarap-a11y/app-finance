@@ -16,7 +16,7 @@ import (
 func TestApplyDBFolderRefusals(t *testing.T) {
 	live := t.TempDir()
 	cfg := &config.Config{DBFilename: "app-finance.db", DataDir: live}
-	s := NewService("app-finance-test", dbtest.OpenMigrated(t), cfg, nil, nil)
+	s := NewService("app-finance-test", dbtest.OpenMigrated(t), cfg, nil, nil, nil)
 
 	occupied := t.TempDir()
 	if err := os.WriteFile(filepath.Join(occupied, cfg.DBFilename), []byte("another computer's data"), 0o600); err != nil {

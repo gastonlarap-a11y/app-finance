@@ -7,6 +7,7 @@ import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { Button, Field, QueryError, Section, Spinner, inputCls } from './ui'
 import { MailSettings } from './MailSettings'
+import { RestoreBackup } from './RestoreBackup'
 import { UpdatesSettings } from './UpdateNotice'
 
 // On the web build the whole desktop surface (DB folder, Google Drive) is
@@ -241,6 +242,9 @@ function DesktopSettingsView() {
               {backingUp ? 'Respaldando…' : '☁ Respaldar ahora'}
             </Button>
           </div>
+        </div>
+        <div className="mt-6 border-t border-slate-800 pt-5">
+          <RestoreBackup driveConnected={state.driveConnected} />
         </div>
       </Section>
 

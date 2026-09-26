@@ -20,6 +20,7 @@ require (
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.298.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	modernc.org/sqlite v1.46.1
 )
 
 require (
@@ -73,7 +74,6 @@ require (
 	modernc.org/libc v1.68.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.46.1 // indirect
 )
 
 // All other dependencies are added by `go mod tidy` (it scans imports).

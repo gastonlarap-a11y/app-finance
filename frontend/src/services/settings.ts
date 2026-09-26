@@ -10,8 +10,10 @@ export const SettingsService: SettingsServiceContract = Bound
 
 export type {
   ApplyFolderResult,
+  BackupFile,
   BackupInfo,
   BackupResult,
+  BackupSummary,
   ChooseFolderResult,
   OpResult,
   SettingsState,

@@ -6,6 +6,7 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +28,15 @@ type Service struct {
 	cfg     *config.Config
 	drive   *drive.Manager
 	runner  *backup.Runner
+	// afterRestore re-reads what other services keep in memory from the
+	// database (the active profile), once a restore replaced it.
+	afterRestore func(ctx context.Context)
 }
 
-func NewService(appName string, db *bun.DB, cfg *config.Config, dm *drive.Manager, runner *backup.Runner) *Service {
-	return &Service{appName: appName, db: db, cfg: cfg, drive: dm, runner: runner}
+func NewService(appName string, db *bun.DB, cfg *config.Config, dm *drive.Manager, runner *backup.Runner,
+	afterRestore func(ctx context.Context),
+) *Service {
+	return &Service{appName: appName, db: db, cfg: cfg, drive: dm, runner: runner, afterRestore: afterRestore}
 }
 
 func (s *Service) ServiceName() string { return "SettingsService" }
@@ -182,4 +188,89 @@ func (s *Service) BackupNow(ctx context.Context) BackupResult {
 		return BackupResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
 	return BackupResult{Data: &info}
+}
+
+// ---------- restore ----------
+
+// ListBackups returns the restorable backups on this computer, newest first.
+func (s *Service) ListBackups(ctx context.Context) BackupFilesResult {
+	files, err := backup.List(s.runner.LocalDir(), s.runner.DBFile())
+	if err != nil {
+		return BackupFilesResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	return BackupFilesResult{Data: files}
+}
+
+// ChooseBackupFile opens a native file picker for a backup kept elsewhere (a
+// copy downloaded from Drive, a file exported by the iPad app).
+func (s *Service) ChooseBackupFile(ctx context.Context) ChooseFolderResult {
+	path, err := application.Get().Dialog.OpenFile().
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		AddFilter("Respaldo de App Finance", "*.db;*.sqlite;*.sqlite3").
+		SetTitle("Elige el respaldo a restaurar").
+		PromptForSingleSelection()
+	if err != nil {
+		return ChooseFolderResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if strings.TrimSpace(path) == "" {
+		return ChooseFolderResult{Canceled: true}
+	}
+	return ChooseFolderResult{Path: path}
+}
+
+// DownloadDriveBackup downloads the Google Drive backup to a temp file and
+// returns its path, ready for InspectBackup/RestoreBackup.
+func (s *Service) DownloadDriveBackup(ctx context.Context) ChooseFolderResult {
+	f, err := os.CreateTemp("", "app-finance-drive-*.db")
+	if err != nil {
+		return ChooseFolderResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		return ChooseFolderResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
+	}
+	if err := s.drive.Download(ctx, s.runner.DBFile(), prefs.Load(s.appName).DriveFileID, path); err != nil {
+		_ = os.Remove(path) // nothing usable was downloaded
+		return ChooseFolderResult{Error: restoreError(err)}
+	}
+	return ChooseFolderResult{Path: path}
+}
+
+// InspectBackup checks a backup and reports what it holds; nothing changes.
+func (s *Service) InspectBackup(ctx context.Context, path string) InspectResult {
+	summary, err := backup.Inspect(ctx, s.cfg.DBPath(), strings.TrimSpace(path))
+	if err != nil {
+		return InspectResult{Error: restoreError(err)}
+	}
+	return InspectResult{Data: &summary}
+}
+
+// RestoreBackup replaces the current data with the backup at path, keeping a
+// copy of what it replaces. The frontend reloads afterwards: every view and
+// the active profile change with the data.
+func (s *Service) RestoreBackup(ctx context.Context, path string) RestoreResult {
+	summary, safety, err := backup.Restore(ctx, s.db, s.cfg.DBPath(), s.runner.LocalDir(), s.runner.DBFile(), strings.TrimSpace(path))
+	if err != nil {
+		return RestoreResult{Error: restoreError(err)}
+	}
+	s.runner.MarkRestored()
+	if s.afterRestore != nil {
+		s.afterRestore(ctx)
+	}
+	return RestoreResult{Data: &Restored{Summary: summary, SafetyCopy: safety}}
+}
+
+// restoreError turns a restore failure into what the UI shows: the reasons a
+// file cannot be restored, or Drive cannot provide one, are the user's to act
+// on; anything else is internal.
+func restoreError(err error) *shared.AppError {
+	switch {
+	case errors.Is(err, backup.ErrInvalidBackup),
+		errors.Is(err, drive.ErrNoRemoteBackup),
+		errors.Is(err, drive.ErrReconnect):
+		return shared.NewError(shared.ErrValidation, err.Error())
+	default:
+		return shared.NewError(shared.ErrInternal, err.Error())
+	}
 }

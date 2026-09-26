@@ -44,3 +44,26 @@ type BackupResult struct {
 type OpResult struct {
 	Error *shared.AppError `json:"error,omitempty"`
 }
+
+// BackupFilesResult lists the restorable backups on this computer.
+type BackupFilesResult struct {
+	Data  []backup.File    `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// InspectResult is what a backup holds, before the user confirms a restore.
+type InspectResult struct {
+	Data  *backup.Summary  `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// Restored reports a finished restore.
+type Restored struct {
+	Summary    backup.Summary `json:"summary"`
+	SafetyCopy string         `json:"safetyCopy"` // the data replaced, kept here to undo
+}
+
+type RestoreResult struct {
+	Data  *Restored        `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}

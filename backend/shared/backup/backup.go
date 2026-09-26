@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -57,14 +58,29 @@ type Runner struct {
 	dbFile   string
 	localDir string
 	drive    *drive.Manager
-	freshDB  bool
+	// freshDB: the database was created empty this session (see
+	// ErrFreshDatabase). Atomic: a restore clears it while a backup may run.
+	freshDB atomic.Bool
 }
 
 // NewRunner builds the backup runner. freshDB is true when the database file did
 // not exist before this session opened it (see ErrFreshDatabase).
 func NewRunner(db *bun.DB, appName, dbFile, localDir string, dm *drive.Manager, freshDB bool) *Runner {
-	return &Runner{db: db, appName: appName, dbFile: dbFile, localDir: localDir, drive: dm, freshDB: freshDB}
+	r := &Runner{db: db, appName: appName, dbFile: dbFile, localDir: localDir, drive: dm}
+	r.freshDB.Store(freshDB)
+	return r
 }
+
+// MarkRestored records that the live database now holds restored data: the
+// guard against backing up an empty database no longer applies. This is the
+// way out of a missing DB folder — restore a backup, and backups resume.
+func (r *Runner) MarkRestored() { r.freshDB.Store(false) }
+
+// LocalDir is where local snapshots (and the restore safety copies) live.
+func (r *Runner) LocalDir() string { return r.localDir }
+
+// DBFile is the database's file name, which names the snapshots too.
+func (r *Runner) DBFile() string { return r.dbFile }
 
 // Snapshot writes a consistent copy of the database to destFile using VACUUM
 // INTO. The copy is built next to destFile and renamed over it only once
@@ -132,7 +148,7 @@ func (r *Runner) LastBackup() *time.Time {
 // Drive is connected, uploads it (overwriting the single Drive backup file).
 // Folder/file ids are cached in prefs.
 func (r *Runner) Run(ctx context.Context) (Info, error) {
-	if r.freshDB && r.LastBackup() != nil {
+	if r.freshDB.Load() && r.LastBackup() != nil {
 		return Info{}, ErrFreshDatabase
 	}
 	local, err := snapshotRotating(ctx, r.db, r.localDir, r.dbFile, keepBackups)

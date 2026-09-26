@@ -783,6 +783,35 @@ export interface BackupInfo {
 
 export type BackupResult = Result<BackupInfo>
 
+// A restorable backup on this computer (desktop).
+export interface BackupFile {
+  path: string
+  kind: string // respaldo | antes-de-migrar | antes-de-restaurar | anterior
+  at: string // RFC3339 (file time)
+  size: number // bytes
+}
+
+export type BackupFilesResult = Result<BackupFile[]>
+
+// What a backup holds, shown before the user confirms a restore.
+export interface BackupSummary {
+  profiles: number
+  expenses: number
+  incomes: number
+  firstPeriod: string // YYYY-MM; '' when it has no movements
+  lastPeriod: string
+  migrations: number // schema updates applied to bring it up to date
+}
+
+export type InspectResult = Result<BackupSummary>
+
+export interface Restored {
+  summary: BackupSummary
+  safetyCopy: string // the data replaced, kept here to undo
+}
+
+export type RestoreResult = Result<Restored>
+
 export interface SettingsServiceContract {
   GetState(): Promise<StateResult>
   ChooseDBFolder(): Promise<ChooseFolderResult>
@@ -793,6 +822,11 @@ export interface SettingsServiceContract {
   SetOAuthClient(clientID: string, clientSecret: string): Promise<OpResult>
   SetBackupOnClose(enabled: boolean): Promise<OpResult>
   BackupNow(): Promise<BackupResult>
+  ListBackups(): Promise<BackupFilesResult>
+  ChooseBackupFile(): Promise<ChooseFolderResult>
+  DownloadDriveBackup(): Promise<ChooseFolderResult>
+  InspectBackup(path: string): Promise<InspectResult>
+  RestoreBackup(path: string): Promise<RestoreResult>
 }
 
 // ---------- mail sync (desktop-native; the web build answers with WEB_ONLY errors) ----------
