@@ -1240,12 +1240,16 @@ func (s *FinanceService) flowsBetween(ctx context.Context, uid int64, after, bef
 	if err != nil {
 		return types.Zero(), err
 	}
-	// Savings contributions left the account too.
+	// Savings contributions left the account too; refunds came back into it.
 	saved, err := s.savingsBetween(ctx, uid, after, before)
 	if err != nil {
 		return types.Zero(), err
 	}
-	return salaries.Add(incomes).Sub(cuotas).Sub(fixedTotal).Sub(saved), nil
+	refunded, err := s.refundsBetween(ctx, uid, after, before)
+	if err != nil {
+		return types.Zero(), err
+	}
+	return salaries.Add(incomes).Sub(cuotas).Sub(fixedTotal).Sub(saved).Add(refunded), nil
 }
 
 func (s *FinanceService) MonthlySummary(ctx context.Context, period string) MonthlySummaryResult {
@@ -1367,6 +1371,14 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	for _, mv := range fixedMovs {
 		add(mv)
 	}
+	// Refunds arrived this month: negative movimientos, net of their category and card.
+	refunds, err := s.refundsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		add(refundMovimiento(r))
+	}
 
 	ahorro, err := s.savingsIn(ctx, uid, period)
 	if err != nil {
@@ -1456,6 +1468,16 @@ func (s *FinanceService) cardChargesIn(ctx context.Context, uid int64, period st
 	for _, mv := range fixed {
 		if mv.CardID != nil {
 			out[*mv.CardID] = out[*mv.CardID].Add(mv.Amount)
+		}
+	}
+	// A refund to a card is a credit on its statement.
+	refunds, err := s.refundsIn(ctx, uid, period, period)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		if r.CardID != nil {
+			out[*r.CardID] = out[*r.CardID].Sub(r.Amount)
 		}
 	}
 	return out, nil
@@ -1565,6 +1587,16 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 			gastosByMonth[period] = gastosByMonth[period].Add(amt)
 			byCat.add(fe.Category, period, amt)
 		}
+	}
+	// Refunds lower their month's gastos and their expense's category.
+	refunds, err := s.refundsIn(ctx, uid, prefix+"01", prefix+"12")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		neg := types.Zero().Sub(r.Amount)
+		gastosByMonth[r.Period] = gastosByMonth[r.Period].Add(neg)
+		byCat.add(r.Category, r.Period, neg)
 	}
 
 	ahorroByMonth, err := s.savingsByMonth(ctx, uid, prefix+"01", prefix+"12")

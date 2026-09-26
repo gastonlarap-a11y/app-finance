@@ -15,6 +15,7 @@ import type {
   MerchantRule,
   PeriodSalary,
   Reconciliation,
+  Refund,
   SavingsContribution,
   SavingsGoal,
   Settings,
@@ -34,6 +35,7 @@ export const StatusPendiente = 'pendiente'
 export const StatusPagado = 'pagado'
 export const SourceCuota = 'cuota'
 export const SourceFijo = 'fijo'
+export const SourceReembolso = 'reembolso' // a refund: negative movimiento
 
 // Import inbox (mirror backend/finance/importitem.go constants).
 export const ImportSourceEmail = 'email'
@@ -83,6 +85,19 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     incomeId: asNullableNumber(r.income_id),
     fixedExpenseId: asNullableNumber(r.fixed_expense_id),
     fixedPeriod: asString(r.fixed_period),
+    refundId: asNullableNumber(r.refund_id),
+  }
+}
+
+export function rowToRefund(r: SqlRow): Refund {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    expenseId: asNumber(r.expense_id),
+    period: asString(r.period),
+    amount: asString(r.amount),
+    description: asString(r.description),
+    createdAt: asString(r.created_at),
   }
 }
 

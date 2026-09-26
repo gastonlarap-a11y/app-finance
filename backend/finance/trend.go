@@ -108,6 +108,13 @@ func (s *FinanceService) spendingByMonth(ctx context.Context, uid int64, from, t
 		}
 		add(inst.Period, cat, inst.Amount)
 	}
+	refunds, err := s.refundsIn(ctx, uid, from, to)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, r := range refunds {
+		add(r.Period, r.Category, types.Zero().Sub(r.Amount))
+	}
 
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, false)
 	if err != nil {

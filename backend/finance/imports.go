@@ -329,6 +329,10 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 	if err != nil {
 		return nil, err
 	}
+	refundable, err := s.refundCandidates(ctx, uid, items)
+	if err != nil {
+		return nil, err
+	}
 	matchedByID, err := s.matchedItems(ctx, uid, items)
 	if err != nil {
 		return nil, err
@@ -354,6 +358,11 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		if duplicateReviewable(it) {
 			if dup := dups.find(it, v.CardID); dup != nil {
 				v.DuplicateExpenseID, v.DuplicateDescription = &dup.ID, dup.Description
+			}
+		}
+		if refundReviewable(it) {
+			if ex := refundable.refundOf(it, v.CardID); ex != nil {
+				v.SuggestedRefundExpenseID, v.SuggestedRefundDescription = &ex.ID, ex.Description
 			}
 		}
 		if it.MatchedItemID != nil {
@@ -698,6 +707,7 @@ func (s *FinanceService) RestoreImportItem(ctx context.Context, id int64) OpResu
 		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportPendiente).
 			Set("expense_id = NULL").Set("income_id = NULL").Set("fixed_expense_id = NULL").Set("fixed_period = ''").
+			Set("refund_id = NULL").
 			Where("id = ? AND user_id = ? AND status = ?", id, uid, ImportConfirmado).Exec(ctx)
 		return err
 	})
@@ -709,7 +719,7 @@ func (s *FinanceService) RestoreImportItem(ctx context.Context, id int64) OpResu
 
 // reopenableItems returns the ids of uid's confirmed items that no longer
 // point at anything live: every target they had (expense, income, fixed
-// expense) is in the trash or gone.
+// expense, refund — or the expense of that refund) is in the trash or gone.
 func reopenableItems(ctx context.Context, db bun.IDB, uid int64) (map[int64]bool, error) {
 	var ids []int64
 	err := db.NewRaw(`
@@ -717,10 +727,13 @@ func reopenableItems(ctx context.Context, db bun.IDB, uid int64) (map[int64]bool
 		LEFT JOIN expenses AS e ON e.id = ii.expense_id
 		LEFT JOIN incomes AS inc ON inc.id = ii.income_id
 		LEFT JOIN fixed_expenses AS f ON f.id = ii.fixed_expense_id
+		LEFT JOIN refunds AS rf ON rf.id = ii.refund_id
+		LEFT JOIN expenses AS rfe ON rfe.id = rf.expense_id
 		WHERE ii.user_id = ? AND ii.status = ?
 		  AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
 		  AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
-		  AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`, uid, ImportConfirmado).Scan(ctx, &ids)
+		  AND (f.id IS NULL OR f.deleted_at IS NOT NULL)
+		  AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)`, uid, ImportConfirmado).Scan(ctx, &ids)
 	if err != nil {
 		return nil, fmt.Errorf("finding reopenable items: %w", err)
 	}

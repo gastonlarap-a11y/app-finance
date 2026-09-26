@@ -131,6 +131,7 @@ export interface Movimiento {
   installmentId: number
   expenseId: number
   fixedId: number | null
+  refundId: number | null // set only for refunds (negative amount)
   description: string
   category: string
   merchant: string
@@ -252,7 +253,7 @@ export interface ForecastMonth {
   ahorro: string // savings contributions already registered for the month
   ingresos: string
   ingresoEstimado: boolean // no salary saved: the last known one is reused
-  libre: string // ingresos − comprometido − ahorro
+  libre: string // ingresos − comprometido − ahorro + refunds already recorded
   saldoProyectado: string
 }
 
@@ -394,6 +395,7 @@ export interface ImportItem {
   // A charge linked to a fixed expense marks that month of it as paid.
   fixedExpenseId: number | null
   fixedPeriod: string // YYYY-MM marked paid; '' = not linked
+  refundId: number | null // a credit confirmed as the refund of an expense
 }
 
 export interface ImportItemView extends ImportItem {
@@ -412,7 +414,21 @@ export interface ImportItemView extends ImportItem {
   suggestedFixedId: number | null
   suggestedFixedDescription: string
   suggestedFixedPeriod: string
+  // A pending bank credit that looks like the refund of a recent purchase.
+  suggestedRefundExpenseId: number | null
+  suggestedRefundDescription: string
   reopenable: boolean // confirmed item whose expense/income went to the trash
+}
+
+// Refund: money returned for an expense; lowers the gastos of the month it arrives in.
+export interface Refund {
+  id: number
+  userId: number
+  expenseId: number
+  period: string // YYYY-MM it arrived in
+  amount: string // positive
+  description: string
+  createdAt: string
 }
 
 export interface MerchantRule {
@@ -673,6 +689,7 @@ export type CardStatementImportResult = Result<CardStatementImport>
 export type CardStatementsResult = Result<CardStatementView[]>
 export type CardStatementDetailResult = Result<CardStatementDetail>
 export type ReconciliationResult = Result<Reconciliation>
+export type RefundResult = Result<Refund>
 
 // ---------- users ----------
 
@@ -727,6 +744,8 @@ export interface FinanceServiceContract {
   DeleteExpense(id: number): Promise<OpResult>
   RestoreExpense(id: number): Promise<OpResult>
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
+  CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
+  DeleteRefund(id: number): Promise<OpResult>
 
   ListFixedExpenses(): Promise<FixedExpenseView[]>
   CreateFixedExpense(
@@ -781,6 +800,7 @@ export interface FinanceServiceContract {
   ListMerchantRules(): Promise<MerchantRule[]>
   DeleteMerchantRule(id: number): Promise<OpResult>
   ConfirmImportItemAsIncome(id: number, period: string, description: string, amount: string): Promise<IncomeResult>
+  ConfirmImportItemAsRefund(id: number, expenseID: number, period: string, amount: string): Promise<RefundResult>
 
   ImportCardStatement(input: CardStatementInput): Promise<CardStatementImportResult>
   ListCardStatements(period: string): Promise<CardStatementsResult>

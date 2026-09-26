@@ -182,6 +182,17 @@ web CSP) and stores them with `SetUFValues`. `fixedTotal` keeps the carried bala
 expenses O(amount changes) (`sumAsOf`) and walks billing months for the rest. Paying or linking a
 bank charge to a month off the schedule is refused (`requireBillsIn`).
 
+**Refunds** (`refund.go`, migration `20260926024`), as YNAB and Monarch treat them: `refunds(expense_id,
+period, amount)` is money returned for one expense (a store return, a bank reversal), partial or
+total, never more than the expense cost (`insertRefund`). It is a negative movimiento of the month it
+arrives in (`SourceReembolso`, status pagado) in its expense's category and card, so `Gastos`,
+`PorCategoria`, budgets, the card's month charges (`cardChargesIn`, statement comparison), the year,
+the trend and the carried balance (`flowsBetween`) are all net of it; the forecast adds it to
+`Libre`. Refunds ride along with their expense: a trashed expense's refunds count nowhere. A pending
+CLP bank credit named like a purchase of the last 120 days that cost at least as much gets a
+suggestion (`refundOf`) and `ConfirmImportItemAsRefund` links it (`import_items.refund_id`); deleting
+the refund lets the credit go back to review.
+
 **Reconciliation / opening balance** (`reconciliation.go`, migration `20260926022`), the reconciliation
 of Actual Budget and YNAB on this app's monthly grain: `reconciliations(user_id, period, amount)` is the
 real account balance at the close of a month (may be negative). `cumulativeBalanceBefore` starts from

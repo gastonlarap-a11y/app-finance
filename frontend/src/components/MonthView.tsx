@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai'
 import {
   FinanceService,
   SOURCE_FIJO,
+  SOURCE_REEMBOLSO,
   STATUS_PAGADO,
   type BudgetStatus,
   type Expense,
@@ -24,11 +25,13 @@ import { ExportButton } from './ExportButton'
 import { TrendPanel } from './TrendPanel'
 import { StatementBanner } from './CardStatements'
 import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
+import { RefundDialog } from './RefundDialog'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
 
 function movKey(m: Movimiento): string {
+  if (m.source === SOURCE_REEMBOLSO) return `reembolso-${m.refundId}`
   return m.source === SOURCE_FIJO ? `fijo-${m.fixedId}` : `cuota-${m.installmentId}`
 }
 
@@ -61,6 +64,8 @@ export function MonthView() {
   const [filterCategory, setFilterCategory] = useState('')
   const [filterCardId, setFilterCardId] = useState<number | ''>('')
   const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
+  const [refundFor, setRefundFor] = useState<Movimiento | null>(null)
+  const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
 
   function openNewExpense() {
     setEditing(null)
@@ -117,6 +122,12 @@ export function MonthView() {
     const failures = results.filter((r) => r.status === 'rejected' || r.value.error).length
     if (failures > 0) notify(`${failures} de ${todo.length} cargos no se pudieron marcar como pagados.`)
     reload()
+  }
+
+  async function removeRefund(refundId: number) {
+    setConfirmRefundId(null)
+    // A bank credit confirmed as this refund can then go back to review.
+    if (!failed(await FinanceService.DeleteRefund(refundId))) invalidate('ledger', 'imports')
   }
 
   async function removeExpense(expenseId: number) {
@@ -284,6 +295,7 @@ export function MonthView() {
                         {filteredMovs.map((m) => {
                           const paid = m.status === STATUS_PAGADO
                           const isFijo = m.source === SOURCE_FIJO
+                          const isRefund = m.source === SOURCE_REEMBOLSO
                           const busy = pending.has(movKey(m))
                           return (
                             <tr key={movKey(m)} className="border-t border-slate-800">
@@ -308,10 +320,10 @@ export function MonthView() {
                                 </span>
                               </td>
                               <td className="hidden py-2 text-slate-400 lg:table-cell">
-                                {isFijo ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}
+                                {isFijo ? 'Fijo' : isRefund ? 'Reembolso' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}
                               </td>
-                              <td className="hidden py-2 text-slate-400 md:table-cell">{isFijo ? '—' : formatDate(m.date)}</td>
-                              <td className="py-2 text-right tabular-nums">
+                              <td className="hidden py-2 text-slate-400 md:table-cell">{isFijo || isRefund ? '—' : formatDate(m.date)}</td>
+                              <td className={`py-2 text-right tabular-nums ${isRefund ? 'text-success' : ''}`}>
                                 {formatCLP(m.amount)}
                                 {m.ufAmount !== null && (
                                   <span
@@ -324,6 +336,9 @@ export function MonthView() {
                                 )}
                               </td>
                               <td className="py-2 text-center">
+                                {isRefund ? (
+                                  <span className="rounded-full bg-success/20 px-2 py-0.5 text-xs font-medium text-success">Devuelto</span>
+                                ) : (
                                 <button
                                   type="button"
                                   onClick={() => togglePaid(m, paid)}
@@ -336,12 +351,36 @@ export function MonthView() {
                                 >
                                   {busy ? '…' : paid ? 'Pagado' : 'Pendiente'}
                                 </button>
+                                )}
                               </td>
                               <td className="whitespace-nowrap py-2 text-right">
                                 {isFijo ? (
                                   <span className="text-xs text-slate-500" title="Se administra en la pestaña Fijos">
                                     Fijo ⚙
                                   </span>
+                                ) : isRefund && m.refundId !== null ? (
+                                  confirmRefundId === m.refundId ? (
+                                    <>
+                                      <button type="button" onClick={() => removeRefund(m.refundId!)} className="text-xs text-danger hover:text-red-400">
+                                        Quitar
+                                      </button>{' '}
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmRefundId(null)}
+                                        className="text-xs text-slate-400 hover:text-slate-200"
+                                      >
+                                        Cancelar
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <IconButton
+                                      label={`Quitar reembolso ${m.description}`}
+                                      onClick={() => setConfirmRefundId(m.refundId)}
+                                      className="text-slate-400 hover:text-danger"
+                                    >
+                                      🗑
+                                    </IconButton>
+                                  )
                                 ) : confirmExpId === m.expenseId ? (
                                   <>
                                     <button
@@ -367,6 +406,13 @@ export function MonthView() {
                                       className="text-slate-400 hover:text-primary"
                                     >
                                       ✎
+                                    </IconButton>{' '}
+                                    <IconButton
+                                      label={`Registrar reembolso de ${m.description}`}
+                                      onClick={() => setRefundFor(m)}
+                                      className="text-slate-400 hover:text-success"
+                                    >
+                                      ↩
                                     </IconButton>{' '}
                                     <IconButton
                                       label={`Eliminar ${m.description}`}
@@ -483,6 +529,18 @@ export function MonthView() {
           target={editing ? { mode: 'edit', expense: editing } : { mode: 'create' }}
           onClose={() => setShowForm(false)}
           onSaved={reload}
+        />
+      )}
+      {refundFor && (
+        <RefundDialog
+          expenseId={refundFor.expenseId}
+          expenseDescription={refundFor.description}
+          defaultPeriod={summary.period}
+          onClose={() => setRefundFor(null)}
+          onSaved={() => {
+            setRefundFor(null)
+            reload()
+          }}
         />
       )}
       {reconcile && (

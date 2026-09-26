@@ -201,6 +201,10 @@ export function ImportInboxView() {
                 onLinkFixed={(fixedId, period) =>
                   run(it.id, () => FinanceService.LinkImportItemToFixed(it.id, fixedId, period))
                 }
+                // The credit's own month and amount: a reversal lands when the bank posts it.
+                onRefund={(expenseId) =>
+                  run(it.id, () => FinanceService.ConfirmImportItemAsRefund(it.id, expenseId, it.date.slice(0, 7), it.amount))
+                }
               />
             ))}
           </ul>
@@ -346,6 +350,7 @@ function ImportRow({
   onRestore,
   onLink,
   onLinkFixed,
+  onRefund,
 }: {
   item: ImportItemView
   cards: Card[]
@@ -355,6 +360,7 @@ function ImportRow({
   onRestore: () => void
   onLink: (expenseId: number) => void
   onLinkFixed: (fixedId: number, period: string) => void
+  onRefund: (expenseId: number) => void
 }) {
   const cardLabel =
     it.cardName !== ''
@@ -375,7 +381,7 @@ function ImportRow({
             </Badge>
           )}
           {it.currency !== 'CLP' && <Badge tone="warn">{it.currency}</Badge>}
-          {isCredit(it) && <Badge>Abono del banco: se registra como ingreso</Badge>}
+          {isCredit(it) && <Badge>Abono del banco: ingreso o reembolso de un gasto</Badge>}
           {it.hint === 'card_payment' && <Badge tone="warn">⚠ Pago de tarjeta: sus compras ya se cuentan aparte</Badge>}
         </div>
         <div className="truncate font-mono text-sm text-slate-100" title={it.description}>
@@ -411,6 +417,14 @@ function ImportRow({
               onClick={() => onLinkFixed(it.suggestedFixedId!, it.suggestedFixedPeriod)}
             >
               Sí, marcarlo pagado
+            </Button>
+          </div>
+        )}
+        {it.suggestedRefundExpenseId != null && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
+            <span>¿Es la devolución de «{it.suggestedRefundDescription}»?</span>
+            <Button variant="ghost" disabled={busy} onClick={() => onRefund(it.suggestedRefundExpenseId!)}>
+              Sí, registrar como reembolso
             </Button>
           </div>
         )}

@@ -67,6 +67,9 @@ type ImportItem struct {
 	// A charge linked to a fixed expense marks that month of it as paid.
 	FixedExpenseID *int64 `bun:"fixed_expense_id" json:"fixedExpenseId"`
 	FixedPeriod    string `bun:"fixed_period,notnull" json:"fixedPeriod"` // YYYY-MM marked paid; "" = not linked
+
+	// A credit confirmed as a refund of an expense (ConfirmImportItemAsRefund).
+	RefundID *int64 `bun:"refund_id" json:"refundId"`
 }
 
 // Import item kinds.
