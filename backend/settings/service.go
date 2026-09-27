@@ -230,11 +230,20 @@ func (s *Service) DownloadDriveBackup(ctx context.Context) ChooseFolderResult {
 	if err := f.Close(); err != nil {
 		return ChooseFolderResult{Error: shared.NewError(shared.ErrInternal, err.Error())}
 	}
-	if err := s.drive.Download(ctx, s.runner.DBFile(), prefs.Load(s.appName).DriveFileID, path); err != nil {
+	dbFile := s.runner.DBFile()
+	remote, err := s.drive.Download(ctx, strings.TrimSuffix(dbFile, filepath.Ext(dbFile)), path)
+	if err != nil {
 		_ = os.Remove(path) // nothing usable was downloaded
 		return ChooseFolderResult{Error: restoreError(err)}
 	}
-	return ChooseFolderResult{Path: path}
+	source := "Google Drive"
+	if device := backup.DriveDevice(dbFile, remote.Name); device != "" {
+		source += " · equipo " + device
+	}
+	if !remote.Modified.IsZero() {
+		source += " · " + remote.Modified.Local().Format("02/01/2006 15:04")
+	}
+	return ChooseFolderResult{Path: path, Source: source}
 }
 
 // InspectBackup checks a backup and reports what it holds and how it relates

@@ -864,6 +864,7 @@ export type StateResult = Result<SettingsState>
 export interface ChooseFolderResult {
   canceled?: boolean
   path?: string
+  source?: string // where a downloaded backup came from (Drive: device and date)
   error?: AppError | null
 }
 
