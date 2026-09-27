@@ -1,12 +1,11 @@
 import { useState, type ReactNode } from 'react'
-import { useSetAtom } from 'jotai'
 import {
   FinanceService,
   type CardStatementLineView,
   type CardStatementView,
 } from '@/services/finance'
-import { tabAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
+import { navigate } from '@/lib/useRoute'
 import { failed } from '@/lib/result'
 import { compare, isZero, subtract } from '@/lib/money'
 import { useQuery } from '@/lib/useQuery'
@@ -46,7 +45,7 @@ function ComparisonLine({ st }: { st: CardStatementView }) {
     return (
       <span className="text-slate-500">
         {st.cardName === ''
-          ? `Sin tarjeta: escribe ${st.cardLastDigits} como últimos 4 dígitos de tu tarjeta (en Tarjetas) y se asociarán sus estados nacional e internacional.`
+          ? `Sin tarjeta: escribe ${st.cardLastDigits} como últimos 4 dígitos de tu tarjeta (en Configuración › Tarjetas) y se asociarán sus estados nacional e internacional.`
           : 'Las compras en dólares se comparan en la bandeja, una por una.'}
       </span>
     )
@@ -88,7 +87,7 @@ export function CardStatementsSection() {
         <Spinner />
       ) : query.data.length === 0 ? (
         <Empty>
-          Aún no importas estados de cuenta. Hazlo desde Importar con el PDF de la tarjeta (Itaú, el del correo o el de su web, o
+          Aún no importas estados de cuenta. Hazlo desde la Bandeja con el PDF de la tarjeta (Itaú, el del correo o el de su web, o
           Banco de Chile): se guarda completo y sus compras se comparan con tus gastos.
         </Empty>
       ) : (
@@ -165,7 +164,6 @@ function lineOutcome(l: CardStatementLineView): string {
 
 function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => void }) {
   const version = useVersion('imports', 'ledger')
-  const setTab = useSetAtom(tabAtom)
   const query = useQuery(`${id}:${version}`, async () => {
     const res = await FinanceService.GetCardStatement(id)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'estado de cuenta no disponible')
@@ -222,7 +220,7 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
                   className="text-primary underline"
                   onClick={() => {
                     onClose()
-                    setTab('importar')
+                    navigate({ page: 'importar', tab: 'bandeja' })
                   }}
                 >
                   revisar {d.statement.pendingItems} en Importar

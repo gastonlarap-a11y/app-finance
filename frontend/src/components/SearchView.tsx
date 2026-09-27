@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useSetAtom } from 'jotai'
 import { FinanceService, KIND_UNICO, type ExpenseFilter } from '@/services/finance'
-import { periodAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { navigate } from '@/lib/useRoute'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
@@ -23,13 +24,14 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced
 }
 
-export function SearchView() {
+// SearchView searches the whole history. `initialText` comes from the route
+// (#/buscar?q=…), so a search can be opened from elsewhere already filled in.
+export function SearchView({ initialText = '' }: { initialText?: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
   const setPeriod = useSetAtom(periodAtom)
-  const setTab = useSetAtom(tabAtom)
 
-  const [text, setText] = useState('')
+  const [text, setText] = useState(initialText)
   const [category, setCategory] = useState('')
   const [tag, setTag] = useState('')
   const [cardId, setCardId] = useState('')
@@ -206,7 +208,7 @@ export function SearchView() {
                             className="text-xs text-primary hover:underline"
                             onClick={() => {
                               setPeriod(hit.firstPeriod)
-                              setTab('mes')
+                              navigate({ page: 'resumen' })
                             }}
                           >
                             Ver mes

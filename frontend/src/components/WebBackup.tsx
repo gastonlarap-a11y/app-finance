@@ -9,12 +9,13 @@
 // spent in the system file picker. A suppressed confirm() returns false, which
 // used to abort the import without a single word on screen.
 import { useRef, useState, type ReactNode } from 'react'
+import { Download, Upload } from 'lucide-react'
 import { exportDb, importDb, inspectDb, type ImportSummary } from '@/services/web/settings'
 import { SyncNoticeBox } from './SyncNoticeBox'
 import { validateSqliteFile } from '@/engine/db/dbfile'
 import { backupFilename, shareOrDownload } from '@/lib/exportFile'
 import { useQuery } from '@/lib/useQuery'
-import { Button, Modal, Section } from './ui'
+import { Button, IconButton, Modal, Section } from './ui'
 
 type ExportState =
   | { kind: 'idle' }
@@ -83,24 +84,31 @@ async function runExport(state: ExportState, setState: (s: ExportState) => void)
 
 function exportLabel(state: ExportState): string {
   if (state.kind === 'running') return 'Exportando…'
-  if (state.kind === 'ready') return '⬇ Compartir respaldo'
-  return '⬇ Exportar datos'
+  if (state.kind === 'ready') return 'Compartir respaldo'
+  return 'Exportar datos'
 }
 
-// Compact header control (replaces the Drive BackupControl on web).
-export function WebExportControl() {
+// Sidebar control (replaces the Drive backup control on web); `compact` is the
+// icon-only version for the narrow sidebar rail.
+export function WebExportControl({ compact = false }: { compact?: boolean }) {
   const [state, setState] = useState<ExportState>({ kind: 'idle' })
+  const run = () => void runExport(state, setState)
+  const running = state.kind === 'running'
   return (
-    <span className="inline-flex items-center gap-2">
-      <Button variant="ghost" onClick={() => void runExport(state, setState)} disabled={state.kind === 'running'}>
-        {exportLabel(state)}
-      </Button>
-      {state.kind === 'failed' && (
-        <span role="alert" className="text-xs text-red-300">
-          No se pudo exportar: {state.message}
-        </span>
+    <div className={compact ? 'flex flex-col items-center gap-1' : 'space-y-1 px-1'}>
+      {compact ? (
+        <IconButton label={exportLabel(state)} icon={Download} onClick={run} disabled={running} />
+      ) : (
+        <Button variant="secondary" size="sm" icon={Download} onClick={run} loading={running} className="w-full">
+          {exportLabel(state)}
+        </Button>
       )}
-    </span>
+      {state.kind === 'failed' && (
+        <p role="alert" className="text-xs text-negative-fg">
+          No se pudo exportar: {state.message}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -202,7 +210,7 @@ export function WebSettingsView() {
   const busy = state.kind === 'running' || state.kind === 'done' || state.kind === 'inspecting'
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="space-y-5">
       <Section title="Tus datos">
         <p className="text-sm text-slate-400">
           Tus finanzas se guardan únicamente en este dispositivo (almacenamiento local del
@@ -217,11 +225,11 @@ export function WebSettingsView() {
 
       <Section title="Respaldo">
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={() => void runExport(exportState, setExportState)} disabled={exportState.kind === 'running'}>
+          <Button icon={Download} onClick={() => void runExport(exportState, setExportState)} loading={exportState.kind === 'running'}>
             {exportLabel(exportState)}
           </Button>
-          <Button variant="ghost" onClick={() => fileRef.current?.click()} disabled={busy}>
-            {state.kind === 'running' ? 'Importando…' : state.kind === 'inspecting' ? 'Revisando…' : '⬆ Importar respaldo'}
+          <Button variant="secondary" icon={Upload} onClick={() => fileRef.current?.click()} disabled={busy}>
+            {state.kind === 'running' ? 'Importando…' : state.kind === 'inspecting' ? 'Revisando…' : 'Importar respaldo'}
           </Button>
           <input
             ref={fileRef}

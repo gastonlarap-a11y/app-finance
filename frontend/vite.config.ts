@@ -34,10 +34,14 @@ export default defineConfig(({ mode }) => {
       // Applies the saved light/dark theme before the first paint (public/theme-init.js).
       // A blocking same-origin script, not inline: the web CSP allows only 'self'.
       // injectTo 'head' lands after the CSP meta, which is head-prepended.
+      // data-target tells the script whether it runs in the desktop window.
       {
         name: 'theme-init',
-        transformIndexHtml() {
-          return [{ tag: 'script', attrs: { src: `${base}theme-init.js` }, injectTo: 'head' as const }]
+        transformIndexHtml(html) {
+          return {
+            html: html.replace('<html lang="es">', `<html lang="es" data-target="${isWeb ? 'web' : 'desktop'}">`),
+            tags: [{ tag: 'script', attrs: { src: `${base}theme-init.js` }, injectTo: 'head' as const }],
+          }
         },
       } satisfies PluginOption,
       ...(isWeb

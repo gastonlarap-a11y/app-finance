@@ -140,8 +140,8 @@ export function Menu({
           if (layer) itemButtons(layer)[0]?.focus()
         }}
         onKeyDown={onTriggerKeyDown}
-        className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-md transition-colors pointer-coarse:min-w-11 ${
-          trigger ? 'px-2 py-1' : 'size-8'
+        className={`inline-flex shrink-0 items-center gap-2 rounded-md transition-colors pointer-coarse:min-w-11 ${
+          trigger ? 'px-2 py-1' : 'size-8 justify-center'
         } ${triggerClassName}`}
       >
         {trigger ?? <TriggerIcon aria-hidden="true" className="size-4" />}

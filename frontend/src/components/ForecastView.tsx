@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { FinanceService } from '@/services/finance'
-import { periodAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { navigate } from '@/lib/useRoute'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { compare, isNegative, isZero, maxAbs, ratio, sum } from '@/lib/money'
@@ -18,7 +19,6 @@ export function ForecastView() {
   const [period, setPeriod] = useAtom(periodAtom)
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
-  const setTab = useSetAtom(tabAtom)
   const [months, setMonths] = useState<Horizon>(12)
 
   const query = useQuery(`${period}:${months}:${version}`, async () => {
@@ -114,7 +114,7 @@ export function ForecastView() {
                       className="rounded font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
                       onClick={() => {
                         setPeriod(m.period)
-                        setTab('mes')
+                        navigate({ page: 'resumen' })
                       }}
                     >
                       {periodLabel(m.period)}

@@ -212,6 +212,10 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   (`slate-400`, `amber-200`…), which `src/styles/rawclasses.test.ts` ratchets down to zero; token
   contrast is asserted by `src/styles/tokens.test.ts`. Icons are `lucide-react` static imports.
   Details: `.claude/rules/frontend-ui.md` and `ARCHITECTURE.md` §21.
+- **Navigation**: screens are routes in the URL hash (`frontend/src/lib/route.ts`); move with
+  `navigate()`/`<Link>`, never with an atom. Month-dependent data belongs in the month views;
+  what is configured once, in Configuración (`components/config/sections.tsx`). Keyboard shortcuts
+  go through `lib/shortcuts.ts`. See `ARCHITECTURE.md` §22.
 - **Go⇄TS parity (invariant)**: adding or changing a bound method in `finance`/`users` requires the
   same change in `frontend/src/services/contract.ts` and in the web engine
   (`frontend/src/engine/…/service.ts`), with a mirror test in vitest. Migrations need no engine

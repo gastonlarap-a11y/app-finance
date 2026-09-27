@@ -4,6 +4,7 @@
 // (THEME_STORAGE_KEY, THEME_LIGHT_ENABLED); src/lib/theme.test.ts keeps them in sync.
 ;(function () {
   var LIGHT_ENABLED = false
+  var root = document.documentElement
   var mode = 'system'
   try {
     var saved = localStorage.getItem('app-finance:theme')
@@ -13,5 +14,10 @@
   }
   var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   var dark = mode === 'dark' || (mode === 'system' && (systemDark || !LIGHT_ENABLED))
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  root.dataset.theme = dark ? 'dark' : 'light'
+  // Desktop window chrome (see main.go): which OS draws the window.
+  if (root.dataset.target === 'desktop') {
+    var ua = navigator.userAgent
+    root.dataset.os = /Macintosh/.test(ua) ? 'mac' : /Windows/.test(ua) ? 'windows' : 'other'
+  }
 })()

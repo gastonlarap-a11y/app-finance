@@ -1,6 +1,7 @@
 ---
 paths:
   - "frontend/src/components/**"
+  - "frontend/src/lib/route.ts"
   - "frontend/src/App.tsx"
   - "frontend/src/main.tsx"
   - "frontend/src/index.css"
@@ -26,5 +27,10 @@ paths:
   mouse and 44px on `pointer: coarse` (the primitives already do it).
 - **Every async view** ships loading (skeleton), empty (reason + action), error (`QueryError`
   with retry) and stale (dimmed, `aria-busy`) states.
+- **Navigation**: link screens with `<Link to={route}>` / `navigate(route)` (`lib/route.ts`,
+  `lib/useRoute.ts`), never "la pestaña X" in copy. A new Configuración section = a
+  `ConfigSection` in `lib/route.ts` + its entry in `components/config/sections.tsx`. Each screen's
+  title comes from `components/shell/nav.ts` (the shell renders the `PageHeader`).
 - **Tests**: interactive behavior (focus, keyboard, dialogs, popovers) in `*.dom.test.tsx`
-  (vitest browser project, real Chromium); pure logic in `*.test.ts` (Node).
+  (vitest browser project, real Chromium; mock `@/services/*` with `vi.mock`); pure logic in
+  `*.test.ts` (Node).

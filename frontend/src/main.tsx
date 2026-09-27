@@ -5,6 +5,7 @@ import '@fontsource-variable/inter/wght.css'
 import '@/index.css'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { startThemeSync } from '@/lib/theme'
+import { startRouteMemory } from '@/lib/useRoute'
 
 // Fatal replaces the app with a message. It always offers a reload: an
 // installed PWA has no browser chrome, so without the button a stuck screen
@@ -65,6 +66,7 @@ function reportEngineFailures(root: ReactDOM.Root) {
 
 async function start() {
   startThemeSync()
+  startRouteMemory()
   const root = ReactDOM.createRoot(document.getElementById('root')!)
   // Literal (via define) so the bundler drops the web-only import on desktop.
   if (import.meta.env.VITE_TARGET === 'web') {

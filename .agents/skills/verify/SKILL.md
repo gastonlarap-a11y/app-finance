@@ -19,10 +19,16 @@ This is a Wails v3 desktop app — "verify" means the app actually builds, binds
    - `curl -s -o /dev/null -w '%{http_code}' http://localhost:9245/src/main.tsx` must print 200: a
      500 means a module the desktop dev server cannot resolve (e.g. a web-only virtual module
      imported from a file the desktop also loads), and the window stays blank.
-3. **Exercise the changed surface** in the window (the relevant tab: Mes, Año, Gastos fijos,
-   Tarjetas, Categorías, Comercios, Papelera, Ajustes) and, for backend changes, confirm the
-   expected data/behavior. For user-scoping changes, switch profiles (`UserSwitcher`) and confirm
-   each profile sees only its own data.
+3. **Exercise the changed surface** in the window — the sidebar screens (Resumen, Importar, Buscar,
+   Año, Proyección, Gastos fijos, Ahorro) or the Configuración section involved (Tarjetas, Cuentas,
+   Categorías y presupuestos, Etiquetas, Comercios, Reglas, Respaldo, Correo, Perfiles, Papelera,
+   Apariencia, Actualizaciones); each has a URL (`#/config/tarjetas`) — and, for backend changes,
+   confirm the expected data/behavior. For user-scoping changes, switch profiles (sidebar footer)
+   and confirm each profile sees only its own data.
+   - To look at the native window, capture only it: get its id with a CoreGraphics window list
+     (owner "App Finance") and run `screencapture -x -o -l<id> <file>.png`.
+   - Web target: `npm run build:web && npx vite preview --mode web`; unregister the service worker
+     (DevTools or `navigator.serviceWorker.getRegistrations()`) or you get the previously cached build.
 4. Stop the dev process; report what was actually observed (not just that it compiled).
 
 > Never use `wails dev` (the v2 CLI) — it fails with *"Unable to find Wails in go.mod"*. Use

@@ -5,12 +5,19 @@ Go backend enlazado a un frontend React, empaquetado como app nativa para **macO
 Además se distribuye como **PWA instalable para iPad/web**: el mismo frontend con un motor
 TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor); ver
 `ARCHITECTURE.md` §17. Para instalarla en un iPad: abrir la URL publicada (GitHub Pages) en Safari
-→ Compartir → **Añadir a pantalla de inicio**, y usar «Exportar datos» en Ajustes como respaldo.
+→ Compartir → **Añadir a pantalla de inicio**, y usar «Exportar datos» (barra lateral o
+Configuración › Respaldo) como respaldo.
 
 ## Funcionalidades
 
-- **Mes**: sueldo mensual, ingresos extra y tabla de movimientos que combina cuotas de tarjeta de crédito
-  y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?).
+La navegación es una **barra lateral agrupada** (Resumen, Importar, Buscar · Análisis · Planificar) con
+**Configuración** al pie: lo que cambia mes a mes vive en las vistas del mes; lo que se ajusta una vez
+(tarjetas, cuentas, categorías, comercios, reglas, respaldo, perfiles, papelera…) vive en Configuración.
+Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre la última visitada.
+
+- **Resumen del mes**: sueldo mensual, ingresos extra y tabla de movimientos que combina cuotas de tarjeta
+  de crédito y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?), cupo de
+  tarjetas y saldo de cuentas.
 - **Gastos fijos**: suscripciones/servicios que se trasladan automáticamente cada mes. Editar el monto de
   un mes aplica **desde ese mes en adelante** — los meses anteriores conservan su valor. Cada cargo puede
   marcarse pagado/pendiente por mes.
@@ -31,15 +38,18 @@ TypeScript local sobre SQLite-wasm (datos 100 % en el dispositivo, sin servidor)
   en gasto fijo con un clic.
 - **Exportar**: mes, año y resultados de búsqueda a Excel (.xlsx con diálogo nativo) en desktop, o CSV
   (Compartir/Archivos) en el iPad.
-- **Tarjetas / Categorías / Comercios**: administrar tarjetas de crédito (cupo, día de cierre),
-  categorías y comercios.
-- **Atajos**: `←`/`→` cambian de mes (o de año en «Año»), `N` abre «Agregar gasto».
+- **Configuración › Tarjetas / Cuentas / Categorías y presupuestos / Etiquetas / Comercios / Reglas de
+  importación**: todo lo que se configura una vez.
+- **Atajos**: `N` abre «Agregar gasto» desde cualquier pantalla; `←`/`→` cambian de mes (o de año en
+  «Año»); `⌘1`…`⌘7` (Ctrl en Windows) saltan a cada sección de la barra lateral y `⌘,` abre
+  Configuración. Ninguno actúa con un diálogo abierto.
 - **Perfiles (multi-usuario, sin login)**: varios perfiles sobre una sola base de datos; cada uno ve
-  únicamente sus datos y el cambio de perfil es instantáneo.
-- **Papelera**: eliminar tarjetas, categorías, ingresos, gastos, gastos fijos o perfiles los manda a
-  la papelera (soft delete) con opción de restaurar; no se borran de inmediato.
-- **Ajustes**: elegir la carpeta de la base de datos, conectar Google Drive y hacer backup de la BD
-  (bajo demanda o al cerrar).
+  únicamente sus datos y el cambio de perfil es instantáneo (pie de la barra lateral; crear y eliminar en
+  Configuración › Perfiles).
+- **Papelera** (Configuración): eliminar tarjetas, categorías, ingresos, gastos, gastos fijos o perfiles
+  los manda a la papelera (soft delete) con opción de restaurar; no se borran de inmediato.
+- **Configuración › Respaldo y Google Drive**: elegir la carpeta de la base de datos, conectar Google
+  Drive y hacer backup de la BD (bajo demanda —también desde la barra lateral— o al cerrar).
 
 ## Stack
 
@@ -228,7 +238,7 @@ display_name  = "App Finance"
 log_level     = "info"         # debug | info | warn | error
 db_filename   = "app-finance.db"
 data_strategy = "osstandard"   # osstandard | besideexe
-# data_dir    = "/ruta/a/sqlite"  # opcional; la pestaña Ajustes tiene prioridad
+# data_dir    = "/ruta/a/sqlite"  # opcional; Configuración › Respaldo tiene prioridad
 ```
 
 Variables de entorno del proceso (no se lee ningún archivo `.env`) que sobreescriben claves
@@ -242,13 +252,13 @@ individuales:
 | `DATA_STRATEGY` | `data_strategy` |
 | `DB_DATA_DIR` | `data_dir` |
 | `BACKUP_LOCAL_DIR` | carpeta de copias locales del backup |
-| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | cliente OAuth de Drive (si no se pega en Ajustes) |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | cliente OAuth de Drive (si no se pega en Configuración › Respaldo) |
 
-Las preferencias configuradas desde la pestaña **Ajustes** de la app (carpeta de BD, Drive/OAuth,
-backup al cerrar) tienen prioridad en runtime via `backend/shared/prefs`.
+Las preferencias configuradas desde **Configuración › Respaldo y Google Drive** (carpeta de BD,
+Drive/OAuth, backup al cerrar) tienen prioridad en runtime via `backend/shared/prefs`.
 
 El backup de Google Drive (cliente OAuth, carpeta, backup al cerrar) se configura enteramente desde
-la pestaña **Ajustes** — no requiere claves en config.toml.
+**Configuración › Respaldo y Google Drive** — no requiere claves en config.toml.
 
 ---
 
@@ -290,14 +300,16 @@ app-finance/
     ├── index.html · vite.config.ts · package.json · tsconfig.json
     └── src/
         ├── main.tsx · App.tsx · index.css
-        ├── atoms/finance.ts              # estado Jotai de UI (tab, period, refresh)
+        ├── atoms/                        # estado Jotai de UI (period, quick-add, refresh)
         ├── services/{finance,users,settings,diagnostics}.ts  # wrappers tipados por contract.ts
         ├── services/web/*                # adaptadores del target web (motor TS local)
         ├── engine/                       # port TS del dominio sobre sqlite-wasm (target web)
-        ├── lib/{format,money,result,notify,useQuery}.ts
-        └── components/                   # MonthView, YearView, ForecastView, SearchView,
-                                          #   FixedExpensesView, CardsView, CategoriesView,
-                                          #   MerchantsView, TrashView, UserSwitcher, SettingsView, …
+        ├── lib/{route,useRoute,shortcuts,theme,format,money,result,notify,useQuery}.ts
+        └── components/
+            ├── shell/                    # AppShell, Sidebar, PeriodNav, QuickAddHost, MobileTopBar
+            ├── config/                   # hub de Configuración (sections.tsx) y sus secciones nuevas
+            ├── ui/                       # primitivas (Button, Menu, Tabs, Callout, ConfirmAction…)
+            └── MonthView, YearView, ForecastView, SearchView, FixedExpensesView, CardsView, …
 ```
 
 ---

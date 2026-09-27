@@ -1,17 +1,19 @@
 import { useState, type ReactNode, type SubmitEvent } from 'react'
-import { useSetAtom } from 'jotai'
+import { FileText, Inbox } from 'lucide-react'
 import {
   FinanceService,
   KIND_CUOTAS,
   KIND_UNICO,
   type Card,
   type ImportItemView,
-  type MerchantRule,
   type OpResult,
 } from '@/services/finance'
 import type { ImportStatus } from '@/services/contract'
-import { tabAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
+import type { ImportTab } from '@/lib/route'
+import { navigate } from '@/lib/useRoute'
+import { CardStatementsSection } from './CardStatements'
+import { Link } from './Link'
 import { MailSyncService } from '@/services/mailsync'
 import { IS_WEB } from '@/lib/platform'
 import { syncStatusText } from './MailSettings'
@@ -22,7 +24,7 @@ import { errorText, useQuery } from '@/lib/useQuery'
 import { formatAmount, formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { ExpenseForm } from './ExpenseForm'
 import { StatementImport } from './StatementImport'
-import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
+import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, TabPanel, Tabs, inputCls } from './ui'
 
 const STATUSES: { id: ImportStatus; label: string }[] = [
   { id: 'pendiente', label: 'Por revisar' },
@@ -34,7 +36,7 @@ const STATUSES: { id: ImportStatus; label: string }[] = [
 const EMPTY_TEXT: Record<ImportStatus, string> = {
   pendiente: IS_WEB
     ? 'No hay movimientos por revisar. Aparecen aquí al importar un estado de cuenta en PDF.'
-    : 'No hay movimientos por revisar. Aparecen aquí al importar un estado de cuenta en PDF o al revisar tu correo de alertas (Ajustes).',
+    : 'No hay movimientos por revisar. Aparecen aquí al importar un estado de cuenta en PDF o al revisar tu correo de alertas (Configuración › Correo del banco).',
   conciliado: 'Aún no hay movimientos conciliados: son los que el banco informó dos veces (alerta de correo y estado de cuenta).',
   confirmado: 'Aún no confirmas movimientos. Al confirmarlos se convierten en gastos del mes.',
   descartado: 'No hay movimientos descartados.',
@@ -77,24 +79,26 @@ function confirmAsSuggested(it: ImportItemView) {
   )
 }
 
-// PendingImportsBadge shows on the Importar tab how many movements await
-// review; it renders nothing when the inbox is empty or cannot be read.
-export function PendingImportsBadge() {
-  const version = useVersion('imports')
-  const query = useQuery(version, async () => (await FinanceService.ListImportItems('pendiente')).data?.length ?? 0)
-  const n = query.data ?? 0
-  if (n === 0) return null
+const IMPORT_TABS = [
+  { value: 'bandeja', label: 'Bandeja', icon: Inbox },
+  { value: 'estados', label: 'Estados de cuenta', icon: FileText },
+] as const satisfies readonly { value: ImportTab; label: string; icon: typeof Inbox }[]
+
+// ImportInboxView is the Importar screen: the inbox of bank movements waiting
+// for review, and the imported credit-card statements. The tab is part of the
+// route (#/importar, #/importar/estados).
+export function ImportInboxView({ tab }: { tab: ImportTab }) {
   return (
-    <>
-      <span aria-hidden="true" className="ml-1.5 rounded-full bg-amber-500 px-1.5 text-xs font-bold text-slate-900">
-        {n}
-      </span>
-      <span className="sr-only">, {n} por revisar</span>
-    </>
+    <div>
+      <Tabs label="Importar" idBase="importar" value={tab} tabs={IMPORT_TABS} onChange={(t) => navigate({ page: 'importar', tab: t })} />
+      <TabPanel idBase="importar" value={tab}>
+        {tab === 'estados' ? <CardStatementsSection /> : <InboxPanel />}
+      </TabPanel>
+    </div>
   )
 }
 
-export function ImportInboxView() {
+function InboxPanel() {
   const version = useVersion('imports', 'ledger')
   const invalidate = useInvalidate()
   // Confirming, linking or importing writes expenses/incomes/payments too.
@@ -212,7 +216,12 @@ export function ImportInboxView() {
         )}
       </Section>
 
-      <RulesSection rules={rules} onChanged={reload} />
+      <p className="text-sm text-fg-muted">
+        {rules.length === 0
+          ? 'Al confirmar un movimiento puedes pedir que se recuerde su comercio y categoría. '
+          : `${rules.length} regla${rules.length === 1 ? '' : 's'} aprendida${rules.length === 1 ? '' : 's'} completa${rules.length === 1 ? '' : 'n'} los movimientos que llegan. `}
+        <Link to={{ page: 'config', section: 'reglas' }}>Ver reglas de importación</Link>
+      </p>
 
       {confirming && (
         <ExpenseForm
@@ -298,7 +307,6 @@ function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; o
 // MailSyncStatus shows when the bank's alert emails were last read and lets
 // the user read them now (desktop only; the outcome arrives as an event).
 function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
-  const setTab = useSetAtom(tabAtom)
   const [requested, setRequested] = useState(false)
   const version = useVersion('mail')
   const query = useQuery(version, async () => (await MailSyncService.GetMailState()).data ?? null)
@@ -308,7 +316,7 @@ function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
     return (
       <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
         <span>Conecta tu correo para traer las alertas de compra automáticamente.</span>
-        <Button variant="ghost" onClick={() => setTab('ajustes')}>
+        <Button variant="ghost" onClick={() => navigate({ page: 'config', section: 'correo' })}>
           Configurar correo
         </Button>
       </div>
@@ -477,50 +485,5 @@ function ImportRow({
         )}
       </div>
     </li>
-  )
-}
-
-function RulesSection({ rules, onChanged }: { rules: MerchantRule[]; onChanged: () => void }) {
-  const [confirmId, setConfirmId] = useState<number | null>(null)
-
-  async function remove(id: number) {
-    setConfirmId(null)
-    if (!failed(await FinanceService.DeleteMerchantRule(id))) onChanged()
-  }
-
-  return (
-    <Section title="Reglas aprendidas">
-      {rules.length === 0 ? (
-        <Empty>Al confirmar un movimiento puedes pedir que se recuerde su comercio y categoría para las próximas glosas iguales.</Empty>
-      ) : (
-        <ul className="space-y-2">
-          {rules.map((r) => (
-            <li key={r.id} className="flex items-center justify-between gap-3 rounded-base bg-surface p-3 ring-1 ring-slate-800">
-              <div className="min-w-0 text-sm">
-                <span className="font-mono text-slate-100">«{r.pattern}…»</span>{' '}
-                <span className="text-slate-400">
-                  → {r.merchant || 'sin comercio'} · {r.category || 'Sin categoría'}
-                </span>
-              </div>
-              {confirmId === r.id ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-danger">¿Olvidar?</span>
-                  <Button variant="danger" onClick={() => remove(r.id)}>
-                    Sí
-                  </Button>
-                  <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                    No
-                  </Button>
-                </div>
-              ) : (
-                <Button variant="ghost" onClick={() => setConfirmId(r.id)}>
-                  Olvidar
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Section>
   )
 }
