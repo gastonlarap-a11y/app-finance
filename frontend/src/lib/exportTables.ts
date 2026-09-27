@@ -24,6 +24,7 @@ export function monthTable(s: MonthlySummary): ExportTable {
       { title: 'Cuota', kind: 'text' },
       { title: 'Estado', kind: 'text' },
       { title: 'Monto', kind: 'money' },
+      { title: 'Código banco', kind: 'text' },
     ],
     rows: s.movimientos.map((m) => [
       m.date ? m.date.slice(0, 10) : '',
@@ -34,6 +35,7 @@ export function monthTable(s: MonthlySummary): ExportTable {
       m.source === SOURCE_FIJO ? 'Fijo' : m.total > 1 ? `${m.number}/${m.total}` : 'Único',
       m.status,
       m.amount,
+      m.references.join(', '),
     ]),
   }
 }
@@ -72,6 +74,7 @@ export function searchTable(items: ExpenseHit[]): ExportTable {
       { title: 'Desde', kind: 'text' },
       { title: 'Hasta', kind: 'text' },
       { title: 'Etiquetas', kind: 'text' },
+      { title: 'Código banco', kind: 'text' },
     ],
     rows: items.map((h) => [
       h.expense.date.slice(0, 10),
@@ -86,6 +89,7 @@ export function searchTable(items: ExpenseHit[]): ExportTable {
       h.firstPeriod,
       h.lastPeriod,
       h.tags.join(', '),
+      h.references.join(', '),
     ]),
   }
 }

@@ -279,6 +279,22 @@ export function TagChips({ tags }: { tags: readonly string[] }) {
   )
 }
 
+// BankCodes shows the bank's reference codes of an expense (one per statement
+// that reported it), each selectable whole to quote it in a dispute.
+export function BankCodes({ codes }: { codes: readonly string[] }) {
+  if (codes.length === 0) return null
+  return (
+    <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-500" title="Código de referencia del banco: sirve para reclamar el cargo">
+      Cód.
+      {codes.map((c) => (
+        <span key={c} className="font-mono select-all">
+          {c}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="rounded-base bg-surface p-6 text-center text-slate-500">{children}</div>
 }

@@ -378,8 +378,15 @@ function ImportRow({
           {cardLabel && <Badge>{cardLabel}</Badge>}
           {it.installmentsTotal > 1 && (
             <Badge>
-              {it.installmentNumber > 1 ? `Cuota ${it.installmentNumber} de ${it.installmentsTotal}` : `${it.installmentsTotal} cuotas`}
+              {it.installmentNumber > 1
+                ? `Cuota ${it.installmentNumber} de ${it.installmentsTotal}`
+                : `${it.installmentsTotal} cuotas${it.firstPeriod !== '' ? ` desde ${periodLabel(it.firstPeriod)}` : ''}`}
             </Badge>
+          )}
+          {it.reference !== '' && (
+            <span className="font-mono select-all" title="Código de referencia del banco: sirve para reclamar el cargo">
+              Cód. {it.reference}
+            </span>
           )}
           {it.currency !== 'CLP' && <Badge tone="warn">{it.currency}</Badge>}
           {isCredit(it) && <Badge>Abono del banco: ingreso o reembolso de un gasto</Badge>}

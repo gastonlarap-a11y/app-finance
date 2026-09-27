@@ -6,7 +6,7 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
-import { Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
+import { BankCodes, Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
 import { ExportButton } from './ExportButton'
 
 const PAGE = 50
@@ -76,13 +76,13 @@ export function SearchView() {
       <Section title="Buscar gastos">
         <form role="search" onSubmit={(e) => e.preventDefault()} className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
           <div className="lg:col-span-2">
-            <Field label="Texto (descripción o comercio)">
+            <Field label="Texto (descripción, comercio o código del banco)">
               <input
                 type="search"
                 className={inputCls}
                 value={text}
                 onChange={(e) => changeFilter(setText)(e.target.value)}
-                placeholder="Ej: supermercado, Falabella…"
+                placeholder="Ej: supermercado, Falabella, 12345678…"
               />
             </Field>
           </div>
@@ -182,6 +182,7 @@ export function SearchView() {
                         <div className="font-medium">{ex.description}</div>
                         {ex.merchant && <div className="text-xs text-slate-500">{ex.merchant}</div>}
                         <TagChips tags={hit.tags} />
+                        <BankCodes codes={hit.references} />
                       </td>
                       <td className="hidden py-2 text-slate-400 md:table-cell">{ex.category || 'Sin categoría'}</td>
                       <td className="hidden py-2 text-slate-400 lg:table-cell">{hit.cardName || '—'}</td>

@@ -18,7 +18,7 @@ import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
 import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
-import { Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
+import { BankCodes, Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
@@ -319,6 +319,7 @@ export function MonthView() {
                                   {m.description}
                                 </span>
                                 <TagChips tags={m.tags} />
+                                <BankCodes codes={m.references} />
                               </td>
                               <td className="hidden py-2 text-slate-400 md:table-cell">
                                 <span className="block max-w-[140px] truncate" title={m.category}>
