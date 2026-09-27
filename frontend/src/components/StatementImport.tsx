@@ -1,8 +1,9 @@
 import { useId, useRef, useState } from 'react'
 import { FinanceService, type CardStatementImport, type StageSummary } from '@/services/finance'
 import type { DetectedStatement } from '@/lib/statements/detect'
+import { FileUp, X } from 'lucide-react'
 import { errorText } from '@/lib/useQuery'
-import { Button } from './ui'
+import { Button, Callout, IconButton } from './ui'
 import { CsvImportDialog } from './CsvImport'
 
 // Outcome of one "Importar PDF" run, shown until dismissed or replaced.
@@ -139,10 +140,10 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
             if (file) void importFile(file) // errors are caught inside importFile
           }}
         />
-        <Button onClick={() => input.current?.click()} disabled={busy}>
+        <Button icon={FileUp} onClick={() => input.current?.click()} loading={busy}>
           {busy ? 'Leyendo archivo…' : 'Importar cartola (PDF o CSV)'}
         </Button>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-fg-subtle">
           PDF: cartola o estado de cuenta de tarjeta Itaú. CSV: la cartola exportada por cualquier banco (eliges qué columna
           es cada dato). Reimportar el mismo archivo no duplica movimientos.
         </span>
@@ -169,40 +170,34 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
       )}
 
       {outcome && (
-        <div
+        <Callout
           role="status"
-          className={`rounded-base p-3 text-sm ring-1 ${outcome.kind === 'error' ? 'bg-danger/10 ring-danger/40' : 'bg-surface ring-slate-800'}`}
+          tone={outcome.kind === 'error' ? 'negative' : outcome.warnings.length > 0 ? 'caution' : 'positive'}
+          title={outcome.file}
+          action={<IconButton label="Cerrar el resultado" icon={X} size="sm" onClick={() => setOutcome(null)} />}
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="space-y-1">
-              <div className="font-medium">{outcome.file}</div>
-              {outcome.kind === 'error' ? (
-                <p className="text-red-200">{outcome.message}</p>
-              ) : (
-                <>
-                  {outcome.results.map((r) => (
-                    <p key={r} className="text-slate-300">
-                      {r}
-                    </p>
-                  ))}
+          {outcome.kind === 'error' ? (
+            <p>{outcome.message}</p>
+          ) : (
+            <>
+              {outcome.results.map((r) => (
+                <p key={r}>{r}</p>
+              ))}
+              {outcome.warnings.length > 0 && (
+                <ul className="list-disc space-y-0.5 pl-5">
                   {outcome.warnings.map((w) => (
-                    <p key={w} className="text-amber-200">
-                      ⚠ {w}
-                    </p>
+                    <li key={w}>{w}</li>
                   ))}
-                  {outcome.notes.map((n) => (
-                    <p key={n} className="text-xs text-slate-500">
-                      {n}
-                    </p>
-                  ))}
-                </>
+                </ul>
               )}
-            </div>
-            <Button variant="ghost" onClick={() => setOutcome(null)}>
-              Cerrar
-            </Button>
-          </div>
-        </div>
+              {outcome.notes.map((n) => (
+                <p key={n} className="text-xs text-fg-muted">
+                  {n}
+                </p>
+              ))}
+            </>
+          )}
+        </Callout>
       )}
     </div>
   )

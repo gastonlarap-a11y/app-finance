@@ -5,6 +5,7 @@ import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, monthLabel, periodLabel } from '@/lib/format'
+import { Repeat } from 'lucide-react'
 import { Button, Section } from './ui'
 
 function keyOf(s: RecurringSuggestion): string {
@@ -45,27 +46,30 @@ export function RecurringSuggestions({ period }: { period: string }) {
 
   return (
     <Section title="¿Gastos que se repiten?">
-      <p className="mb-3 text-xs text-slate-500">
+      <p className="mb-3 text-sm text-fg-muted">
         Estos gastos únicos aparecen casi todos los meses con un monto parecido. Conviértelos en gasto fijo y se
         cargarán solos desde el mes siguiente a su último cobro.
       </p>
       <ul className="space-y-2">
         {visible.map((s) => (
-          <li key={keyOf(s)} className="flex flex-wrap items-center justify-between gap-2 rounded-base bg-surface p-3 ring-1 ring-slate-800">
-            <div>
-              <div className="font-medium">
-                {s.description}
-                {s.merchant && s.merchant !== s.description && <span className="text-slate-400"> · {s.merchant}</span>}
-              </div>
-              <div className="text-xs text-slate-500">
-                {formatCLP(s.amount)} · visto en {s.periods.map((p) => monthLabel(p)).join(', ')}
+          <li key={keyOf(s)} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-sunken p-3 ring-1 ring-inset ring-line">
+            <div className="flex min-w-0 items-start gap-3">
+              <Repeat aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-fg-subtle" />
+              <div className="min-w-0">
+                <div className="font-medium text-fg">
+                  {s.description}
+                  {s.merchant && s.merchant !== s.description && <span className="text-fg-muted"> · {s.merchant}</span>}
+                </div>
+                <div className="text-xs text-fg-subtle">
+                  {formatCLP(s.amount)} · visto en {s.periods.map((p) => monthLabel(p)).join(', ')}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button onClick={() => convert(s)} disabled={busy !== null}>
-                {busy === keyOf(s) ? 'Creando…' : 'Hacer fijo'}
+              <Button size="sm" onClick={() => void convert(s)} loading={busy === keyOf(s)} disabled={busy !== null}>
+                Hacer fijo
               </Button>
-              <Button variant="ghost" onClick={() => setDismissed((d) => new Set(d).add(keyOf(s)))}>
+              <Button variant="quiet" size="sm" onClick={() => setDismissed((d) => new Set(d).add(keyOf(s)))}>
                 Ignorar
               </Button>
             </div>

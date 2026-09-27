@@ -7,10 +7,14 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { compare, isNegative, isZero, maxAbs, ratio, sum } from '@/lib/money'
 import { formatCLP, periodLabel } from '@/lib/format'
-import { QueryError, Section, Spinner, StatCard } from './ui'
+import { QueryError, Section, SegmentedControl, Skeleton, StatCard, tbl } from './ui'
 
-const HORIZONS = [6, 12, 24] as const
-type Horizon = (typeof HORIZONS)[number]
+const HORIZONS = [
+  { value: '6', label: '6 meses' },
+  { value: '12', label: '12 meses' },
+  { value: '24', label: '24 meses' },
+] as const
+type Horizon = (typeof HORIZONS)[number]['value']
 
 // ForecastView answers "how much of my future income is already spoken for?":
 // remaining installments + active fixed expenses per month, against the salary
@@ -19,7 +23,8 @@ export function ForecastView() {
   const [period, setPeriod] = useAtom(periodAtom)
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
-  const [months, setMonths] = useState<Horizon>(12)
+  const [horizon, setHorizon] = useState<Horizon>('12')
+  const months = Number(horizon)
 
   const query = useQuery(`${period}:${months}:${version}`, async () => {
     const res = await FinanceService.CommitmentsForecast(period, months)
@@ -29,7 +34,7 @@ export function ForecastView() {
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const data = query.data
-  if (!data) return <Spinner />
+  if (!data) return <ForecastSkeleton />
   const stale = query.status === 'loading'
 
   const scale = maxAbs(data.flatMap((m) => [m.comprometido, m.ingresos]))
@@ -42,29 +47,15 @@ export function ForecastView() {
   const anySavings = data.some((m) => !isZero(m.ahorro))
 
   return (
-    <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
+    <div className={`space-y-6 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-400">
-          Lo ya comprometido desde <strong className="text-slate-200">{periodLabel(period)}</strong>: cuotas de compras hechas y
-          gastos fijos activos.
+        <p className="text-sm text-fg-muted">
+          Desde <strong className="text-fg">{periodLabel(period)}</strong>, para los próximos:
         </p>
-        <div role="radiogroup" aria-label="Horizonte" className="flex gap-1 rounded-base bg-surface-alt p-1">
-          {HORIZONS.map((h) => (
-            <button
-              key={h}
-              type="button"
-              role="radio"
-              aria-checked={months === h}
-              onClick={() => setMonths(h)}
-              className={`rounded px-3 py-1 text-sm ${months === h ? 'bg-primary text-white' : 'text-slate-300 hover:text-white'}`}
-            >
-              {h} meses
-            </button>
-          ))}
-        </div>
+        <SegmentedControl label="Horizonte" value={horizon} options={HORIZONS} onChange={setHorizon} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-3">
         {tightest && (
           <StatCard
             label="Mes más ajustado"
@@ -81,37 +72,33 @@ export function ForecastView() {
             hint="Si sólo ocurriera lo ya comprometido"
           />
         )}
-        <StatCard
-          label="Cuotas por pagar"
-          value={formatCLP(sum(data.map((m) => m.cuotas)))}
-          hint={`En los próximos ${months} meses`}
-        />
+        <StatCard label="Cuotas por pagar" value={formatCLP(sum(data.map((m) => m.cuotas)))} hint={`En los próximos ${months} meses`} />
       </div>
 
       <Section title="Mes a mes">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-slate-400">
+        <div className={`@container ${tbl.wrap}`}>
+          <table className={tbl.table}>
+            <thead className={tbl.thead}>
               <tr>
-                <th className="pb-2">Mes</th>
-                <th className="pb-2 text-right">Cuotas</th>
-                <th className="pb-2 text-right">Fijos</th>
-                {anySavings && <th className="pb-2 text-right">Ahorro</th>}
-                <th className="pb-2 text-right">Ingresos</th>
-                <th className="pb-2 text-right">Libre</th>
-                <th className="hidden pb-2 text-right md:table-cell">Saldo proy.</th>
-                <th className="hidden w-1/4 pb-2 pl-4 lg:table-cell">
+                <th className={tbl.th}>Mes</th>
+                <th className={`${tbl.th} text-right`}>Cuotas</th>
+                <th className={`${tbl.th} text-right`}>Fijos</th>
+                {anySavings && <th className={`${tbl.th} text-right`}>Ahorro</th>}
+                <th className={`${tbl.th} text-right`}>Ingresos</th>
+                <th className={`${tbl.th} text-right`}>Libre</th>
+                <th className={`${tbl.th} hidden text-right @2xl:table-cell`}>Saldo proy.</th>
+                <th className={`${tbl.th} hidden w-1/4 @4xl:table-cell`}>
                   <span className="sr-only">Comprometido vs ingresos</span>
                 </th>
               </tr>
             </thead>
             <tbody>
               {data.map((m) => (
-                <tr key={m.period} className="border-t border-slate-800">
-                  <td className="py-2">
+                <tr key={m.period} className={tbl.row}>
+                  <td className={`${tbl.td} whitespace-nowrap`}>
                     <button
                       type="button"
-                      className="rounded font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
+                      className="rounded font-medium text-fg hover:text-accent-fg hover:underline"
                       onClick={() => {
                         setPeriod(m.period)
                         navigate({ page: 'resumen' })
@@ -120,30 +107,26 @@ export function ForecastView() {
                       {periodLabel(m.period)}
                     </button>
                   </td>
-                  <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.cuotas)}</td>
-                  <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.fijos)}</td>
-                  {anySavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
-                  <td className={`py-2 text-right tabular-nums ${m.ingresoEstimado ? 'italic text-slate-400' : 'text-slate-300'}`}>
+                  <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.cuotas)}</td>
+                  <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.fijos)}</td>
+                  {anySavings && <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.ahorro)}</td>}
+                  <td className={`${tbl.td} ${tbl.num} ${m.ingresoEstimado ? 'italic text-fg-subtle' : 'text-fg-muted'}`}>
                     {formatCLP(m.ingresos)}
                     {m.ingresoEstimado && <span className="sr-only"> (estimado)</span>}
                   </td>
-                  <td className={`py-2 text-right font-medium tabular-nums ${isNegative(m.libre) ? 'text-danger' : 'text-success'}`}>
+                  <td className={`${tbl.td} ${tbl.num} font-medium ${isNegative(m.libre) ? 'text-negative-fg' : 'text-positive-fg'}`}>
                     {formatCLP(m.libre)}
                   </td>
-                  <td
-                    className={`hidden py-2 text-right tabular-nums md:table-cell ${
-                      isNegative(m.saldoProyectado) ? 'text-danger' : 'text-slate-300'
-                    }`}
-                  >
+                  <td className={`${tbl.td} ${tbl.num} hidden @2xl:table-cell ${isNegative(m.saldoProyectado) ? 'text-negative-fg' : 'text-fg-muted'}`}>
                     {formatCLP(m.saldoProyectado)}
                   </td>
-                  <td className="hidden py-2 pl-4 lg:table-cell" aria-hidden="true">
-                    <div className="relative h-3 w-full overflow-hidden rounded-full bg-surface">
+                  <td className={`${tbl.td} hidden @4xl:table-cell`} aria-hidden="true">
+                    <div className="relative h-3 w-full overflow-hidden rounded-full bg-sunken">
                       <div className="absolute inset-y-0 left-0 flex" style={{ width: `${ratio(m.comprometido, scale) * 100}%` }}>
-                        <div className="h-full bg-primary" style={{ width: `${ratio(m.cuotas, m.comprometido) * 100}%` }} />
-                        <div className="h-full flex-1 bg-warning" />
+                        <div className="h-full bg-accent" style={{ width: `${ratio(m.cuotas, m.comprometido) * 100}%` }} />
+                        <div className="h-full flex-1 bg-caution-fg" />
                       </div>
-                      <div className="absolute inset-y-0 w-0.5 bg-success" style={{ left: `${ratio(m.ingresos, scale) * 100}%` }} />
+                      <div className="absolute inset-y-0 w-0.5 bg-positive-fg" style={{ left: `${ratio(m.ingresos, scale) * 100}%` }} />
                     </div>
                   </td>
                 </tr>
@@ -151,19 +134,33 @@ export function ForecastView() {
             </tbody>
           </table>
         </div>
-        <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-500">
-          <span>
-            <span className="mr-1 inline-block size-2 rounded-full bg-primary" /> Cuotas
+        <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden="true" className="inline-block size-2 rounded-full bg-accent" /> Cuotas
           </span>
-          <span>
-            <span className="mr-1 inline-block size-2 rounded-full bg-warning" /> Fijos
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden="true" className="inline-block size-2 rounded-full bg-caution-fg" /> Fijos
           </span>
-          <span>
-            <span className="mr-1 inline-block h-2 w-0.5 bg-success" /> Ingresos
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden="true" className="inline-block h-2.5 w-0.5 bg-positive-fg" /> Ingresos
           </span>
           {anyEstimated && <span className="italic">Ingresos en cursiva: estimados con el último sueldo registrado.</span>}
         </div>
       </Section>
+    </div>
+  )
+}
+
+function ForecastSkeleton() {
+  return (
+    <div role="status" className="space-y-6">
+      <span className="sr-only">Cargando la proyección…</span>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-24 w-full rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-96 w-full rounded-xl" />
     </div>
   )
 }
