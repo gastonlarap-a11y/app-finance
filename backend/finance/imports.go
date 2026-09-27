@@ -629,6 +629,9 @@ func (s *FinanceService) ConfirmImportItem(
 				return err
 			}
 		}
+		if err := recordItemCurrency(ctx, tx, uid, item, ex); err != nil {
+			return fmt.Errorf("recording the original currency: %w", err)
+		}
 		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportConfirmado).Set("expense_id = ?", ex.ID).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx); err != nil {

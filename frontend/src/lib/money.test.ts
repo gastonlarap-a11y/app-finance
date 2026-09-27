@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { greaterThan, isNegative, maxAbs, pctChange, ratio, times } from '@/lib/money'
+import { greaterThan, isNegative, maxAbs, pctChange, ratio, times, toPesos } from '@/lib/money'
 import { formatCLP } from '@/lib/format'
 
 describe('money helpers', () => {
@@ -28,6 +28,13 @@ describe('money helpers', () => {
     expect(maxAbs(['10', '-300', '200'])).toBe('300')
     expect(maxAbs([])).toBe('0')
     expect(times('20000', 3)).toBe('60000')
+  })
+
+  it('toPesos convierte a pesos enteros', () => {
+    expect(toPesos('20.50', '950')).toBe('19475')
+    expect(toPesos('10.01', '950.5')).toBe('9515') // 9514.505 → 9515
+    expect(toPesos('', '950')).toBe('')
+    expect(toPesos('10', '')).toBe('')
   })
 
   it('formatCLP formatea el string sin perder precisión', () => {

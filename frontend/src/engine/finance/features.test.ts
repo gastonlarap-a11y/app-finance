@@ -239,6 +239,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetCategoryRollover(cat.data!.id, true),
       () => finance.PurgeTrashItem('expense', expense.data!.id),
       () => finance.PrepayExpense(expense.data!.id, period),
+      () => finance.SetExpenseCurrency(expense.data!.id, 'USD', '1', '1'),
       () => finance.SetInstallmentAmount(cuotaID, '1'),
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),

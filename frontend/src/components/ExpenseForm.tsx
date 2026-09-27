@@ -2,7 +2,7 @@ import { useState, type SubmitEvent } from 'react'
 import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense, type ImportItemView } from '@/services/finance'
 import { errMsg, failed } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
-import { perInstallment, times } from '@/lib/money'
+import { perInstallment, times, toPesos } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
 
@@ -128,6 +128,13 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const initialTags = target.mode === 'edit' ? target.tags.join(', ') : ''
   const [tags, setTags] = useState(initialTags)
   const knownTags = useQuery('expense-form-tags', () => FinanceService.ListTags())
+  // A purchase in another currency (create/edit; a bank item records its own).
+  const initialCurrency = target.mode === 'edit' ? target.expense.currency || 'CLP' : 'CLP'
+  const [currency, setCurrency] = useState(initialCurrency)
+  const [original, setOriginal] = useState(target.mode === 'edit' ? target.expense.originalAmount : '')
+  const [rate, setRate] = useState(target.mode === 'edit' ? target.expense.fxRate : '')
+  const foreign = currency !== 'CLP'
+  const usdRate = useQuery('expense-form-fx', async () => (await FinanceService.LatestFxRate()).data)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -174,9 +181,13 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         setError(msg)
         return
       }
-      // Tags go in a second call; the expense is already saved, so a failure
-      // there is reported (toast) without keeping the form open.
+      // Tags and the original currency go in follow-up calls; the expense is
+      // already saved, so a failure there is reported (toast) without keeping
+      // the form open.
       if (res.data && tags !== initialTags) failed(await FinanceService.SetExpenseTags(res.data.id, parseTags(tags)))
+      if (res.data && target.mode !== 'confirm' && (foreign || currency !== initialCurrency)) {
+        failed(await FinanceService.SetExpenseCurrency(res.data.id, currency, foreign ? original : '', foreign ? rate : ''))
+      }
       onSaved()
       onClose()
     } catch (err) {
@@ -237,6 +248,54 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
           <Field label="Monto por cuota (mensual)">
             <MoneyInput value={amount} onChange={setAmount} placeholder="150000" required />
           </Field>
+        )}
+
+        {target.mode !== 'confirm' && (
+          <div className="space-y-2 rounded bg-surface p-3 ring-1 ring-slate-800">
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Moneda">
+                <Select
+                  value={currency}
+                  onChange={(e) => {
+                    setCurrency(e.target.value)
+                    if (e.target.value === 'USD' && rate === '' && usdRate.data) setRate(usdRate.data)
+                  }}
+                >
+                  <option value="CLP">Pesos (CLP)</option>
+                  <option value="USD">Dólares (USD)</option>
+                  <option value="EUR">Euros (EUR)</option>
+                </Select>
+              </Field>
+              {foreign && (
+                <>
+                  <Field label={`Total en ${currency}`}>
+                    <input className={inputCls} inputMode="decimal" value={original} onChange={(e) => setOriginal(e.target.value)} placeholder="120.50" required />
+                  </Field>
+                  <Field label="Pesos por unidad">
+                    <input className={inputCls} inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="950" required />
+                  </Field>
+                </>
+              )}
+            </div>
+            {foreign && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                <span>
+                  {toPesos(original, rate) !== '' ? <>≈ {formatCLP(toPesos(original, rate))} en total.</> : 'Indica el total y la tasa.'}
+                  {currency === 'USD' && usdRate.data && <> Tu último pago en dólares fue a {usdRate.data}.</>}
+                </span>
+                <Button
+                  variant="ghost"
+                  disabled={toPesos(original, rate) === ''}
+                  onClick={() => {
+                    const pesos = toPesos(original, rate)
+                    setAmount(isCuotas && cuotas !== null ? perInstallment(pesos, cuotas) : pesos)
+                  }}
+                >
+                  Usar como monto en pesos
+                </Button>
+              </div>
+            )}
+          </div>
         )}
 
         {isCuotas && amount && cuotas !== null && (

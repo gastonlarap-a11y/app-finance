@@ -201,6 +201,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetCategoryRollover", func() finance.OpResult { return fin.SetCategoryRollover(ctx, cat.Data.ID, true) }},
 		{"PurgeTrashItem", func() finance.OpResult { return fin.PurgeTrashItem(ctx, "expense", expense.Data.ID) }},
 		{"PrepayExpense", func() finance.OpResult { return fin.PrepayExpense(ctx, expense.Data.ID, period) }},
+		{"SetExpenseCurrency", func() finance.OpResult { return fin.SetExpenseCurrency(ctx, expense.Data.ID, "USD", "1", "1") }},
 		{"SetInstallmentAmount", func() finance.OpResult {
 			return fin.SetInstallmentAmount(ctx, firstCuotaOf(t, bdb, expense.Data.ID), "1")
 		}},

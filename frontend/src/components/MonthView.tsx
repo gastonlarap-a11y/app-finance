@@ -17,7 +17,7 @@ import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { greaterThan, isNegative, isZero, ratio, subtract, sum } from '@/lib/money'
-import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
+import { currentPeriod, formatAmount, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
 import { BankCodes, BankDescription, Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
@@ -323,6 +323,11 @@ export function MonthView() {
                                   {m.description}
                                 </span>
                                 <BankDescription text={m.bankDescription} />
+                                {m.currency !== '' && (
+                                  <span className="block text-[11px] text-slate-500">
+                                    {formatAmount(m.originalAmount, m.currency)} en total
+                                  </span>
+                                )}
                                 <TagChips tags={m.tags} />
                                 <BankCodes codes={m.references} />
                               </td>

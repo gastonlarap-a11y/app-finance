@@ -68,6 +68,11 @@ export interface Expense {
   category: string
   merchant: string
   bankDescription: string // the bank's descriptor once merged with a bank movement ('' = none)
+  // A purchase in another currency: its pesos stay in installmentAmount (what
+  // every total uses) plus the original total and the rate used.
+  currency: string // 'CLP' unless bought in another currency
+  originalAmount: string // total in `currency`; '' for CLP
+  fxRate: string // pesos per unit of `currency`; '' for CLP
   cardId: number | null
   kind: string
   installmentAmount: string
@@ -136,6 +141,8 @@ export interface Movimiento {
   refundId: number | null // set only for refunds (negative amount)
   description: string
   bankDescription: string // the bank's descriptor of a cuota's expense once merged ('' otherwise)
+  currency: string // a cuota's expense bought in another currency; '' for pesos
+  originalAmount: string // that purchase's total in `currency`; '' for pesos
   category: string
   merchant: string
   cardId: number | null
@@ -476,6 +483,11 @@ export interface ReceivableView extends Receivable {
   settledPeriod: string // YYYY-MM; '' = still owed
 }
 
+export interface FxRateResult {
+  data: string // CLP per USD from the last international card payment; '' = none known
+  error?: AppError | null
+}
+
 export interface ReceivableResult {
   data?: Receivable | null
   error?: AppError | null
@@ -802,6 +814,8 @@ export interface FinanceServiceContract {
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
   SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
   PrepayExpense(expenseID: number, period: string): Promise<OpResult>
+  SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult>
+  LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>
   SettleReceivable(id: number, period: string): Promise<ReceivableResult>

@@ -20,13 +20,18 @@ const (
 type Expense struct {
 	bun.BaseModel `bun:"table:expenses,alias:ex"`
 
-	ID                int64         `bun:"id,pk,autoincrement" json:"id"`
-	UserID            int64         `bun:"user_id,notnull" json:"userId"`
-	Date              time.Time     `bun:"date,notnull" json:"date"`
-	Description       string        `bun:"description,notnull" json:"description"`
-	Category          string        `bun:"category,notnull" json:"category"`
-	Merchant          string        `bun:"merchant,notnull" json:"merchant"`
-	BankDescription   string        `bun:"bank_description,notnull" json:"bankDescription"` // the bank's descriptor once merged with a bank movement ("" = none)
+	ID              int64     `bun:"id,pk,autoincrement" json:"id"`
+	UserID          int64     `bun:"user_id,notnull" json:"userId"`
+	Date            time.Time `bun:"date,notnull" json:"date"`
+	Description     string    `bun:"description,notnull" json:"description"`
+	Category        string    `bun:"category,notnull" json:"category"`
+	Merchant        string    `bun:"merchant,notnull" json:"merchant"`
+	BankDescription string    `bun:"bank_description,notnull" json:"bankDescription"` // the bank's descriptor once merged with a bank movement ("" = none)
+	// A purchase in another currency keeps its pesos in InstallmentAmount (what
+	// every total uses) plus the original: currency, total and the rate used.
+	Currency          string        `bun:"currency,notnull" json:"currency"`              // "CLP" unless SetExpenseCurrency says otherwise
+	OriginalAmount    string        `bun:"original_amount,notnull" json:"originalAmount"` // total in Currency; "" for CLP
+	FxRate            string        `bun:"fx_rate,notnull" json:"fxRate"`                 // pesos per unit of Currency; "" for CLP
 	CardID            *int64        `bun:"card_id" json:"cardId"`
 	Kind              string        `bun:"kind,notnull" json:"kind"`
 	InstallmentAmount types.Decimal `bun:"installment_amount,notnull" json:"installmentAmount"`

@@ -758,6 +758,7 @@ func validateExpense(
 		Kind:              kind,
 		InstallmentAmount: amt,
 		InstallmentsTotal: installmentsTotal,
+		Currency:          CurrencyCLP,
 	}, nil
 }
 
@@ -1402,6 +1403,9 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 			mv.ExpenseID = ex.ID
 			mv.Description = ex.Description
 			mv.BankDescription = ex.BankDescription
+			if ex.Currency != "" && ex.Currency != CurrencyCLP {
+				mv.Currency, mv.OriginalAmount = ex.Currency, ex.OriginalAmount
+			}
 			mv.Category = ex.Category
 			mv.Merchant = ex.Merchant
 			mv.CardID = ex.CardID

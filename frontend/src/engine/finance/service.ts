@@ -50,6 +50,7 @@ import type {
   OpResult,
   PeriodSalary,
   ReconciliationResult,
+  FxRateResult,
   ReceivableResult,
   ReceivablesResult,
   RefundResult,
@@ -1621,6 +1622,21 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [want.toString(), last.id, uid()])
   }
 
+  // recordItemCurrency mirrors Go: a confirmed foreign item keeps its original
+  // total and the rate the user's pesos imply (4 decimals) on its expense.
+  function recordItemCurrency(item: ImportItem, expenseId: number, pesos: Money): void {
+    if (item.currency === '' || item.currency === 'CLP') return
+    const original = Money.fromString(item.amount)
+    if (!original.gt(Money.zero())) return
+    db.exec('UPDATE expenses SET currency = ?, original_amount = ?, fx_rate = ? WHERE id = ? AND user_id = ?', [
+      item.currency,
+      original.toString(),
+      pesos.div(original).round(4).toString(),
+      expenseId,
+      uid(),
+    ])
+  }
+
   // pendingCuotaOf mirrors Go: a pending cuota of a live expense of the profile.
   function pendingCuotaOf(id: number): { error?: ReturnType<typeof newError> } {
     const row = db.query(
@@ -2023,6 +2039,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         refundId: null,
         description: fe.description,
         bankDescription: '',
+      currency: '',
+      originalAmount: '',
         category: fe.category,
         merchant: '',
         cardId: fe.cardId,
@@ -2232,6 +2250,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       refundId: r.id,
       description: r.description,
       bankDescription: '',
+      currency: '',
+      originalAmount: '',
       category: r.category,
       merchant: r.merchant,
       cardId: r.cardId,
@@ -2997,6 +3017,40 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // Cuotas of an expense in the trash are frozen with it (mirrors Go).
+    async LatestFxRate(): Promise<FxRateResult> {
+      return { data: latestFxRate() }
+    },
+
+    async SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult> {
+      const code = currency.trim().toUpperCase()
+      if (!/^[A-Z]{3}$/.test(code)) {
+        return { error: newError(ErrValidation, 'moneda inválida (use un código de 3 letras, ej. USD)') }
+      }
+      let original = ''
+      let rate = ''
+      if (code !== 'CLP') {
+        for (const [value, what] of [
+          [originalAmount, 'el monto original'],
+          [fxRate, 'la tasa'],
+        ] as const) {
+          const parsed = amountOrError(value)
+          if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(value) }
+          if (!parsed.amount.gt(Money.zero())) return { error: newError(ErrValidation, what + ' debe ser mayor a 0') }
+        }
+        original = Money.fromString(originalAmount.trim()).toString()
+        rate = Money.fromString(fxRate.trim()).toString()
+      }
+      db.exec('UPDATE expenses SET currency = ?, original_amount = ?, fx_rate = ? WHERE id = ? AND user_id = ?', [
+        code,
+        original,
+        rate,
+        expenseID,
+        uid(),
+      ])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      return {}
+    },
+
     async SetInstallmentAmount(id: number, amount: string): Promise<OpResult> {
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
@@ -3292,6 +3346,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           refundId: null,
           description: '',
           bankDescription: '',
+      currency: '',
+      originalAmount: '',
           category: '',
           merchant: '',
           cardId: null,
@@ -3312,6 +3368,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           mv.expenseId = ex.id
           mv.description = ex.description
           mv.bankDescription = ex.bankDescription
+          if (ex.currency !== '' && ex.currency !== 'CLP') {
+            mv.currency = ex.currency
+            mv.originalAmount = ex.originalAmount
+          }
           mv.merchant = ex.merchant
           mv.cardId = ex.cardId
           mv.kind = ex.kind
@@ -4172,6 +4232,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (bankRounded(item, ex.installmentsTotal, ex.installmentAmount)) {
           settleLastCuota(created.id, Money.fromString(item.amount))
         }
+        recordItemCurrency(item, created.id, ex.installmentAmount.mulInt(Math.max(ex.installmentsTotal, 1)))
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           created.id,

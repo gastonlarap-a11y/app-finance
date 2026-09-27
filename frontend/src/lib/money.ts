@@ -70,3 +70,10 @@ export function perInstallment(total: string, n: number): string {
 export function times(a: string, n: number): string {
   return dec(a).times(n).toString()
 }
+
+// toPesos converts an amount in another currency at `rate` pesos per unit,
+// rounded to whole pesos (CLP has no minor unit); '' when either is missing.
+export function toPesos(amount: string, rate: string): string {
+  if (amount.trim() === '' || rate.trim() === '') return ''
+  return dec(amount).times(dec(rate)).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toString()
+}
