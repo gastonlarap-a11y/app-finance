@@ -81,7 +81,6 @@ import {
   MIN_YEAR,
   monthOf,
   monthsBetween,
-  periodOf,
   validPeriod,
   type DateParts,
 } from '@/engine/finance/period'
@@ -104,6 +103,14 @@ import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/d
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
 import { cleanTagName, normalizeTags, tagKey } from '@/engine/finance/tags'
 import {
+  buildCutoffs,
+  cutoffPeriodOf,
+  NO_CUTOFF,
+  operationNumber,
+  type CardCutoff,
+  type StatementWindowRow,
+} from '@/engine/finance/cutoff'
+import {
   HintCardPayment,
   HintNone,
   HintTransfer,
@@ -121,6 +128,7 @@ import {
   KindUnico,
   LineCharge,
   LineCredit,
+  LineDeferred,
   LinePayment,
   LinePurchase,
   LineVoluntary,
@@ -381,6 +389,7 @@ interface StagedItem {
   cardLastDigits: string
   installmentsTotal: number
   hint: string
+  reference: string
   kind: string
   installmentNumber: number
   installmentAmount: string
@@ -431,6 +440,7 @@ function validateCandidate(
       cardLastDigits: digits.digits,
       installmentsTotal: total,
       hint: c.hint,
+      reference: c.reference.trim(),
       kind: kind === '' ? ImportKindExpense : kind,
       installmentNumber: number,
       installmentAmount: cuota,
@@ -553,8 +563,12 @@ class StatementFields {
 }
 
 function validSection(s: string): boolean {
-  return [LinePayment, LinePurchase, LineVoluntary, LineCharge, LineCredit].includes(s)
+  return [LinePayment, LinePurchase, LineVoluntary, LineCharge, LineCredit, LineDeferred].includes(s)
 }
+
+// purchaseSections mirrors Go: lines that are purchases (a plan of cuotas may
+// show up in several statements).
+const purchaseSections = [LinePurchase, LineVoluntary, LineDeferred]
 
 interface ValidatedStatement {
   statement: StatementRow
@@ -639,7 +653,7 @@ function validateStatement(
     const description = l.description.trim()
     if (description === '') return { error: newError(ErrValidation, name + ': falta la descripción') }
     const total = Math.max(l.installmentsTotal, 1)
-    const number = Math.max(l.installmentNumber, 1)
+    const number = l.section === LineDeferred ? 0 : Math.max(l.installmentNumber, 1) // deferred: no cuota billed yet
     if (number > total) return { error: newError(ErrValidation, `${name}: cuota ${number} de ${total} inválida`) }
     const origin = l.originAmount.trim() !== '' ? f.money(name + ' monto origen', l.originAmount) : ''
     lines.push({
@@ -697,6 +711,12 @@ function lineCandidate(st: CardStatement, l: CardStatementLine): ImportCandidate
   if (l.section === LineCredit || reversal) {
     c.kind = ImportKindCredit
     c.amount = (charged.isZero() ? operation.abs() : charged).toString()
+  } else if (l.section === LineDeferred) {
+    // Bought this period, billed from the next one: nothing is paid yet.
+    c.amount = (operation.isZero() ? charged : operation.abs()).toString()
+    if (l.installmentsTotal > 1) c.installmentAmount = charged.toString()
+    c.installmentNumber = 1
+    c.firstPeriod = addMonths(st.period, 1)
   } else if (l.section === LinePurchase || l.section === LineVoluntary) {
     let total = operation.abs()
     // USD lines carry only the charged amount.
@@ -754,9 +774,9 @@ function clpAmountOf(it: ImportItem, suggestedClp: string): Money | null {
 }
 
 // billingPeriodOf mirrors the Go helper: the month the statement states, else
-// the date rolled by the card's cutoff (0 = no card).
-function billingPeriodOf(it: ImportItem, billingDay: number): string {
-  return it.firstPeriod !== '' ? it.firstPeriod : periodOf(storedDateParts(it.date), billingDay)
+// the date placed by the card's cutoff (NO_CUTOFF = no card).
+function billingPeriodOf(it: ImportItem, cutoff: CardCutoff): string {
+  return it.firstPeriod !== '' ? it.firstPeriod : cutoffPeriodOf(cutoff, storedDateParts(it.date))
 }
 
 // requireKind mirrors the Go helper: a bank credit is income, never an expense
@@ -814,19 +834,43 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return out
   }
 
-  // billingDayFor: the card's cutoff day, or 0 (no roll) without a card. A card
-  // in the trash is accepted only with allowTrashed: an edit may keep the card a
-  // row already had, but nothing new may be charged to it.
-  function billingDayFor(
+  // cutoffsFor mirrors the Go helper: the cutoff of the user's cards (all of
+  // them when no id is given; trashed ones included), keyed by card id.
+  function cutoffsFor(...cardIDs: number[]): Map<number, CardCutoff> {
+    const only = cardIDs.length > 0 ? ` AND id IN (${cardIDs.map(() => '?').join(', ')})` : ''
+    const cards = db.query(`SELECT * FROM cards WHERE user_id = ?${only}`, [uid(), ...cardIDs]).map(rowToCard)
+    if (cards.length === 0) return new Map()
+    const ids = cards.map((c) => c.id)
+    const statements: StatementWindowRow[] = db
+      .query(
+        `SELECT card_id, period, period_from, period_to, next_period_from, next_period_to FROM card_statements
+         WHERE user_id = ? AND card_id IN (${ids.map(() => '?').join(', ')}) ORDER BY statement_date DESC`,
+        [uid(), ...ids],
+      )
+      .map((r) => ({
+        cardId: asNumber(r.card_id),
+        period: asString(r.period),
+        periodFrom: asString(r.period_from),
+        periodTo: asString(r.period_to),
+        nextPeriodFrom: asString(r.next_period_from),
+        nextPeriodTo: asString(r.next_period_to),
+      }))
+    return buildCutoffs(cards, statements)
+  }
+
+  // cutoffFor: the card's cutoff (statement windows, then billing day), or none
+  // (no roll) without a card. A card in the trash is accepted only with
+  // allowTrashed: an edit may keep the card a row already had, but nothing new
+  // may be charged to it.
+  function cutoffFor(
     cardID: number | null,
     allowTrashed = false,
-  ): { day: number; error?: ReturnType<typeof newError> } {
-    if (cardID == null) return { day: 0 }
+  ): { cutoff: CardCutoff; error?: ReturnType<typeof newError> } {
+    if (cardID == null) return { cutoff: NO_CUTOFF }
     const live = allowTrashed ? '' : ' AND deleted_at IS NULL'
-    const rows = db.query(`SELECT * FROM cards WHERE id = ? AND user_id = ?${live}`, [cardID, uid()])
-    const row = rows[0]
-    if (!row) return { day: 0, error: newError(ErrValidation, 'la tarjeta indicada no existe') }
-    return { day: rowToCard(row).billingDay }
+    const rows = db.query(`SELECT id FROM cards WHERE id = ? AND user_id = ?${live}`, [cardID, uid()])
+    if (!rows[0]) return { cutoff: NO_CUTOFF, error: newError(ErrValidation, 'la tarjeta indicada no existe') }
+    return { cutoff: cutoffsFor(cardID).get(cardID) ?? NO_CUTOFF }
   }
 
   interface ValidatedExpense {
@@ -962,12 +1006,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   function generateInstallments(
     expenseId: number,
     ex: ValidatedExpense,
-    billingDay: number,
+    cutoff: CardCutoff,
     paidCount: number,
     firstPeriod = '',
   ): void {
     const total = ex.kind === KindUnico ? 1 : ex.installmentsTotal
-    const first = firstPeriod !== '' ? firstPeriod : periodOf(ex.date.parts, billingDay)
+    const first = firstPeriod !== '' ? firstPeriod : cutoffPeriodOf(cutoff, ex.date.parts)
     const now = nowIso()
     for (let i = 0; i < total; i++) {
       const paid = i < paidCount
@@ -990,7 +1034,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // insertExpense writes a validated expense and its installments; callers wrap
   // it in their transaction (CreateExpense, ConfirmImportItem).
-  function insertExpense(ex: ValidatedExpense, billingDay: number, firstPeriod = '', paidCount = 0): Expense {
+  function insertExpense(ex: ValidatedExpense, cutoff: CardCutoff, firstPeriod = '', paidCount = 0): Expense {
     const row = db.query(
       `INSERT INTO expenses (user_id, date, description, category, merchant, card_id, kind, installment_amount, installments_total, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
@@ -1009,7 +1053,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     )[0]
     if (!row) throw new Error('INSERT expenses RETURNING produced no row')
     const created = rowToExpense(row)
-    generateInstallments(created.id, ex, billingDay, paidCount, firstPeriod)
+    generateInstallments(created.id, ex, cutoff, paidCount, firstPeriod)
     return created
   }
 
@@ -1177,8 +1221,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const row = db.query(
         `INSERT INTO import_items (user_id, source, issuer, external_key, date, description, amount, currency,
          card_last_digits, installments_total, hint, status, matched_item_id, created_at,
-         kind, statement_line_id, installment_number, installment_amount, first_period)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         kind, statement_line_id, installment_number, installment_amount, first_period, reference)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         [
           uid(),
           item.source,
@@ -1199,6 +1243,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           item.installmentNumber,
           item.installmentAmount,
           item.firstPeriod,
+          item.reference,
         ],
       )[0]
       if (!row) throw new Error('INSERT import_items RETURNING produced no row')
@@ -1252,6 +1297,22 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     ])
     const only = rows[0]
     return rows.length === 1 && only ? rowToCard(only) : null
+  }
+
+  // relinkStatements mirrors the Go helper: every statement points at the one
+  // live card holding its last digits; with none, it keeps a trashed card it
+  // already had and loses a live one whose digits changed.
+  function relinkStatements(): void {
+    const byDigits = cardsByLastDigits(listCardsActive())
+    const live = new Set(listCardsActive().map((c) => c.id))
+    for (const r of db.query('SELECT id, card_id, card_last_digits FROM card_statements WHERE user_id = ?', [uid()])) {
+      const current = r.card_id == null ? null : asNumber(r.card_id)
+      const match = byDigits.get(asString(r.card_last_digits))
+      if (!match && current != null && !live.has(current)) continue
+      const want = match?.id ?? null
+      if (want === current) continue
+      db.exec('UPDATE card_statements SET card_id = ? WHERE id = ? AND user_id = ?', [want, asNumber(r.id), uid()])
+    }
   }
 
   // continuedInstallment finds the app installment a statement cuota bills: the
@@ -1372,6 +1433,25 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // feedInbox links, reconciles and stages the statement's lines (see
   // ImportCardStatement). Throws TxAbort on an invalid candidate.
+  // earlierSighting mirrors the Go helper: the inbox item an earlier statement
+  // of the same card and currency staged for this purchase (same operation
+  // date, cuota count and operation number), or null.
+  function earlierSighting(st: CardStatement, l: CardStatementLine): number | null {
+    const op = operationNumber(l.reference)
+    if (op === '') return null
+    const prior = db
+      .query(
+        `SELECT * FROM card_statement_lines
+         WHERE user_id = ? AND operation_date = ? AND installments_total = ?
+         AND import_item_id IS NOT NULL AND section IN (${purchaseSections.map(() => '?').join(', ')})
+         AND statement_id IN (SELECT id FROM card_statements WHERE user_id = ? AND card_last_digits = ? AND kind = ? AND id <> ?)
+         ORDER BY id DESC`,
+        [uid(), l.operationDate, l.installmentsTotal, ...purchaseSections, uid(), st.cardLastDigits, st.kind, st.id],
+      )
+      .map(rowToCardStatementLine)
+    return prior.find((p) => operationNumber(p.reference) === op)?.importItemId ?? null
+  }
+
   function feedInbox(st: CardStatement, card: Card | null, lines: CardStatementLine[], out: CardStatementImport): void {
     const candidates: ImportCandidate[] = []
     const staged: CardStatementLine[] = []
@@ -1388,6 +1468,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           continue
         }
       }
+      if (purchaseSections.includes(l.section)) {
+        const itemId = earlierSighting(st, l)
+        if (itemId != null) {
+          db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [itemId, l.id])
+          out.duplicates++
+          continue
+        }
+      }
       candidates.push(lineCandidate(st, l))
       staged.push(l)
     }
@@ -1396,9 +1484,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     if (v.error || !v.items) throw new TxAbort(v.error ?? newError(ErrValidation, 'lote inválido'))
     const items = v.items.map((it, k) => ({ ...it, statementLineId: staged[k]?.id ?? null }))
     const { ids, sum } = stageItems(items)
-    out.added = sum.added
-    out.duplicates = sum.duplicates
-    out.reconciled = sum.reconciled
+    // += keeps the purchases already recognized from earlier statements.
+    out.added += sum.added
+    out.duplicates += sum.duplicates
+    out.reconciled += sum.reconciled
     ids.forEach((id, k) => {
       db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [id, staged[k]?.id ?? null])
     })
@@ -1706,6 +1795,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         ufAmount: fe.currency === CurrencyUF ? charge.original.toString() : null,
         estimado: charge.estimated,
         tags: [],
+        references: [],
       })
     }
     return out
@@ -1811,6 +1901,42 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return out
   }
 
+  // expenseReferencesSQL mirrors the Go query (reference.go): (expense_id,
+  // reference) from the inbox item an expense was confirmed from, the statement
+  // lines that billed its cuotas and the later lines that reported it again.
+  // `cond` is a condition on the expense id column (ii.expense_id /
+  // i.expense_id); every "?" is uid followed by that condition's arguments.
+  function expenseReferencesSQL(condItem: string, condInst: string): string {
+    return `
+      SELECT ii.expense_id AS expense_id, ii.reference AS reference
+        FROM import_items AS ii
+        WHERE ii.user_id = ? AND ii.expense_id IS NOT NULL AND ii.reference <> '' AND ${condItem}
+      UNION
+      SELECT i.expense_id, l.reference
+        FROM card_statement_lines AS l JOIN installments AS i ON i.id = l.installment_id
+        WHERE l.user_id = ? AND i.user_id = l.user_id AND l.reference <> '' AND ${condInst}
+      UNION
+      SELECT ii.expense_id, l.reference
+        FROM card_statement_lines AS l JOIN import_items AS ii ON ii.id = l.import_item_id
+        WHERE l.user_id = ? AND ii.user_id = l.user_id AND ii.expense_id IS NOT NULL AND l.reference <> '' AND ${condItem}`
+  }
+
+  // referencesByExpense maps each of the given expenses to its reference codes, sorted.
+  function referencesByExpense(ids: readonly number[]): Map<number, string[]> {
+    const out = new Map<number, string[]>()
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return out
+    const list = unique.map(() => '?').join(', ')
+    const sql =
+      expenseReferencesSQL(`ii.expense_id IN (${list})`, `i.expense_id IN (${list})`) +
+      ' ORDER BY expense_id, reference'
+    for (const r of db.query(sql, [uid(), ...unique, uid(), ...unique, uid(), ...unique])) {
+      const id = asNumber(r.expense_id)
+      out.set(id, [...(out.get(id) ?? []), asString(r.reference)])
+    }
+    return out
+  }
+
   // ---------- refunds (mirror backend/finance/refund.go) ----------
 
   interface RefundRow {
@@ -1877,6 +2003,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       ufAmount: null,
       estimado: false,
       tags: [],
+      references: [],
     }
   }
 
@@ -2220,13 +2347,17 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const digits = validateLastDigits(lastDigits)
       if (digits.error) return { error: digits.error }
       const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
-      const row = db.query(
-        `INSERT INTO cards (user_id, name, credit_limit, billing_day, last_digits, created_at)
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-        [uid(), name.trim(), parsed.amount.toString(), day, digits.digits, nowIso()],
-      )[0]
-      if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
-      return { data: rowToCard(row) }
+      const limit = parsed.amount.toString()
+      return db.transaction((): CardResult => {
+        const row = db.query(
+          `INSERT INTO cards (user_id, name, credit_limit, billing_day, last_digits, created_at)
+           VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), name.trim(), limit, day, digits.digits, nowIso()],
+        )[0]
+        if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
+        relinkStatements()
+        return { data: rowToCard(row) }
+      })
     },
 
     async UpdateCard(
@@ -2242,15 +2373,19 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const digits = validateLastDigits(lastDigits)
       if (digits.error) return { error: digits.error }
       const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
-      db.exec(
-        `UPDATE cards SET name = ?, credit_limit = ?, billing_day = ?, last_digits = ?
-         WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-        [name.trim(), parsed.amount.toString(), day, digits.digits, id, uid()],
-      )
-      if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
-      const row = db.query('SELECT * FROM cards WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
-      if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
-      return { data: rowToCard(row) }
+      const limit = parsed.amount.toString()
+      return db.transaction((): CardResult => {
+        db.exec(
+          `UPDATE cards SET name = ?, credit_limit = ?, billing_day = ?, last_digits = ?
+           WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+          [name.trim(), limit, day, digits.digits, id, uid()],
+        )
+        if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
+        relinkStatements()
+        const row = db.query('SELECT * FROM cards WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
+        if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
+        return { data: rowToCard(row) }
+      })
     },
 
     async DeleteCard(id: number): Promise<OpResult> {
@@ -2465,9 +2600,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const v = validateExpense(dateStr, description, category, merchant, cardID, kind, installmentAmount, installmentsTotal)
       if (v.error || !v.expense) return { error: v.error ?? newError(ErrValidation, 'gasto inválido') }
       const ex = v.expense
-      const billing = billingDayFor(cardID)
+      const billing = cutoffFor(cardID)
       if (billing.error) return { error: billing.error }
-      return db.transaction((): ExpenseResult => ({ data: insertExpense(ex, billing.day) }))
+      return db.transaction((): ExpenseResult => ({ data: insertExpense(ex, billing.cutoff) }))
     },
 
     async UpdateExpense(
@@ -2487,14 +2622,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const oldRow = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [id, uid()])[0]
       if (!oldRow) return { error: newError(ErrNotFound, 'gasto no encontrado') }
       const old = rowToExpense(oldRow)
-      const billing = billingDayFor(cardID, old.cardId === cardID)
+      const billing = cutoffFor(cardID, old.cardId === cardID)
       if (billing.error) return { error: billing.error }
-      // The old card row is gone: its expense was never on a known cutoff.
-      const oldBillingDay = billingDayFor(old.cardId, true).day
+      // The old card row is gone: its expense was never on a known cutoff (NO_CUTOFF).
+      const oldCutoff = cutoffFor(old.cardId, true).cutoff
       // The cuota-1 month the old and new inputs lead to (see replanInstallments).
       const placement: PlacementChange = {
-        before: periodOf(storedDateParts(old.date), oldBillingDay),
-        after: periodOf(ex.date.parts, billing.day),
+        before: cutoffPeriodOf(oldCutoff, storedDateParts(old.date)),
+        after: cutoffPeriodOf(billing.cutoff, ex.date.parts),
       }
       return db.transaction((): ExpenseResult => {
         // A returned error still commits here (only a throw rolls back), so the
@@ -2600,7 +2735,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
       if (cardID != null) {
-        const billing = billingDayFor(cardID)
+        const billing = cutoffFor(cardID)
         if (billing.error) return { error: billing.error }
       }
       return db.transaction((): FixedExpenseResult => {
@@ -2672,7 +2807,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (desc === '') return { error: newError(ErrValidation, 'la descripción es obligatoria') }
       const old = ownFixedExpense(id)
       if (!old) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
-      const billing = billingDayFor(cardID, old.cardId === cardID)
+      const billing = cutoffFor(cardID, old.cardId === cardID)
       if (billing.error) return { error: billing.error }
       db.exec(
         'UPDATE fixed_expenses SET description = ?, category = ?, card_id = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
@@ -2780,6 +2915,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         .map(rowToInstallment)
       const exById = expenseMapActive(insts.map((i) => i.expenseId))
       const tagsOf = tagsByExpense(insts.map((i) => i.expenseId))
+      const refsOf = referencesByExpense(insts.map((i) => i.expenseId))
 
       let extras = Money.zero()
       for (const inc of incomes) extras = extras.add(Money.fromString(inc.amount))
@@ -2816,6 +2952,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           ufAmount: null,
           estimado: false,
           tags: tagsOf.get(inst.expenseId) ?? [],
+          references: refsOf.get(inst.expenseId) ?? [],
         }
         let cat = uncategorized
         if (ex) {
@@ -3176,8 +3313,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const text = f.text.trim()
       if (text !== '') {
         const pattern = `%${escapeLike(text)}%`
-        where.push(`(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\')`)
-        params.push(pattern, pattern)
+        const refs = expenseReferencesSQL('1 = 1', '1 = 1')
+        where.push(
+          `(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\'` +
+            ` OR id IN (SELECT expense_id FROM (${refs}) WHERE reference LIKE ? ESCAPE '\\'))`,
+        )
+        params.push(pattern, pattern, uid(), uid(), uid(), pattern)
       }
       const category = f.category.trim()
       if (category === uncategorized) {
@@ -3233,6 +3374,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       }
       const cardByID = cardMapAll()
       const tagsOf = tagsByExpense(expenses.map((e) => e.id))
+      const refsOf = referencesByExpense(expenses.map((e) => e.id))
       const items: ExpenseHit[] = expenses.map((ex) => {
         const sp = spans.get(ex.id)
         return {
@@ -3243,6 +3385,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           total: Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1)).toString(),
           paidCount: sp?.paid ?? 0,
           tags: tagsOf.get(ex.id) ?? [],
+          references: refsOf.get(ex.id) ?? [],
         }
       })
       return { data: { items, count, sum: sum.toString() } }
@@ -3520,6 +3663,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const rules = listMerchantRules()
       const fx = latestFxRate()
       const suggestFixed = status === ImportPendiente ? fixedSuggester() : null
+      const cutoffs = cutoffsFor()
       const reopenable = status === ImportConfirmado ? reopenableIds() : new Set<number>()
       const findDuplicate = duplicateFinder(items)
       const findRefunded = refundFinder(items)
@@ -3530,7 +3674,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const dup = duplicateReviewable(it) ? findDuplicate(it, card?.id ?? null) : null
         const refunded = refundReviewable(it) ? findRefunded(it, card?.id ?? null) : null
         const suggestedClp = suggestClp(it, fx)
-        const fixedPeriod = billingPeriodOf(it, card?.billingDay ?? 0)
+        const fixedPeriod = billingPeriodOf(it, card ? (cutoffs.get(card.id) ?? NO_CUTOFF) : NO_CUTOFF)
         const fixed =
           suggestFixed && it.status === ImportPendiente && it.kind === ImportKindExpense
             ? suggestFixed(it, fixedPeriod, card?.id ?? null, clpAmountOf(it, suggestedClp))
@@ -3577,7 +3721,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const ex = v.expense
       const pattern = validateRulePattern(rulePattern)
       if (pattern.error) return { error: pattern.error }
-      const billing = billingDayFor(cardID)
+      const billing = cutoffFor(cardID)
       if (billing.error) return { error: billing.error }
       return db.transaction((): ExpenseResult => {
         const pending = loadPendingItem(id)
@@ -3590,8 +3734,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         // purchase or fee is billed in the statement's month.
         const placed = item.firstPeriod !== '' && ex.installmentsTotal === item.installmentsTotal
         const created = placed
-          ? insertExpense(ex, billing.day, item.firstPeriod, item.installmentNumber - 1)
-          : insertExpense(ex, billing.day)
+          ? insertExpense(ex, billing.cutoff, item.firstPeriod, item.installmentNumber - 1)
+          : insertExpense(ex, billing.cutoff)
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           created.id,

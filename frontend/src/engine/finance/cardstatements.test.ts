@@ -268,3 +268,105 @@ describe('ImportCardStatement', () => {
     expect(await importStatement(nationalStatement())).toMatchObject({ alreadyImported: false, duplicates: 6 })
   })
 })
+
+// Mirror of backend/finance/statement_links_test.go.
+describe('estados de cuenta a lo largo del tiempo', () => {
+  function installmentPeriods(expenseId: number): string[] {
+    return db
+      .query('SELECT period FROM installments WHERE expense_id = ? ORDER BY number ASC', [expenseId])
+      .map((r) => String(r.period))
+  }
+
+  it.each([
+    ['el banco cerró el 25, después del día 24 de la tarjeta', '2026-08-25', '2026-08'],
+    ['el período anunciado cierra el 23', '2026-09-23', '2026-09'],
+    ['después de toda ventana: el día de corte', '2026-09-24', '2026-10'],
+    ['antes de toda ventana: el día de corte', '2026-07-27', '2026-08'],
+  ])('el corte sigue las ventanas de los estados: %s', async (_name, date, want) => {
+    const card = await finance.CreateCard('Itaú', '1000000', 24, '4321')
+    await importStatement(nationalStatement())
+    const ex = await finance.CreateExpense(date, 'Compra', '', '', card.data!.id, 'unico', '1000', 1)
+    expect(ex.error).toBeUndefined()
+    expect(installmentPeriods(ex.data!.id)).toEqual([want])
+  })
+
+  it('los dígitos de la tarjeta le asignan sus estados nacional e internacional', async () => {
+    const card = await finance.CreateCard('Itaú', '1000000', 24, '')
+    await importStatement(nationalStatement())
+    await importStatement(internationalStatement())
+    const cardNames = async () =>
+      ((await finance.ListCardStatements('2026-08')).data ?? []).map((v) => `${v.kind}:${v.cardName}`).sort()
+
+    expect(await cardNames()).toEqual(['internacional:', 'nacional:'])
+    await finance.UpdateCard(card.data!.id, 'Itaú', '1000000', 24, '4321')
+    expect(await cardNames()).toEqual(['internacional:Itaú', 'nacional:Itaú'])
+    await finance.UpdateCard(card.data!.id, 'Itaú', '1000000', 24, '9999')
+    expect(await cardNames()).toEqual(['internacional:', 'nacional:'])
+    await finance.CreateCard('Itaú nueva', '1000000', 24, '4321')
+    expect(await cardNames()).toEqual(['internacional:Itaú nueva', 'nacional:Itaú nueva'])
+  })
+
+  it('una compra vista de nuevo es el mismo ítem aunque cambie la referencia', async () => {
+    await importStatement(nationalStatement())
+    const dos = (await pendingByDescription()).get('TIENDA DOS')!
+    expect((await finance.DiscardImportItem(dos.id)).error).toBeUndefined()
+
+    // Next month, from the web PDF: another reference prefix, other wording.
+    const web = { ...tiendaDosCuota(4), reference: '2026062022222222', description: 'Tienda Dos' }
+    expect(await importStatement({ ...nextMonth(4), lines: [web] })).toMatchObject({ duplicates: 1, added: 0 })
+    expect((await pendingByDescription()).has('Tienda Dos')).toBe(false)
+
+    const later: CardStatementInput = {
+      ...nationalStatement(),
+      statementDate: '2026-10-23', periodFrom: '2026-09-24', periodTo: '2026-10-23',
+      lines: [
+        { ...tiendaDosCuota(5), reference: '2310 22222222' },
+        { ...tiendaDosCuota(5), reference: '2310 55555555', description: 'OTRA TIENDA' },
+      ],
+    }
+    expect(await importStatement(later)).toMatchObject({ duplicates: 1, added: 1 })
+  })
+
+  it('una compra en cuotas que empieza el próximo período entra con la cuota 1 en ese mes', async () => {
+    const aug = nationalStatement()
+    aug.lines.push(line({ section: 'diferida', operationDate: '2026-08-20', reference: '2008 44444444',
+      description: 'TIENDA TRES', operationAmount: '30000', totalAmount: '30000',
+      installmentNumber: 0, installmentsTotal: 3, installmentAmount: '10000' }))
+    await importStatement(aug)
+
+    expect((await pendingByDescription()).get('TIENDA TRES')).toMatchObject({
+      firstPeriod: '2026-09', installmentNumber: 1, installmentsTotal: 3, installmentAmount: '10000',
+      amount: '30000', reference: '2008 44444444',
+    })
+    expect((await finance.ListCardStatements('2026-08')).data?.[0]?.bankCharges).toBe('42340')
+
+    const sep: CardStatementInput = {
+      ...nextMonth(1),
+      lines: [line({ section: 'compra', operationDate: '2026-08-20', reference: '2309 44444444',
+        description: 'TIENDA TRES', operationAmount: '30000', totalAmount: '30000',
+        installmentNumber: 1, installmentsTotal: 3, installmentAmount: '10000' })],
+    }
+    expect(await importStatement(sep)).toMatchObject({ duplicates: 1, added: 0 })
+  })
+
+  it('el gasto conserva los códigos de referencia del banco y se puede buscar por ellos', async () => {
+    const cardId = await createCard()
+    await importStatement(nationalStatement())
+    const dos = (await pendingByDescription()).get('TIENDA DOS')!
+    expect(dos.reference).toBe('2508 22222222')
+    const ex = await finance.ConfirmImportItem(dos.id, dos.date, 'Tienda dos', 'Hogar', '', cardId, 'cuotas',
+      dos.installmentAmount, 6, '')
+    expect(ex.error).toBeUndefined()
+    await importStatement({ ...nextMonth(4), lines: [{ ...tiendaDosCuota(4), reference: '2309 22222222' }] })
+
+    const want = ['2309 22222222', '2508 22222222']
+    const sum = await finance.MonthlySummary('2026-09')
+    expect(sum.data?.movimientos.find((m) => m.expenseId === ex.data!.id)?.references).toEqual(want)
+
+    const filter = { text: '22222222', category: '', tag: '', cardId: null, fromPeriod: '', toPeriod: '', limit: 0, offset: 0 }
+    const found = await finance.SearchExpenses(filter)
+    expect(found.data?.count).toBe(1)
+    expect(found.data?.items[0]?.references).toEqual(want)
+    expect((await finance.SearchExpenses({ ...filter, text: '99999999' })).data?.count).toBe(0)
+  })
+})

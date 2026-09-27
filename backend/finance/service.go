@@ -225,11 +225,18 @@ func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit strin
 	if aerr != nil {
 		return CardResult{Error: aerr}
 	}
+	uid := s.uid()
 	card := &Card{
-		UserID: s.uid(), Name: strings.TrimSpace(name), CreditLimit: limit,
+		UserID: uid, Name: strings.TrimSpace(name), CreditLimit: limit,
 		BillingDay: normalizeBillingDay(billingDay), LastDigits: digits,
 	}
-	if _, err := s.db.NewInsert().Model(card).Returning("*").Exec(ctx); err != nil {
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewInsert().Model(card).Returning("*").Exec(ctx); err != nil {
+			return err
+		}
+		return relinkStatements(ctx, tx, uid)
+	})
+	if err != nil {
 		return CardResult{Error: internalErr(err)}
 	}
 	return CardResult{Data: card}
@@ -258,6 +265,9 @@ func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditL
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
 		if aerr := requireOne(res, err, "tarjeta no encontrada"); aerr != nil {
 			return aerr
+		}
+		if err := relinkStatements(ctx, tx, uid); err != nil {
+			return err
 		}
 		return tx.NewSelect().Model(card).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
 	})
@@ -494,13 +504,14 @@ func (s *FinanceService) ListExpenses(ctx context.Context, period string) ([]Exp
 	return expenses, err
 }
 
-// billingDayFor returns the cutoff day to use for an expense: the card's billing
-// day when on a card, or 0 (no roll) for cash/debit expenses. A card in the trash
-// is accepted only when allowTrashed: an edit may keep the card a row already had
-// (history keeps pointing at archived cards), but nothing new may be charged to it.
-func (s *FinanceService) billingDayFor(ctx context.Context, uid int64, cardID *int64, allowTrashed bool) (int, *shared.AppError) {
+// cutoffFor returns the cutoff to use for an expense: its card's (statement
+// windows, then billing day) when on a card, or none (no roll) for cash/debit
+// expenses. A card in the trash is accepted only when allowTrashed: an edit may
+// keep the card a row already had (history keeps pointing at archived cards),
+// but nothing new may be charged to it.
+func (s *FinanceService) cutoffFor(ctx context.Context, uid int64, cardID *int64, allowTrashed bool) (cardCutoff, *shared.AppError) {
 	if cardID == nil {
-		return 0, nil
+		return cardCutoff{}, nil
 	}
 	card := new(Card)
 	q := s.db.NewSelect().Model(card).Where("id = ? AND user_id = ?", *cardID, uid)
@@ -509,12 +520,16 @@ func (s *FinanceService) billingDayFor(ctx context.Context, uid int64, cardID *i
 	}
 	err := q.Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, shared.NewError(shared.ErrValidation, "la tarjeta indicada no existe")
+		return cardCutoff{}, shared.NewError(shared.ErrValidation, "la tarjeta indicada no existe")
 	}
 	if err != nil {
-		return 0, internalErr(err)
+		return cardCutoff{}, internalErr(err)
 	}
-	return card.BillingDay, nil
+	cuts, err := cutoffsFor(ctx, s.db, uid, card.ID)
+	if err != nil {
+		return cardCutoff{}, internalErr(err)
+	}
+	return cuts[card.ID], nil
 }
 
 func (s *FinanceService) CreateExpense(
@@ -526,7 +541,7 @@ func (s *FinanceService) CreateExpense(
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, false)
+	cutoff, aerr := s.cutoffFor(ctx, uid, cardID, false)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
@@ -534,7 +549,7 @@ func (s *FinanceService) CreateExpense(
 		if _, err := tx.NewInsert().Model(ex).Returning("*").Exec(ctx); err != nil {
 			return err
 		}
-		return generateInstallments(ctx, tx, ex, billingDay)
+		return generateInstallments(ctx, tx, ex, cutoff)
 	})
 	if err != nil {
 		return ExpenseResult{Error: internalErr(err)}
@@ -560,20 +575,20 @@ func (s *FinanceService) UpdateExpense(
 	if err != nil {
 		return ExpenseResult{Error: internalErr(err)}
 	}
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, sameCard(old.CardID, cardID))
+	cutoff, aerr := s.cutoffFor(ctx, uid, cardID, sameCard(old.CardID, cardID))
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	oldBillingDay, aerr := s.billingDayFor(ctx, uid, old.CardID, true)
+	oldCutoff, aerr := s.cutoffFor(ctx, uid, old.CardID, true)
 	if aerr != nil {
-		oldBillingDay = 0 // the old card row is gone: its expense was never on a known cutoff
+		oldCutoff = cardCutoff{} // the old card row is gone: its expense was never on a known cutoff
 	}
 	// The cuota-1 month the old and new inputs lead to. When they agree, the edit
 	// did not move the purchase, and the month it already has is kept — which may
 	// come from a card statement rather than from the date.
 	placement := placementChange{
-		before: periodOf(old.Date.UTC(), oldBillingDay),
-		after:  periodOf(ex.Date, billingDay),
+		before: oldCutoff.periodOf(old.Date.UTC()),
+		after:  cutoff.periodOf(ex.Date),
 	}
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model(ex).
@@ -738,22 +753,22 @@ func validateExpense(
 const maxInstallments = 120
 
 // generateInstallments creates one pending row per cuota for a new expense.
-func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, billingDay int) error {
-	return generateInstallmentsFrom(ctx, tx, ex, billingDay, "", 0)
+func generateInstallments(ctx context.Context, tx bun.Tx, ex *Expense, cutoff cardCutoff) error {
+	return generateInstallmentsFrom(ctx, tx, ex, cutoff, "", 0)
 }
 
 // generateInstallmentsFrom is generateInstallments with the first cuota's
 // period fixed by the caller (a card statement knows it; "" derives it from the
-// purchase date and the card's billing day) and the first paidCount cuotas
-// marked pagado (a statement's cuota n means cuotas 1..n-1 were already billed).
-func generateInstallmentsFrom(ctx context.Context, tx bun.Tx, ex *Expense, billingDay int, firstPeriod string, paidCount int) error {
+// purchase date and the card's cutoff) and the first paidCount cuotas marked
+// pagado (a statement's cuota n means cuotas 1..n-1 were already billed).
+func generateInstallmentsFrom(ctx context.Context, tx bun.Tx, ex *Expense, cutoff cardCutoff, firstPeriod string, paidCount int) error {
 	total := ex.InstallmentsTotal
 	if ex.Kind == KindUnico {
 		total = 1
 	}
 	first := firstPeriod
 	if first == "" {
-		first = periodOf(ex.Date, billingDay)
+		first = cutoff.periodOf(ex.Date)
 	}
 	now := time.Now()
 	insts := make([]Installment, 0, total)
@@ -981,7 +996,7 @@ func (s *FinanceService) CreateFixedExpense(
 		return FixedExpenseResult{Error: shared.NewError(shared.ErrValidation, "el monto debe ser mayor a 0")}
 	}
 	uid := s.uid()
-	if _, aerr := s.billingDayFor(ctx, uid, cardID, false); aerr != nil {
+	if _, aerr := s.cutoffFor(ctx, uid, cardID, false); aerr != nil {
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{
@@ -1019,7 +1034,7 @@ func (s *FinanceService) UpdateFixedExpense(
 	if err != nil {
 		return FixedExpenseResult{Error: appErr(err)}
 	}
-	if _, aerr := s.billingDayFor(ctx, uid, cardID, sameCard(old.CardID, cardID)); aerr != nil {
+	if _, aerr := s.cutoffFor(ctx, uid, cardID, sameCard(old.CardID, cardID)); aerr != nil {
 		return FixedExpenseResult{Error: aerr}
 	}
 	fe := &FixedExpense{ID: id, Description: desc, Category: strings.TrimSpace(category), CardID: cardID}
@@ -1329,6 +1344,10 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	if err != nil {
 		return nil, err
 	}
+	refsOf, err := s.referencesByExpense(ctx, uid, expenseIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	catTotals := map[string]types.Decimal{}
 	gastoMesByCard := map[int64]types.Decimal{}
@@ -1336,6 +1355,9 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 		mv.Category = categoryOrDefault(mv.Category)
 		if mv.Tags = tagsOf[mv.ExpenseID]; mv.Tags == nil || mv.Source != SourceCuota {
 			mv.Tags = []string{}
+		}
+		if mv.References = refsOf[mv.ExpenseID]; mv.References == nil || mv.Source != SourceCuota {
+			mv.References = []string{}
 		}
 		if mv.CardID != nil {
 			if c, ok := cardByID[*mv.CardID]; ok {

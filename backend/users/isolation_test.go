@@ -110,7 +110,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	batch := finance.ImportBatch{Source: finance.ImportSourcePDFAccount, Issuer: "itau", Items: []finance.ImportCandidate{
 		{Date: period + "-05", Description: "CRUZ VERDE L9093 CHILLAN C", Amount: "16182"},
-		{Date: period + "-06", Description: "ENTEL PCS PAGO ENSANTIAGO C", Amount: "16990"},
+		{Date: period + "-06", Description: "ENTEL PCS PAGO ENSANTIAGO C", Amount: "16990", Reference: "0606 77777777"},
 	}}
 	if r := fin.StageImport(ctx, batch); r.Error != nil || r.Data.Added != 2 {
 		t.Fatalf("StageImport = %+v, want 2 added", r)
@@ -166,6 +166,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.SetExpenseTags(ctx, expense.Data.ID, []string{"Salud"}); r.Error != nil {
 		t.Fatalf("SetExpenseTags: %v", r.Error)
+	}
+	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Text: "77777777"}); r.Error != nil || r.Data.Count != 1 {
+		t.Fatalf("search by the Entel item's bank code = %+v, want Gastón's expense", r)
 	}
 	tags, err := fin.ListTags(ctx)
 	if err != nil || len(tags) != 1 {
@@ -292,6 +295,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Tag: "Salud"}); r.Error != nil || r.Data.Count != 0 {
 		t.Fatalf("Camila search by Gastón's tag = %+v, want nothing", r)
+	}
+	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Text: "77777777"}); r.Error != nil || r.Data.Count != 0 {
+		t.Fatalf("Camila search by Gastón's bank code = %+v, want nothing", r)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

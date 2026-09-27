@@ -146,6 +146,7 @@ export interface Movimiento {
   ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
   estimado: boolean // amount rests on an estimated UF value
   tags: string[] // tags of the expense behind a cuota
+  references: string[] // the bank's codes for that expense, one per statement that reported it
 }
 
 export interface CategoryTotal {
@@ -360,6 +361,7 @@ export interface ExpenseHit {
   total: string
   paidCount: number
   tags: string[]
+  references: string[] // the bank's codes for it, one per statement
 }
 
 export interface ExpenseSearch {
@@ -400,6 +402,7 @@ export interface ImportItem {
   installmentsTotal: number
   hint: string // ImportHint
   status: string // ImportStatus
+  reference: string // the bank's operation code as printed ('' = none): proof for a dispute
   expenseId: number | null
   matchedItemId: number | null
   createdAt: string
@@ -547,7 +550,7 @@ export interface CardStatementLine {
   userId: number
   statementId: number
   position: number
-  section: string // 'pago' | 'compra' | 'voluntario' | 'cargo' | 'abono'
+  section: string // 'pago' | 'compra' | 'voluntario' | 'cargo' | 'abono' | 'diferida' (cuotas 00/N, billed from next period)
   place: string
   city: string
   country: string

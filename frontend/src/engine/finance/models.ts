@@ -61,6 +61,7 @@ export const LinePurchase = 'compra'
 export const LineVoluntary = 'voluntario'
 export const LineCharge = 'cargo'
 export const LineCredit = 'abono'
+export const LineDeferred = 'diferida' // cuotas 00/N: bought this period, billed from the next one
 
 export function rowToImportItem(r: SqlRow): ImportItem {
   return {
@@ -76,6 +77,7 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     installmentsTotal: asNumber(r.installments_total),
     hint: asString(r.hint),
     status: asString(r.status),
+    reference: asString(r.reference),
     expenseId: asNullableNumber(r.expense_id),
     matchedItemId: asNullableNumber(r.matched_item_id),
     createdAt: asString(r.created_at),

@@ -53,6 +53,7 @@ type ImportItem struct {
 	InstallmentsTotal int           `bun:"installments_total,notnull" json:"installmentsTotal"`
 	Hint              string        `bun:"hint,notnull" json:"hint"`
 	Status            string        `bun:"status,notnull" json:"status"`
+	Reference         string        `bun:"reference,notnull" json:"reference"` // the bank's operation code as printed ("" = none): proof for a dispute
 	ExpenseID         *int64        `bun:"expense_id" json:"expenseId"`
 	MatchedItemID     *int64        `bun:"matched_item_id" json:"matchedItemId"`
 	CreatedAt         time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
@@ -93,8 +94,9 @@ type MerchantRule struct {
 }
 
 // ImportCandidate is one movement as a parser extracted it, before staging.
-// Account and Reference (operation number, email Message-ID…) only feed the
-// deduplication key; Amount is a positive decimal string.
+// Account only feeds the deduplication key; Reference (operation number, email
+// Message-ID…) feeds it too and is kept on the item, where the user can quote
+// it to the bank. Amount is a positive decimal string.
 type ImportCandidate struct {
 	Date              string `json:"date"` // YYYY-MM-DD
 	Description       string `json:"description"`

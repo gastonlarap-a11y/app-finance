@@ -73,7 +73,9 @@ func expenseFilter(uid int64, f ExpenseFilter) func(*bun.SelectQuery) *bun.Selec
 		q = q.Where("ex.user_id = ?", uid)
 		if text := strings.TrimSpace(f.Text); text != "" {
 			pattern := "%" + escapeLike(text) + "%"
-			q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\')`, pattern, pattern)
+			refCond, refArgs := referenceMatch(uid, pattern)
+			q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\' OR `+refCond+`)`,
+				append([]any{pattern, pattern}, refArgs...)...)
 		}
 		switch cat := strings.TrimSpace(f.Category); cat {
 		case "":
@@ -143,15 +145,23 @@ func (s *FinanceService) expenseHits(ctx context.Context, uid int64, expenses []
 	if err != nil {
 		return nil, err
 	}
+	refs, err := s.referencesByExpense(ctx, uid, ids)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, ex := range expenses {
 		hit := ExpenseHit{
-			Expense: ex,
-			Total:   ex.InstallmentAmount.MulInt(int64(max(ex.InstallmentsTotal, 1))),
-			Tags:    tags[ex.ID],
+			Expense:    ex,
+			Total:      ex.InstallmentAmount.MulInt(int64(max(ex.InstallmentsTotal, 1))),
+			Tags:       tags[ex.ID],
+			References: refs[ex.ID],
 		}
 		if hit.Tags == nil {
 			hit.Tags = []string{}
+		}
+		if hit.References == nil {
+			hit.References = []string{}
 		}
 		if sp := spans[ex.ID]; sp != nil {
 			hit.FirstPeriod, hit.LastPeriod, hit.PaidCount = sp.first, sp.last, sp.paid

@@ -188,7 +188,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       issuer: 'itau',
       items: [
         { ...blank, date: `${period}-05`, description: 'CRUZ VERDE L9093 CHILLAN C', amount: '16182' },
-        { ...blank, date: `${period}-06`, description: 'ENTEL PCS PAGO ENSANTIAGO C', amount: '16990' },
+        { ...blank, date: `${period}-06`, description: 'ENTEL PCS PAGO ENSANTIAGO C', amount: '16990', reference: '0606 77777777' },
       ],
     }
     expect(ok(await finance.StageImport(batch)).data?.added).toBe(2)
@@ -201,6 +201,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     )
     const rules = await finance.ListMerchantRules()
     expect(rules).toHaveLength(1)
+    expect(ok(await finance.SearchExpenses(filter({ text: '77777777' }))).data?.count).toBe(1)
     const statement: CardStatementInput = {
       ...blankStatement,
       issuer: 'itau',
@@ -257,6 +258,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(hers.statementId).not.toBe(imported.statementId)
 
     expect(ok(await finance.SearchExpenses(filter())).data?.count).toBe(0)
+    expect(ok(await finance.SearchExpenses(filter({ text: '77777777' }))).data?.count).toBe(0) // Gastón's bank code
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])

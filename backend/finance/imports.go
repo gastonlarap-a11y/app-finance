@@ -255,6 +255,7 @@ func validateCandidate(c ImportCandidate) (ImportItem, *shared.AppError) {
 		CardLastDigits:    digits,
 		InstallmentsTotal: total,
 		Hint:              c.Hint,
+		Reference:         strings.TrimSpace(c.Reference),
 		Kind:              kind,
 		InstallmentNumber: number,
 		InstallmentAmount: cuota,
@@ -305,6 +306,10 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		return nil, fmt.Errorf("listing cards: %w", err)
 	}
 	cardByDigits := cardsByLastDigits(cards)
+	cutoffs, err := cutoffsFor(ctx, s.db, uid)
+	if err != nil {
+		return nil, err
+	}
 	rules, err := s.listMerchantRules(ctx, uid)
 	if err != nil {
 		return nil, err
@@ -341,16 +346,16 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 	out := make([]ImportItemView, 0, len(items))
 	for _, it := range items {
 		v := ImportItemView{ImportItem: it, SuggestedPattern: suggestPattern(it.Description), Reopenable: reopenable[it.ID]}
-		billingDay := 0
+		var cutoff cardCutoff
 		if c, ok := cardByDigits[it.CardLastDigits]; ok {
-			v.CardID, v.CardName, billingDay = &c.ID, c.Name, c.BillingDay
+			v.CardID, v.CardName, cutoff = &c.ID, c.Name, cutoffs[c.ID]
 		}
 		if r, ok := ruleFor(rules, it.Description); ok {
 			v.RulePattern, v.SuggestedMerchant, v.SuggestedCategory = r.Pattern, r.Merchant, r.Category
 		}
 		v.SuggestedAmountClp = suggestClp(it, fx)
 		if it.Status == ImportPendiente && it.Kind == ImportKindExpense {
-			period := billingPeriodOf(it, billingDay)
+			period := billingPeriodOf(it, cutoff)
 			if fe, ok := fixed.suggest(it, period, v.CardID, clpAmountOf(it, v.SuggestedAmountClp)); ok {
 				v.SuggestedFixedID, v.SuggestedFixedDescription, v.SuggestedFixedPeriod = &fe.ID, fe.Description, period
 			}
@@ -589,7 +594,7 @@ func (s *FinanceService) ConfirmImportItem(
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
-	billingDay, aerr := s.billingDayFor(ctx, uid, cardID, false)
+	cutoff, aerr := s.cutoffFor(ctx, uid, cardID, false)
 	if aerr != nil {
 		return ExpenseResult{Error: aerr}
 	}
@@ -614,7 +619,7 @@ func (s *FinanceService) ConfirmImportItem(
 		if item.FirstPeriod != "" && ex.InstallmentsTotal == item.InstallmentsTotal {
 			first, paid = item.FirstPeriod, item.InstallmentNumber-1
 		}
-		if err := generateInstallmentsFrom(ctx, tx, ex, billingDay, first, paid); err != nil {
+		if err := generateInstallmentsFrom(ctx, tx, ex, cutoff, first, paid); err != nil {
 			return fmt.Errorf("generating installments: %w", err)
 		}
 		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).

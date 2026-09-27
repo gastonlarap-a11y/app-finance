@@ -101,6 +101,9 @@ type Movimiento struct {
 	Estimado bool `json:"estimado"`
 	// Tags of the expense behind a cuota (always a list, empty when none).
 	Tags []string `json:"tags"`
+	// References are the bank's codes for the expense behind a cuota, one per
+	// statement that reported it (always a list, empty when none).
+	References []string `json:"references"`
 }
 
 type CategoryTotal struct {
@@ -346,6 +349,7 @@ type ExpenseHit struct {
 	Total       types.Decimal `json:"total"` // monto cuota × cuotas
 	PaidCount   int           `json:"paidCount"`
 	Tags        []string      `json:"tags"`
+	References  []string      `json:"references"` // the bank's codes for it, one per statement (see reference.go)
 }
 
 type ExpenseSearch struct {
