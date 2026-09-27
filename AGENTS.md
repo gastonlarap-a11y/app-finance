@@ -9,9 +9,10 @@ Guidance for any AI agent working in this repository — Claude Code reads it th
 UI): a Go backend bound to a React 19 + Vite frontend, plus an installable web/PWA target for iPad
 running the same UI over a local TypeScript engine. It tracks money month to month — per-month
 salary, extra incomes, expenses (one-off or credit-card installments/cuotas), recurring fixed
-expenses, cards, categories (with effective-dated monthly budgets), merchants, monthly/yearly
-summaries (incl. category × month), a commitments forecast and a history-wide expense search — with
-local SQLite storage and optional Google Drive backup.
+expenses, cards, categories (with effective-dated monthly budgets, $0 caps and rollover), merchants,
+light accounts, shared expenses (receivables), purchases in another currency, due-date reminders,
+monthly/yearly summaries (incl. category × month), a commitments forecast and a history-wide expense
+search — with local SQLite storage and optional Google Drive backup.
 
 This is **Wails v3, not v2** — confirm via the import `github.com/wailsapp/wails/v3/pkg/application`
 in `main.go`. Never use v2 APIs (`wails.Run`, `OnDomReady`, the global `runtime` package) or the v2
@@ -73,7 +74,9 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `exitWithDialog` (native error dialog), never a bare `os.Exit`.
 - **One Service per domain**: plain struct + `application.NewService(...)`; exported methods
   auto-bind to TS. Reference: `backend/finance/service.go`. Current services: `finance`, `users`,
-  `settings`, `mailsync` (desktop only), `updates` (desktop only), `diagnostics`, `reports`.
+  `settings`, `mailsync` (desktop only), `updates` (desktop only), `reminders` (desktop only, native
+  due-date notifications, no bound methods), `diagnostics`, `reports`. Every exported method of a
+  service becomes a binding: cross-service hooks are package functions (`users.AddPurgeHook`).
 - **`finance`** (`backend/finance/`) is the core domain — one file per entity plus `period.go`
   (YYYY-MM math), `result.go` (view models) and `service.go` (bound methods + summaries).
   Per-month values resolve by lexical `period` string comparison; fixed expenses use
@@ -140,6 +143,12 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore. Children of a
   trashed parent are frozen (no paying its cuotas, no deleting its contributions); an edit may keep
   a trashed card a row already has (`billingDayFor(…, allowTrashed)`), nothing new may use it.
+  Deleting for good happens only from the trash (`PurgeTrashItem`/`EmptyTrash`, `users.PurgeUser`,
+  which finds every `user_id` table at run time); children go by `ON DELETE CASCADE`.
+- **Views over the ledger, never a second ledger**: accounts (`account.go`) and due dates
+  (`dues.go`) only attribute or read existing flows. A receivable settles as a refund
+  (`insertRefund`), a foreign-currency purchase keeps its pesos in `installment_amount`. None of them
+  adds a monthly flow to `flowsBetween`.
 - **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —
   `replanInstallments` adapts them by number (stable ids: statement lines link to them), applies a
   new amount to pending cuotas only, keeps the cuota-1 month while the date/card lead to the same

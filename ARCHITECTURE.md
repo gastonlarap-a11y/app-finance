@@ -29,6 +29,8 @@ Stack:
 - **`mailsync`** (`backend/mailsync/`, desktop only) — reads the bank's purchase-alert emails over
   IMAP and stages them in the finance import inbox (see §18). Drives "Ajustes → Correo de alertas".
 - **`updates`** (`backend/updates/`, desktop only) — in-app updates from GitHub Releases (see §19).
+- **`reminders`** (`backend/reminders/`, desktop only, no bound methods) — native due-date
+  notifications (see "Due dates and reminders" in §4).
 - **`diagnostics`** — error reporting. **`reports`** — Excel export (`backend/reports/excel.go`).
 
 `main.go` also constructs the `users.Session` (seeded from `prefs.ActiveUserID`) before the finance
@@ -217,6 +219,54 @@ one tracked. `MonthlySummary.Conciliacion` shows real vs computed (`Balance`) an
 `CommitmentsForecast` reset their running balance at a reconciled close (`YearMonth.Conciliado`).
 A month that has not started cannot be reconciled.
 
+**Budget rules** (`budget.go`, migrations `20260927029`–`030`). A budget row is either a cap
+(`capped = 1`, and `0` is a real cap: "no gastar en X") or the end of one (`RemoveCategoryBudget`
+writes `capped = 0` from a month on). A category with `rollover` carries last month's unspent cap
+into the next (`rolloverCarries`, `BudgetStatus.Carried`): only a positive remainder carries, and a
+month without a cap restarts the chain. «Sin categoría» is the bucket of uncategorized spending, so
+no category may take that name (`validCategoryName`; migration 029 renamed an existing one to
+«Sin categoría (propia)»).
+
+**Cuotas the bank rounds, and paying a plan off** (`installments.go`). `SetInstallmentAmount` edits
+one pending cuota (uneven plans). When a bank movement confirms or merges into a plan,
+`settleLastCuota` makes the last cuota absorb the rounding, so the cuotas add up to the bank's total.
+`PrepayExpense` moves every pending cuota into `period` (the month the balance is paid), keeping each
+amount; paid cuotas stay where they are.
+
+**Receivables** (`receivable.go`, migration `20260927031`) cover shared expenses: the part of an
+expense someone else owes (`person`, `amount` ≤ the expense). Settling one records a refund on that
+expense in the month it arrives (`SettleReceivable` → `insertRefund`), so every total nets it through
+the refund path. An open receivable changes nothing.
+
+**Purchases in another currency** (`currency.go`, migration `20260927032`). The expense stays in
+pesos for every total (`installment_amount`), and additionally keeps `currency`, `original_amount`
+(its total there) and `fx_rate`. `ConfirmImportItem` records them from a foreign-currency item
+(`recordItemCurrency`), and `LatestFxRate` suggests the CLP/USD rate implied by the last
+international card payment.
+
+**Accounts, light** (`account.go`, migration `20260927033`). An account (corriente, vista,
+efectivo, ahorro) is a lens on the same ledger, never a second one: `accounts` rows with an opening
+balance and month, plus a nullable `account_id` on expenses, incomes and cards. `ListAccounts`
+attributes each month's flows (`accountFlows`): the salary to the one `receives_salary` account,
+incomes to theirs, cuotas and refunds to the expense's account or its card's, and fixed charges to
+their card's. `AccountsSummary.Unassigned*` shows what no account claims. The app's
+`Disponible`/`Balance` do not change, and nothing moves money between accounts.
+
+**Due dates and reminders** (`dues.go`, migration `20260927034`; `backend/reminders`).
+`UpcomingDues(today, days)` lists what is still unpaid and falls due from `today` to `days` later,
+plus what fell due in the last 10 days:
+- a card falls due on its imported statement's «pagar hasta» date. What it owes is its pending
+  cuotas and fixed charges of the statement's month, so a paid card drops off;
+- a fixed expense without a card falls due on its `due_day` (clamped to the month's last day). One
+  on a card is paid with the card's statement.
+
+Both builds show them atop the month view (`DuesBanner`). The desktop `reminders` service adds a
+native notification: Wails' `pkg/services/notifications`, at most one a day (`prefs.LastDueReminder`),
+3 days ahead, checked 20 s after launch and hourly. It starts the notifier itself instead of
+registering it, because the notifier's startup fails without a bundle id (`wails3 dev`), and a
+missing reminder must never block the app. The iPad/PWA build has no background push: that needs a
+push server, and the app only uses free services.
+
 ## 4b. Backup & Google Drive
 
 `backend/shared/backup` snapshots the live SQLite DB and (when Drive is connected) uploads it via
@@ -226,8 +276,12 @@ backup-on-close; `main.go` runs a backup in `OnShutdown` when that flag is on. `
 persists these user choices and overrides `config` at startup (DB folder, OAuth creds, backup-on-close).
 
 Local snapshots are timestamped (`<name>-YYYYMMDD-HHMMSS.db`, last 3 kept) and each is written with
-`VACUUM INTO` to a `.tmp` file renamed into place, so a failed backup never destroys the previous one;
-Drive still holds one file, overwritten by each upload. When the DB file did not exist at startup (a DB
+`VACUUM INTO` to a `.tmp` file renamed into place, so a failed backup never destroys the previous one.
+Drive holds one file **per computer** (`DriveFileName` = `<name>-<device>.db`, from the device label),
+overwritten by that computer's uploads, so two computers on one Google account never overwrite each
+other. The first upload claims the old single file of that name (`ownsFile`, renaming it). A Drive
+restore takes the newest file of any computer and says which one («Google Drive · equipo X · fecha»).
+When the DB file did not exist at startup (a DB
 folder that went missing, e.g. an unsynced cloud folder), the runner refuses to back up while earlier
 backups exist (`backup.ErrFreshDatabase`), so an empty DB never replaces them. `ApplyDBFolder` requires
 an absolute path, compares with `os.SameFile`, and refuses a folder that already holds a DB.
@@ -399,6 +453,13 @@ removing the row; list queries exclude soft-deleted rows automatically, and the 
 scoped to `deleted_at IS NULL`, so a deleted name can be reused and a restore never collides with an
 active row. See migrations `011` (finance) and `012` (users).
 
+**Deleting for good** is a second step, done from the trash only. `PurgeTrashItem` and `EmptyTrash`
+hard-delete trashed rows; their children go by `ON DELETE CASCADE`. `users.PurgeUser` erases a
+trashed profile from every table that has a `user_id` column. It finds those tables at run time
+(`sqlite_master` × `pragma_table_info`), so a new table is covered without code changes. Purge hooks
+(`users.AddPurgeHook`) clean up what lives outside the DB, such as the profile's mail password in the
+keychain (`mailsync.ForgetUserSecrets`).
+
 ## 16. Merchants
 
 `backend/finance/merchant.go` is a user-managed list of "comercios". Expenses store the merchant as
@@ -552,6 +613,9 @@ expense until the user confirms it:
   each fetched chunk's items and watermark commit in one transaction. The password lives in the OS
   keychain (`go-keyring`), never in the DB or prefs. Email parsers implement `EmailParser`
   (`parsers.go` registry); emails nobody recognizes are counted and reported, not guessed.
+  An item's reference is the email's Message-ID; an email without one falls back to
+  `imap:<uidvalidity>:<uid>` (`messageRef`), so two identical purchases alerted by header-less
+  emails stay two items instead of collapsing into one.
 
 ## 19. In-app updates (desktop)
 
