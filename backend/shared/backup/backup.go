@@ -29,7 +29,7 @@ import (
 
 const (
 	// keepBackups is how many timestamped local snapshots Run keeps.
-	keepBackups = 5
+	keepBackups = 3
 	// keepPreMigrate is how many pre-migration snapshots SnapshotBeforeMigrate keeps.
 	keepPreMigrate = 3
 	// preMigrateDir is the subfolder of the backup dir holding pre-migration snapshots.
