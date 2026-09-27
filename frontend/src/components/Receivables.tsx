@@ -1,11 +1,12 @@
 import { useState, type SubmitEvent } from 'react'
+import { HandCoins } from 'lucide-react'
 import { FinanceService, type Movimiento } from '@/services/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { perInstallment, times } from '@/lib/money'
-import { Button, Field, Modal, MoneyInput, QueryError, Section, inputCls } from './ui'
+import { Button, ConfirmAction, Field, Modal, MoneyInput, QueryError, Section, inputCls } from './ui'
 
 // ReceivableDialog records that someone owes part of an expense (a split
 // bill). When they pay, «Cobrado» turns it into a refund of the expense.
@@ -29,7 +30,7 @@ export function ReceivableDialog({ expense, onClose, onSaved }: { expense: Movim
   return (
     <Modal title={`Me deben de «${expense.description}»`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           El gasto costó {formatCLP(total)}. Cuando te paguen, márcalo como cobrado: se registra como reembolso y tu gasto queda en
           tu parte.
         </p>
@@ -46,7 +47,7 @@ export function ReceivableDialog({ expense, onClose, onSaved }: { expense: Movim
             <button
               key={n}
               type="button"
-              className="rounded-full bg-slate-800 px-3 py-1 text-slate-300 hover:bg-slate-700"
+              className="rounded-full bg-sunken px-3 py-1 text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-accent-soft hover:text-accent-fg"
               onClick={() => setAmount(perInstallment(total, n))}
             >
               Dividido en {n}: {formatCLP(perInstallment(total, n))}
@@ -54,11 +55,11 @@ export function ReceivableDialog({ expense, onClose, onSaved }: { expense: Movim
           ))}
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy || amount === '' || person.trim() === ''}>
-            {busy ? 'Guardando…' : 'Guardar'}
+          <Button type="submit" loading={busy} disabled={amount === '' || person.trim() === ''}>
+            Guardar
           </Button>
         </div>
       </form>
@@ -71,7 +72,6 @@ export function ReceivableDialog({ expense, onClose, onSaved }: { expense: Movim
 export function ReceivablesPanel({ period }: { period: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
-  const [confirmId, setConfirmId] = useState<number | null>(null)
   const query = useQuery(`receivables:${version}`, async () => {
     const res = await FinanceService.ListReceivables()
     if (res.error) throw new Error(res.error.message)
@@ -83,7 +83,6 @@ export function ReceivablesPanel({ period }: { period: string }) {
   }
 
   async function remove(id: number) {
-    setConfirmId(null)
     if (!failed(await FinanceService.DeleteReceivable(id))) invalidate('ledger')
   }
 
@@ -91,34 +90,24 @@ export function ReceivablesPanel({ period }: { period: string }) {
   if (!query.data || query.data.length === 0) return null
   return (
     <Section title="Por cobrar">
-      <ul className="space-y-2">
+      <ul className="divide-y divide-line">
         {query.data.map((r) => (
-          <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 rounded-base bg-surface p-3 text-sm ring-1 ring-slate-800">
-            <div>
-              <span className="font-medium">{r.person}</span> te debe{' '}
-              <strong className="tabular-nums">{formatCLP(r.amount)}</strong>
-              <div className="text-xs text-slate-500">
-                de «{r.expenseDescription}» del {formatDate(r.expenseDate)}
+          <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm first:pt-0 last:pb-0">
+            <div className="flex min-w-0 items-start gap-3">
+              <HandCoins aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-fg-subtle" />
+              <div className="min-w-0">
+                <span className="font-medium text-fg">{r.person}</span> te debe <strong className="tabular-nums">{formatCLP(r.amount)}</strong>
+                <div className="text-xs text-fg-subtle">
+                  de «{r.expenseDescription}» del {formatDate(r.expenseDate)}
+                </div>
               </div>
             </div>
-            {confirmId === r.id ? (
-              <div className="flex items-center gap-2">
-                <span className="text-danger">¿Quitar?</span>
-                <Button variant="danger" onClick={() => void remove(r.id)}>
-                  Sí
-                </Button>
-                <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                  No
-                </Button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Button onClick={() => void settle(r.id)}>Cobrado en {periodLabel(period)}</Button>
-                <Button variant="ghost" onClick={() => setConfirmId(r.id)}>
-                  Quitar
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={() => void settle(r.id)}>
+                Cobrado en {periodLabel(period)}
+              </Button>
+              <ConfirmAction label={`Quitar la deuda de ${r.person}`} iconOnly question="¿Quitar?" confirmLabel="Quitar" onConfirm={() => remove(r.id)} />
+            </div>
           </li>
         ))}
       </ul>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Download } from 'lucide-react'
 import type { ExportTable } from '@/services/contract'
 import { saveTable } from '@/services/reports'
 import { notify } from '@/lib/notify'
@@ -24,8 +25,8 @@ export function ExportButton({ build, basename }: { build: () => ExportTable; ba
   }
 
   return (
-    <Button variant="ghost" onClick={run} disabled={busy}>
-      {busy ? 'Exportando…' : IS_WEB ? '⬇ CSV' : '⬇ Excel'}
+    <Button variant="secondary" size="sm" icon={Download} onClick={() => void run()} loading={busy}>
+      {busy ? 'Exportando…' : IS_WEB ? 'CSV' : 'Excel'}
     </Button>
   )
 }

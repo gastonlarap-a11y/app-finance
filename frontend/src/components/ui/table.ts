@@ -2,8 +2,10 @@
 // (headers, scope, screen-reader table navigation); the views' tables differ too
 // much in structure for a shared component to pay off.
 export const tbl = {
-  // Wide tables scroll inside their card instead of the whole page.
-  wrap: 'overflow-x-auto',
+  // Wide tables scroll inside their card instead of the whole page. `relative`
+  // keeps absolutely positioned descendants (sr-only labels) inside the
+  // scroller: otherwise they escape it and widen the page.
+  wrap: 'relative overflow-x-auto',
   table: 'w-full text-sm',
   thead: 'text-left text-xs font-medium uppercase tracking-wide text-fg-subtle',
   th: 'px-3 pb-2 font-medium first:pl-0 last:pr-0',
