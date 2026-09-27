@@ -5,6 +5,7 @@ import { errorText, useQuery } from '@/lib/useQuery'
 import { perInstallment, times, toPesos } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
+import { AccountSelect, useAccounts } from './Accounts'
 
 const MAX_CUOTAS = 120
 
@@ -135,6 +136,9 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const [rate, setRate] = useState(target.mode === 'edit' ? target.expense.fxRate : '')
   const foreign = currency !== 'CLP'
   const usdRate = useQuery('expense-form-fx', async () => (await FinanceService.LatestFxRate()).data)
+  const accounts = useAccounts()
+  const initialAccount = target.mode === 'edit' ? target.expense.accountId : null
+  const [accountId, setAccountId] = useState<number | null>(initialAccount)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -188,6 +192,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
       if (res.data && target.mode !== 'confirm' && (foreign || currency !== initialCurrency)) {
         failed(await FinanceService.SetExpenseCurrency(res.data.id, currency, foreign ? original : '', foreign ? rate : ''))
       }
+      if (res.data && accountId !== initialAccount) failed(await FinanceService.SetExpenseAccount(res.data.id, accountId))
       onSaved()
       onClose()
     } catch (err) {
@@ -366,6 +371,14 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
             <input className={inputCls} type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           </Field>
         </div>
+
+        <AccountSelect
+          accounts={accounts}
+          value={accountId}
+          onChange={setAccountId}
+          label="Cuenta"
+          noneLabel={cardId !== '' ? 'La de la tarjeta' : 'Sin cuenta'}
+        />
 
         {firstPeriod && (
           <p className="text-xs text-slate-400">

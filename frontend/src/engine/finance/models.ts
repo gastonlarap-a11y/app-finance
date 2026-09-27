@@ -1,6 +1,7 @@
 // Row→model mappers: snake_case SQLite columns to the camelCase shapes the UI
 // receives (identical to what Wails serializes from the Go structs).
 import type {
+  Account,
   Card,
   CardStatement,
   CardStatementLine,
@@ -231,8 +232,22 @@ export function rowToCard(r: SqlRow): Card {
     creditLimit: asString(r.credit_limit),
     billingDay: asNumber(r.billing_day),
     lastDigits: asString(r.last_digits),
+    accountId: asNullableNumber(r.account_id),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
+  }
+}
+
+export function rowToAccount(r: SqlRow): Account {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    name: asString(r.name),
+    kind: asString(r.kind),
+    openingBalance: asString(r.opening_balance),
+    openingPeriod: asString(r.opening_period),
+    receivesSalary: asNumber(r.receives_salary) === 1,
+    createdAt: asString(r.created_at),
   }
 }
 
@@ -298,6 +313,7 @@ export function rowToIncome(r: SqlRow): Income {
     period: asString(r.period),
     description: asString(r.description),
     amount: asString(r.amount),
+    accountId: asNullableNumber(r.account_id),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }
@@ -315,6 +331,7 @@ export function rowToExpense(r: SqlRow): Expense {
     currency: asString(r.currency) || 'CLP',
     originalAmount: asString(r.original_amount),
     fxRate: asString(r.fx_rate),
+    accountId: asNullableNumber(r.account_id),
     cardId: asNullableNumber(r.card_id),
     kind: asString(r.kind),
     installmentAmount: asString(r.installment_amount),

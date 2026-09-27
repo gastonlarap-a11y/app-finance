@@ -7,6 +7,9 @@ import type { FinanceServiceContract } from '@/services/contract'
 export const FinanceService = remoteService<FinanceServiceContract>('finance')
 
 export type {
+  Account,
+  AccountView,
+  AccountsSummary,
   BudgetStatus,
   Card,
   CardDebt,

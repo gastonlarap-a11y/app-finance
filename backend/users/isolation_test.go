@@ -168,6 +168,10 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if owed.Error != nil {
 		t.Fatalf("CreateReceivable: %v", owed.Error)
 	}
+	acct := fin.CreateAccount(ctx, "Corriente", "corriente", "0", period, true)
+	if acct.Error != nil {
+		t.Fatalf("CreateAccount: %v", acct.Error)
+	}
 	if r := fin.SetExpenseTags(ctx, expense.Data.ID, []string{"Salud"}); r.Error != nil {
 		t.Fatalf("SetExpenseTags: %v", r.Error)
 	}
@@ -233,6 +237,12 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.SettleReceivable(ctx, owed.Data.ID, period).Error}
 		}},
 		{"DeleteReceivable", func() finance.OpResult { return fin.DeleteReceivable(ctx, owed.Data.ID) }},
+		{"UpdateAccount", func() finance.OpResult {
+			return finance.OpResult{Error: fin.UpdateAccount(ctx, acct.Data.ID, "x", "vista", "0", period, false).Error}
+		}},
+		{"DeleteAccount", func() finance.OpResult { return fin.DeleteAccount(ctx, acct.Data.ID) }},
+		{"SetExpenseAccount", func() finance.OpResult { return fin.SetExpenseAccount(ctx, expense.Data.ID, &acct.Data.ID) }},
+		{"SetExpenseAccount none", func() finance.OpResult { return fin.SetExpenseAccount(ctx, expense.Data.ID, nil) }},
 		{"ConfirmImportItemAsRefund", func() finance.OpResult {
 			return finance.OpResult{Error: fin.ConfirmImportItemAsRefund(ctx, creditID, expense.Data.ID, period, "1").Error}
 		}},
@@ -320,6 +330,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.ListReceivables(ctx); r.Error != nil || len(r.Data) != 0 {
 		t.Fatalf("Camila ListReceivables = %+v, want none", r)
+	}
+	if r := fin.ListAccounts(ctx, period); r.Error != nil || len(r.Data.Accounts) != 0 {
+		t.Fatalf("Camila ListAccounts = %+v, want none", r)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

@@ -29,8 +29,44 @@ export interface Card {
   creditLimit: string
   billingDay: number
   lastDigits: string // last 4 digits, '' = not informed
+  accountId: number | null // the account it is paid from
   createdAt: string
   deletedAt?: string | null
+}
+
+// Accounts (checking, savings, cash): a lens on the same ledger, with a
+// balance each; the app's total balance does not change.
+export interface Account {
+  id: number
+  userId: number
+  name: string
+  kind: string // 'corriente' | 'vista' | 'efectivo' | 'ahorro' | 'otra'
+  openingBalance: string
+  openingPeriod: string // YYYY-MM the balance counts from
+  receivesSalary: boolean
+  createdAt: string
+}
+
+export interface AccountView extends Account {
+  balance: string // at the close of the month asked for
+  ingresos: string // that month
+  gastos: string // that month
+}
+
+export interface AccountsSummary {
+  accounts: AccountView[]
+  unassignedIngresos: string // the month's income no account claims
+  unassignedGastos: string
+}
+
+export interface AccountResult {
+  data?: Account | null
+  error?: AppError | null
+}
+
+export interface AccountsResult {
+  data?: AccountsSummary | null
+  error?: AppError | null
 }
 
 export interface Category {
@@ -56,6 +92,7 @@ export interface Income {
   period: string
   description: string
   amount: string
+  accountId: number | null // lands in this account
   createdAt: string
   deletedAt?: string | null
 }
@@ -74,6 +111,7 @@ export interface Expense {
   originalAmount: string // total in `currency`; '' for CLP
   fxRate: string // pesos per unit of `currency`; '' for CLP
   cardId: number | null
+  accountId: number | null // paid from this account (null = its card's, or none)
   kind: string
   installmentAmount: string
   installmentsTotal: number
@@ -815,6 +853,20 @@ export interface FinanceServiceContract {
   SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
   PrepayExpense(expenseID: number, period: string): Promise<OpResult>
   SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult>
+  ListAccounts(period: string): Promise<AccountsResult>
+  CreateAccount(name: string, kind: string, openingBalance: string, openingPeriod: string, receivesSalary: boolean): Promise<AccountResult>
+  UpdateAccount(
+    id: number,
+    name: string,
+    kind: string,
+    openingBalance: string,
+    openingPeriod: string,
+    receivesSalary: boolean,
+  ): Promise<AccountResult>
+  DeleteAccount(id: number): Promise<OpResult>
+  SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult>
+  SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult>
+  SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult>
   LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>

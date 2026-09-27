@@ -33,6 +33,7 @@ type Expense struct {
 	OriginalAmount    string        `bun:"original_amount,notnull" json:"originalAmount"` // total in Currency; "" for CLP
 	FxRate            string        `bun:"fx_rate,notnull" json:"fxRate"`                 // pesos per unit of Currency; "" for CLP
 	CardID            *int64        `bun:"card_id" json:"cardId"`
+	AccountID         *int64        `bun:"account_id" json:"accountId"` // paid from this account (nil = its card's, or none)
 	Kind              string        `bun:"kind,notnull" json:"kind"`
 	InstallmentAmount types.Decimal `bun:"installment_amount,notnull" json:"installmentAmount"`
 	InstallmentsTotal int           `bun:"installments_total,notnull,default:1" json:"installmentsTotal"`

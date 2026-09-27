@@ -51,6 +51,10 @@ import type {
   PeriodSalary,
   ReconciliationResult,
   FxRateResult,
+  Account,
+  AccountResult,
+  AccountsResult,
+  AccountView,
   ReceivableResult,
   ReceivablesResult,
   RefundResult,
@@ -143,6 +147,7 @@ import {
   StatementNational,
   StatusPagado,
   StatusPendiente,
+  rowToAccount,
   rowToCard,
   rowToCardStatement,
   rowToCardStatementLine,
@@ -1622,6 +1627,102 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [want.toString(), last.id, uid()])
   }
 
+  // validAccount mirrors Go: a named account of a known kind with a valid
+  // opening balance (may be negative) and month.
+  function validAccount(
+    name: string,
+    kind: string,
+    opening: string,
+    openingPeriod: string,
+  ): { name: string; balance: string; error?: ReturnType<typeof newError> } {
+    const n = name.trim()
+    if (n === '') return { name: '', balance: '', error: newError(ErrValidation, 'el nombre es obligatorio') }
+    if (!['corriente', 'vista', 'efectivo', 'ahorro', 'otra'].includes(kind)) {
+      return { name: '', balance: '', error: newError(ErrValidation, 'tipo de cuenta inválido: ' + kind) }
+    }
+    if (!validPeriod(openingPeriod)) return { name: '', balance: '', error: invalidPeriodError() }
+    try {
+      return { name: n, balance: Money.fromString(opening.trim()).toString() }
+    } catch {
+      return { name: '', balance: '', error: newError(ErrValidation, 'saldo inicial inválido: ' + opening) }
+    }
+  }
+
+  // keepOneSalaryAccount mirrors Go: the salary lands in one account only.
+  function keepOneSalaryAccount(acc: Account): void {
+    if (acc.receivesSalary) db.exec('UPDATE accounts SET receives_salary = 0 WHERE user_id = ? AND id <> ?', [uid(), acc.id])
+  }
+
+  // setAccountOf mirrors Go: names the account (null = none) of one row.
+  function setAccountOf(table: string, id: number, accountID: number | null, notFound: string): OpResult {
+    if (accountID !== null && db.query('SELECT 1 FROM accounts WHERE id = ? AND user_id = ?', [accountID, uid()]).length === 0) {
+      return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+    }
+    db.exec(`UPDATE ${table} SET account_id = ? WHERE id = ? AND user_id = ?`, [accountID, id, uid()])
+    if (db.changes() === 0) return { error: newError(ErrNotFound, notFound) }
+    return {}
+  }
+
+  // accountFlows mirrors Go: per account (0 = none) and month in [from, to],
+  // what came in and went out.
+  function accountFlows(accs: Account[], from: string, to: string): Map<number, Map<string, { in: Money; out: Money }>> {
+    const out = new Map<number, Map<string, { in: Money; out: Money }>>()
+    const add = (acc: number, period: string, inAmt: Money, outAmt: Money) => {
+      const byPeriod = out.get(acc) ?? new Map<string, { in: Money; out: Money }>()
+      const f = byPeriod.get(period) ?? { in: Money.zero(), out: Money.zero() }
+      byPeriod.set(period, { in: f.in.add(inAmt), out: f.out.add(outAmt) })
+      out.set(acc, byPeriod)
+    }
+    const salaryAcc = accs.find((a) => a.receivesSalary)?.id ?? 0
+    const accOf = (r: SqlRow) => (r.account == null ? 0 : asNumber(r.account))
+    const money = (r: SqlRow) => Money.fromString(asString(r.amount))
+    for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
+      uid(),
+      from,
+      to,
+    ])) {
+      add(salaryAcc, asString(r.period), money(r), Money.zero())
+    }
+    for (const r of db.query(
+      `SELECT period, amount, account_id AS account FROM incomes
+       WHERE user_id = ? AND deleted_at IS NULL AND period >= ? AND period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), money(r), Money.zero())
+    }
+    for (const r of db.query(
+      `SELECT inst.period AS period, inst.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+       FROM installments AS inst JOIN expenses AS ex ON ex.id = inst.expense_id AND ex.deleted_at IS NULL
+       LEFT JOIN cards AS c ON c.id = ex.card_id
+       WHERE inst.user_id = ? AND inst.period >= ? AND inst.period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), Money.zero(), money(r))
+    }
+    for (const r of db.query(
+      `SELECT rf.period AS period, rf.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+       FROM refunds AS rf JOIN expenses AS ex ON ex.id = rf.expense_id AND ex.deleted_at IS NULL
+       LEFT JOIN cards AS c ON c.id = ex.card_id
+       WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), Money.zero(), Money.zero().sub(money(r)))
+    }
+    const cardAcc = new Map<number, number>()
+    for (const c of db.query('SELECT id, account_id FROM cards WHERE user_id = ?', [uid()])) {
+      if (c.account_id != null) cardAcc.set(asNumber(c.id), asNumber(c.account_id))
+    }
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    for (let m = from; m <= to; m = addMonths(m, 1)) {
+      for (const fe of fixed) {
+        if (!billsIn(fe, m)) continue
+        const acc = fe.cardId != null ? (cardAcc.get(fe.cardId) ?? 0) : 0
+        add(acc, m, Money.zero(), fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
+      }
+    }
+    return out
+  }
+
   // recordItemCurrency mirrors Go: a confirmed foreign item keeps its original
   // total and the rate the user's pesos imply (4 decimals) on its expense.
   function recordItemCurrency(item: ImportItem, expenseId: number, pesos: Money): void {
@@ -3017,6 +3118,93 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // Cuotas of an expense in the trash are frozen with it (mirrors Go).
+    // ---------- accounts (mirror of account.go) ----------
+
+    async ListAccounts(period: string): Promise<AccountsResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const accs = db.query('SELECT * FROM accounts WHERE user_id = ? ORDER BY name ASC', [uid()]).map(rowToAccount)
+      const from = accs.reduce((m, a) => (a.openingPeriod < m ? a.openingPeriod : m), period)
+      const flows = accountFlows(accs, from, period)
+      const flowOf = (id: number, m: string) => flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero() }
+      const views: AccountView[] = accs.map((a) => {
+        let balance = Money.zero()
+        if (a.openingPeriod <= period) {
+          balance = Money.fromString(a.openingBalance)
+          for (let m = a.openingPeriod; m <= period; m = addMonths(m, 1)) {
+            const f = flowOf(a.id, m)
+            balance = balance.add(f.in).sub(f.out)
+          }
+        }
+        const f = flowOf(a.id, period)
+        return { ...a, balance: balance.toString(), ingresos: f.in.toString(), gastos: f.out.toString() }
+      })
+      const none = flowOf(0, period)
+      return { data: { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString() } }
+    },
+
+    async CreateAccount(
+      name: string,
+      kind: string,
+      openingBalance: string,
+      openingPeriod: string,
+      receivesSalary: boolean,
+    ): Promise<AccountResult> {
+      const v = validAccount(name, kind, openingBalance, openingPeriod)
+      if (v.error) return { error: v.error }
+      return db.transaction((): AccountResult => {
+        const row = db.query(
+          `INSERT INTO accounts (user_id, name, kind, opening_balance, opening_period, receives_salary, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), v.name, kind, v.balance, openingPeriod, receivesSalary ? 1 : 0, nowIso()],
+        )[0]
+        if (!row) throw new Error('INSERT accounts RETURNING produced no row')
+        const acc = rowToAccount(row)
+        keepOneSalaryAccount(acc)
+        return { data: acc }
+      })
+    },
+
+    async UpdateAccount(
+      id: number,
+      name: string,
+      kind: string,
+      openingBalance: string,
+      openingPeriod: string,
+      receivesSalary: boolean,
+    ): Promise<AccountResult> {
+      const v = validAccount(name, kind, openingBalance, openingPeriod)
+      if (v.error) return { error: v.error }
+      return db.transaction((): AccountResult => {
+        db.exec(
+          `UPDATE accounts SET name = ?, kind = ?, opening_balance = ?, opening_period = ?, receives_salary = ?
+           WHERE id = ? AND user_id = ?`,
+          [v.name, kind, v.balance, openingPeriod, receivesSalary ? 1 : 0, id, uid()],
+        )
+        if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+        const acc = rowToAccount(db.query('SELECT * FROM accounts WHERE id = ?', [id])[0]!)
+        keepOneSalaryAccount(acc)
+        return { data: acc }
+      })
+    },
+
+    async DeleteAccount(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM accounts WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+      return {}
+    },
+
+    async SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('expenses', expenseID, accountID, 'gasto no encontrado')
+    },
+
+    async SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('incomes', incomeID, accountID, 'ingreso no encontrado')
+    },
+
+    async SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('cards', cardID, accountID, 'tarjeta no encontrada')
+    },
+
     async LatestFxRate(): Promise<FxRateResult> {
       return { data: latestFxRate() }
     },

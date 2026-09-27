@@ -226,6 +226,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect((await finance.UFMonthsNeeded())[0]).toBe(reconciled)
     const refund = ok(await finance.CreateRefund(expense.data!.id, period, '1000', '')).data!
     const owed = ok(await finance.CreateReceivable(expense.data!.id, 'Ana', '1000')).data!
+    const acct = ok(await finance.CreateAccount('Corriente', 'corriente', '0', period, true)).data!
     const cuotaID = ok(await finance.MonthlySummary(period)).data!.movimientos.find(
       (m) => m.expenseId === expense.data!.id,
     )!.installmentId
@@ -256,6 +257,10 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.CreateReceivable(expense.data!.id, 'x', '1'),
       () => finance.SettleReceivable(owed.id, period),
       () => finance.DeleteReceivable(owed.id),
+      () => finance.UpdateAccount(acct.id, 'x', 'vista', '0', period, false),
+      () => finance.DeleteAccount(acct.id),
+      () => finance.SetExpenseAccount(expense.data!.id, acct.id),
+      () => finance.SetExpenseAccount(expense.data!.id, null),
       () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
@@ -273,6 +278,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(ok(await finance.SearchExpenses(filter())).data?.count).toBe(0)
     expect(ok(await finance.SearchExpenses(filter({ text: '77777777' }))).data?.count).toBe(0) // Gastón's bank code
     expect(ok(await finance.ListReceivables()).data).toEqual([])
+    expect(ok(await finance.ListAccounts(period)).data?.accounts).toEqual([])
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])

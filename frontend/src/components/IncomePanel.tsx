@@ -7,6 +7,7 @@ import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
 import { Button, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
+import { useAccounts } from './Accounts'
 
 export function IncomePanel() {
   const period = useAtomValue(periodAtom)
@@ -66,6 +67,11 @@ export function IncomePanel() {
     if (!failed(await FinanceService.DeleteIncome(id))) reload()
   }
 
+  const accounts = useAccounts()
+  async function setIncomeAccount(id: number, accountId: number | null) {
+    if (!failed(await FinanceService.SetIncomeAccount(id, accountId))) reload()
+  }
+
   return (
     <Section title="Ingresos">
       {query.status === 'error' && (
@@ -97,6 +103,21 @@ export function IncomePanel() {
                 <li key={x.id} className="flex items-center justify-between text-sm">
                   <span className="truncate text-slate-300">{x.description}</span>
                   <span className="flex items-center gap-2">
+                    {accounts.length > 0 && (
+                      <select
+                        aria-label={`Cuenta de ${x.description}`}
+                        className="rounded bg-slate-800 px-1 py-0.5 text-xs text-slate-300"
+                        value={x.accountId === null ? '' : String(x.accountId)}
+                        onChange={(e) => void setIncomeAccount(x.id, e.target.value === '' ? null : Number(e.target.value))}
+                      >
+                        <option value="">Sin cuenta</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={String(a.id)}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <span className="tabular-nums text-success">{formatCLP(x.amount)}</span>
                     <IconButton label={`Eliminar ${x.description}`} onClick={() => removeExtra(x.id)} className="text-slate-500 hover:text-danger">
                       ✕

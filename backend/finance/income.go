@@ -18,6 +18,7 @@ type Income struct {
 	Period      string        `bun:"period,notnull" json:"period"` // YYYY-MM
 	Description string        `bun:"description,notnull" json:"description"`
 	Amount      types.Decimal `bun:"amount,notnull" json:"amount"`
+	AccountID   *int64        `bun:"account_id" json:"accountId"` // lands in this account (nil = none)
 	CreatedAt   time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	DeletedAt   *time.Time    `bun:",soft_delete" json:"deletedAt,omitempty"`
 }
