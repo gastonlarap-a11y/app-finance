@@ -51,15 +51,18 @@ export function RestoreBackup({ driveConnected }: { driveConnected: boolean }) {
   })
   const busy = step.kind === 'inspecting' || step.kind === 'restoring' || step.kind === 'done'
 
-  // inspect validates a backup (in a temp copy) and opens the confirmation.
-  async function inspect(key: string, label: string, getPath: () => Promise<string | null>) {
+  // inspect validates a backup (in a temp copy) and opens the confirmation. A
+  // source may relabel it (the Drive copy names its device and date).
+  async function inspect(key: string, label: string, getPath: () => Promise<{ path: string; source?: string } | null>) {
     setStep({ kind: 'inspecting', key })
     try {
-      const path = await getPath()
-      if (path === null) {
+      const picked = await getPath()
+      if (picked === null) {
         setStep({ kind: 'idle' })
         return
       }
+      const path = picked.path
+      if (picked.source) label = picked.source
       const res = await SettingsService.InspectBackup(path)
       const msg = errMsg(res)
       if (msg || !res.data) {
@@ -72,18 +75,19 @@ export function RestoreBackup({ driveConnected }: { driveConnected: boolean }) {
     }
   }
 
-  async function pickFile(): Promise<string | null> {
+  async function pickFile(): Promise<{ path: string } | null> {
     const res = await SettingsService.ChooseBackupFile()
     const msg = errMsg(res)
     if (msg) throw new Error(msg)
-    return res.canceled || !res.path ? null : res.path
+    return res.canceled || !res.path ? null : { path: res.path }
   }
 
-  async function fromDrive(): Promise<string | null> {
+  // fromDrive fetches the newest backup of any of your computers.
+  async function fromDrive(): Promise<{ path: string; source?: string } | null> {
     const res = await SettingsService.DownloadDriveBackup()
     const msg = errMsg(res)
     if (msg) throw new Error(msg)
-    return res.path ?? null
+    return res.path ? { path: res.path, source: res.source } : null
   }
 
   async function restore(candidate: Candidate) {
@@ -157,7 +161,7 @@ export function RestoreBackup({ driveConnected }: { driveConnected: boolean }) {
                 variant="ghost"
                 disabled={busy}
                 onClick={() =>
-                  void inspect(f.path, `${KIND_LABEL[f.kind] ?? f.kind} del ${when(f.at)}`, () => Promise.resolve(f.path))
+                  void inspect(f.path, `${KIND_LABEL[f.kind] ?? f.kind} del ${when(f.at)}`, () => Promise.resolve({ path: f.path }))
                 }
               >
                 {step.kind === 'inspecting' && step.key === f.path ? 'Revisando…' : 'Restaurar…'}

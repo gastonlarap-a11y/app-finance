@@ -78,6 +78,29 @@ func TestIsGone(t *testing.T) {
 	}
 }
 
+// Two computers on one account: each overwrites only its own backup file.
+func TestOwnsFile(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		code       int
+		want       bool
+	}{
+		{"this device's file", `{"id":"f","name":"app-finance-mac.db"}`, 200, true},
+		{"the shared legacy file, claimed", `{"id":"f","name":"app-finance.db"}`, 200, true},
+		{"another device renamed it", `{"id":"f","name":"app-finance-pc.db"}`, 200, false},
+		{"in the trash", `{"id":"f","name":"app-finance-mac.db","trashed":true}`, 200, false},
+		{"deleted", notFound, 404, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDrive{get: func() (int, string) { return tc.code, tc.body }}
+			own, err := ownsFile(t.Context(), f.serve(t), "f", "app-finance-mac.db", "app-finance.db")
+			if err != nil || own != tc.want {
+				t.Fatalf("ownsFile = %v, %v; want %v", own, err, tc.want)
+			}
+		})
+	}
+}
+
 // A failed folder lookup used to count as "not found" and create another
 // backup folder on every network hiccup.
 func TestEnsureFolderNeverCreatesOnAFailedLookup(t *testing.T) {

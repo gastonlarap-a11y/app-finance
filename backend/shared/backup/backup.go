@@ -167,7 +167,8 @@ func (r *Runner) Run(ctx context.Context) (Info, error) {
 		return info, nil // local-only snapshot
 	}
 	p := prefs.Load(r.appName)
-	folderID, fileID, err := r.drive.Upload(ctx, local, p.DriveFolderName, r.dbFile, p.DriveFolderID, p.DriveFileID)
+	remote := DriveFileName(r.dbFile, deviceLabel(r.appName))
+	folderID, fileID, err := r.drive.Upload(ctx, local, p.DriveFolderName, remote, r.dbFile, p.DriveFolderID, p.DriveFileID)
 	if err != nil {
 		return info, err
 	}
@@ -180,6 +181,58 @@ func (r *Runner) Run(ctx context.Context) (Info, error) {
 	info.Uploaded = true
 	info.RemoteFolder = p.DriveFolderName
 	return info, nil
+}
+
+// DriveFileName is this device's backup file in Drive: "<name>-<device><ext>"
+// for dbFile "<name><ext>". One file per device, so two computers on the same
+// Google account never overwrite each other's backup.
+func DriveFileName(dbFile, device string) string {
+	ext := filepath.Ext(dbFile)
+	return strings.TrimSuffix(dbFile, ext) + "-" + device + ext
+}
+
+// DriveDevice is the device part of a DriveFileName ("" for the shared legacy
+// file or a name that is not a backup of dbFile).
+func DriveDevice(dbFile, fileName string) string {
+	ext := filepath.Ext(dbFile)
+	name := strings.TrimSuffix(dbFile, ext)
+	device, ok := strings.CutPrefix(strings.TrimSuffix(fileName, ext), name+"-")
+	if !ok || !strings.HasSuffix(fileName, ext) {
+		return ""
+	}
+	return device
+}
+
+// deviceLabel names this computer in its Drive file: its host name, reduced to
+// [a-z0-9-] so it is a safe file name, else its sync device id.
+func deviceLabel(appName string) string {
+	host, err := os.Hostname()
+	if err == nil {
+		if label := slugify(host); label != "" {
+			return label
+		}
+	}
+	return prefs.DeviceID(appName)
+}
+
+func slugify(s string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(strings.TrimSuffix(s, ".local")) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			dash = false
+		case !dash && b.Len() > 0:
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	out := strings.TrimSuffix(b.String(), "-")
+	if len(out) > 40 {
+		out = strings.TrimSuffix(out[:40], "-")
+	}
+	return out
 }
 
 // series is one family of timestamped snapshots of dbFile inside dir:

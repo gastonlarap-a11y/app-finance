@@ -29,6 +29,8 @@ import type {
   ExpenseResult,
   ExpenseSearchResult,
   FinanceServiceContract,
+  Due,
+  DuesResult,
   FixedExpense,
   FixedExpenseResult,
   FixedExpenseView,
@@ -50,6 +52,13 @@ import type {
   OpResult,
   PeriodSalary,
   ReconciliationResult,
+  FxRateResult,
+  Account,
+  AccountResult,
+  AccountsResult,
+  AccountView,
+  ReceivableResult,
+  ReceivablesResult,
   RefundResult,
   RecurringResult,
   RecurringSuggestion,
@@ -102,6 +111,15 @@ import {
 } from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
+import {
+  dayOfMonth,
+  DUE_LOOKBACK_DAYS,
+  DueCard,
+  DueFixed,
+  MAX_DUE_DAYS,
+  monthsSpanned,
+  shiftDays,
+} from '@/engine/finance/dues'
 import { cleanTagName, normalizeTags, tagKey } from '@/engine/finance/tags'
 import {
   buildCutoffs,
@@ -140,6 +158,7 @@ import {
   StatementNational,
   StatusPagado,
   StatusPendiente,
+  rowToAccount,
   rowToCard,
   rowToCardStatement,
   rowToCardStatementLine,
@@ -155,6 +174,7 @@ import {
   rowToMerchantRule,
   rowToPeriodSalary,
   rowToReconciliation,
+  rowToReceivable,
   rowToRefund,
   rowToTag,
   rowToSavingsContribution,
@@ -172,6 +192,30 @@ function compareStrings(a: string, b: string): number {
 
 // uncategorized is the bucket for expenses without a category.
 const uncategorized = 'Sin categoría'
+
+// trashTables mirrors Go's trashModels: a TrashItem type → its table. Deleting
+// for good takes children along by ON DELETE CASCADE and unlinks the rest by
+// ON DELETE SET NULL.
+const trashTables: Readonly<Record<string, string>> = {
+  card: 'cards',
+  category: 'categories',
+  merchant: 'merchants',
+  income: 'incomes',
+  expense: 'expenses',
+  savingsgoal: 'savings_goals',
+  fixedexpense: 'fixed_expenses',
+}
+
+// validCategoryName mirrors Go: trimmed, not empty, and not the name of the
+// bucket that groups expenses without a category.
+function validCategoryName(name: string): { name: string; error?: ReturnType<typeof newError> } {
+  const n = name.trim()
+  if (n === '') return { name: '', error: newError(ErrValidation, 'el nombre es obligatorio') }
+  if (n.toLowerCase() === uncategorized.toLowerCase()) {
+    return { name: '', error: newError(ErrValidation, `«${uncategorized}» está reservado para los gastos sin categoría`) }
+  }
+  return { name: n }
+}
 
 // escapeLike escapes LIKE's wildcards so user text matches literally (used with
 // ESCAPE '\').
@@ -1554,6 +1598,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
     const refused = replanInstallments(ex.id, merged, { before: '', after: first })
     if (refused) throw new TxAbort(refused)
+    if (bankPlan && bankRounded(item, total, amount)) settleLastCuota(ex.id, Money.fromString(item.amount))
     // The statement's cuota n means cuotas 1..n-1 were already billed.
     if (bankPlan && item.firstPeriod !== '' && item.installmentNumber > 1) {
       db.exec(
@@ -1567,6 +1612,155 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       item.id,
       uid(),
     ])
+  }
+
+  // bankRounded mirrors Go: the expense follows a CLP bank item's own plan
+  // (same cuota count and cuota), so the item's amount is the plan's total.
+  function bankRounded(item: ImportItem, total: number, cuota: Money): boolean {
+    if (item.currency !== 'CLP' || item.installmentAmount === '' || total < 2 || total !== item.installmentsTotal) {
+      return false
+    }
+    const bank = amountOrError(item.installmentAmount).amount
+    return bank !== undefined && bank.cmp(cuota) === 0
+  }
+
+  // settleLastCuota mirrors Go: the pending last cuota takes the bank's
+  // rounding so the plan adds up to its purchase total.
+  function settleLastCuota(expenseId: number, total: Money): void {
+    const insts = db
+      .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [expenseId, uid()])
+      .map(rowToInstallment)
+    const last = insts.at(-1)
+    if (insts.length < 2 || !last) return
+    const others = insts.slice(0, -1).reduce((acc, i) => acc.add(Money.fromString(i.amount)), Money.zero())
+    const want = total.sub(others)
+    if (last.status === StatusPagado || !want.gt(Money.zero()) || want.cmp(Money.fromString(last.amount)) === 0) return
+    db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [want.toString(), last.id, uid()])
+  }
+
+  // validAccount mirrors Go: a named account of a known kind with a valid
+  // opening balance (may be negative) and month.
+  function validAccount(
+    name: string,
+    kind: string,
+    opening: string,
+    openingPeriod: string,
+  ): { name: string; balance: string; error?: ReturnType<typeof newError> } {
+    const n = name.trim()
+    if (n === '') return { name: '', balance: '', error: newError(ErrValidation, 'el nombre es obligatorio') }
+    if (!['corriente', 'vista', 'efectivo', 'ahorro', 'otra'].includes(kind)) {
+      return { name: '', balance: '', error: newError(ErrValidation, 'tipo de cuenta inválido: ' + kind) }
+    }
+    if (!validPeriod(openingPeriod)) return { name: '', balance: '', error: invalidPeriodError() }
+    try {
+      return { name: n, balance: Money.fromString(opening.trim()).toString() }
+    } catch {
+      return { name: '', balance: '', error: newError(ErrValidation, 'saldo inicial inválido: ' + opening) }
+    }
+  }
+
+  // keepOneSalaryAccount mirrors Go: the salary lands in one account only.
+  function keepOneSalaryAccount(acc: Account): void {
+    if (acc.receivesSalary) db.exec('UPDATE accounts SET receives_salary = 0 WHERE user_id = ? AND id <> ?', [uid(), acc.id])
+  }
+
+  // setAccountOf mirrors Go: names the account (null = none) of one row.
+  function setAccountOf(table: string, id: number, accountID: number | null, notFound: string): OpResult {
+    if (accountID !== null && db.query('SELECT 1 FROM accounts WHERE id = ? AND user_id = ?', [accountID, uid()]).length === 0) {
+      return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+    }
+    db.exec(`UPDATE ${table} SET account_id = ? WHERE id = ? AND user_id = ?`, [accountID, id, uid()])
+    if (db.changes() === 0) return { error: newError(ErrNotFound, notFound) }
+    return {}
+  }
+
+  // accountFlows mirrors Go: per account (0 = none) and month in [from, to],
+  // what came in and went out.
+  function accountFlows(accs: Account[], from: string, to: string): Map<number, Map<string, { in: Money; out: Money }>> {
+    const out = new Map<number, Map<string, { in: Money; out: Money }>>()
+    const add = (acc: number, period: string, inAmt: Money, outAmt: Money) => {
+      const byPeriod = out.get(acc) ?? new Map<string, { in: Money; out: Money }>()
+      const f = byPeriod.get(period) ?? { in: Money.zero(), out: Money.zero() }
+      byPeriod.set(period, { in: f.in.add(inAmt), out: f.out.add(outAmt) })
+      out.set(acc, byPeriod)
+    }
+    const salaryAcc = accs.find((a) => a.receivesSalary)?.id ?? 0
+    const accOf = (r: SqlRow) => (r.account == null ? 0 : asNumber(r.account))
+    const money = (r: SqlRow) => Money.fromString(asString(r.amount))
+    for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
+      uid(),
+      from,
+      to,
+    ])) {
+      add(salaryAcc, asString(r.period), money(r), Money.zero())
+    }
+    for (const r of db.query(
+      `SELECT period, amount, account_id AS account FROM incomes
+       WHERE user_id = ? AND deleted_at IS NULL AND period >= ? AND period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), money(r), Money.zero())
+    }
+    for (const r of db.query(
+      `SELECT inst.period AS period, inst.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+       FROM installments AS inst JOIN expenses AS ex ON ex.id = inst.expense_id AND ex.deleted_at IS NULL
+       LEFT JOIN cards AS c ON c.id = ex.card_id
+       WHERE inst.user_id = ? AND inst.period >= ? AND inst.period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), Money.zero(), money(r))
+    }
+    for (const r of db.query(
+      `SELECT rf.period AS period, rf.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+       FROM refunds AS rf JOIN expenses AS ex ON ex.id = rf.expense_id AND ex.deleted_at IS NULL
+       LEFT JOIN cards AS c ON c.id = ex.card_id
+       WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ?`,
+      [uid(), from, to],
+    )) {
+      add(accOf(r), asString(r.period), Money.zero(), Money.zero().sub(money(r)))
+    }
+    const cardAcc = new Map<number, number>()
+    for (const c of db.query('SELECT id, account_id FROM cards WHERE user_id = ?', [uid()])) {
+      if (c.account_id != null) cardAcc.set(asNumber(c.id), asNumber(c.account_id))
+    }
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    for (let m = from; m <= to; m = addMonths(m, 1)) {
+      for (const fe of fixed) {
+        if (!billsIn(fe, m)) continue
+        const acc = fe.cardId != null ? (cardAcc.get(fe.cardId) ?? 0) : 0
+        add(acc, m, Money.zero(), fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
+      }
+    }
+    return out
+  }
+
+  // recordItemCurrency mirrors Go: a confirmed foreign item keeps its original
+  // total and the rate the user's pesos imply (4 decimals) on its expense.
+  function recordItemCurrency(item: ImportItem, expenseId: number, pesos: Money): void {
+    if (item.currency === '' || item.currency === 'CLP') return
+    const original = Money.fromString(item.amount)
+    if (!original.gt(Money.zero())) return
+    db.exec('UPDATE expenses SET currency = ?, original_amount = ?, fx_rate = ? WHERE id = ? AND user_id = ?', [
+      item.currency,
+      original.toString(),
+      pesos.div(original).round(4).toString(),
+      expenseId,
+      uid(),
+    ])
+  }
+
+  // pendingCuotaOf mirrors Go: a pending cuota of a live expense of the profile.
+  function pendingCuotaOf(id: number): { error?: ReturnType<typeof newError> } {
+    const row = db.query(
+      `SELECT * FROM installments WHERE id = ? AND user_id = ?
+       AND expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)`,
+      [id, uid(), uid()],
+    )[0]
+    if (!row) return { error: newError(ErrNotFound, 'cuota no encontrada') }
+    if (rowToInstallment(row).status === StatusPagado) {
+      return { error: newError(ErrValidation, 'la cuota ya está pagada: desmárcala para cambiarla') }
+    }
+    return {}
   }
 
   // cutoffOfExpense: the cutoff of the expense's card (trashed included), or none.
@@ -1866,6 +2060,111 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
   }
 
+  // paidFixedMonths is `${fixedId}|${period}` for every paid month of the
+  // given fixed expenses.
+  function paidFixedMonths(fixed: readonly FixedExpense[]): Set<string> {
+    const paid = new Set<string>()
+    if (fixed.length === 0) return paid
+    const placeholders = fixed.map(() => '?').join(', ')
+    for (const r of db.query(
+      `SELECT fixed_expense_id, period FROM fixed_expense_payments WHERE fixed_expense_id IN (${placeholders})`,
+      fixed.map((fe) => fe.id),
+    )) {
+      paid.add(`${asNumber(r.fixed_expense_id)}|${asString(r.period)}`)
+    }
+    return paid
+  }
+
+  // upcomingDues mirrors Go: unpaid card statements and fixed expenses with a
+  // due day whose due date falls in [from, to], soonest first.
+  function upcomingDues(today: string, from: string, to: string): Due[] {
+    const cardDue = new Map<string, { card: number; period: string; date: string }>()
+    for (const r of db.query(
+      `SELECT card_id, period, due_date FROM card_statements
+        WHERE user_id = ? AND card_id IS NOT NULL AND due_date BETWEEN ? AND ?`,
+      [uid(), from, to],
+    )) {
+      const card = asNumber(r.card_id)
+      const period = asString(r.period)
+      const date = asString(r.due_date)
+      const key = `${card}|${period}`
+      const seen = cardDue.get(key)
+      // A card's national and international statements are paid together.
+      if (!seen || date < seen.date) cardDue.set(key, { card, period, date })
+    }
+
+    const periods = monthsSpanned(from, to)
+    for (const { period } of cardDue.values()) if (!periods.includes(period)) periods.push(period)
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    const paid = paidFixedMonths(fixed)
+
+    const pendingByCard = new Map<string, Money>()
+    const addPending = (key: string, amount: Money) =>
+      pendingByCard.set(key, (pendingByCard.get(key) ?? Money.zero()).add(amount))
+    if (cardDue.size > 0) {
+      const placeholders = periods.map(() => '?').join(', ')
+      for (const r of db.query(
+        `SELECT e.card_id AS card_id, i.period AS period, i.amount AS amount
+           FROM installments i JOIN expenses e ON e.id = i.expense_id
+          WHERE i.user_id = ? AND i.status = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL
+            AND i.period IN (${placeholders})`,
+        [uid(), StatusPendiente, ...periods],
+      )) {
+        addPending(`${asNumber(r.card_id)}|${asString(r.period)}`, Money.fromString(asString(r.amount)))
+      }
+    }
+
+    const dues: Due[] = []
+    for (const fe of fixed) {
+      for (const p of periods) {
+        if (!billsIn(fe, p) || paid.has(`${fe.id}|${p}`)) continue
+        const clp = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, p).clp
+        if (fe.cardId != null) {
+          const key = `${fe.cardId}|${p}`
+          if (cardDue.has(key)) addPending(key, clp)
+          continue
+        }
+        if (fe.dueDay == null) continue
+        const date = dayOfMonth(p, fe.dueDay)
+        if (date < from || date > to) continue
+        dues.push({
+          kind: DueFixed,
+          refId: fe.id,
+          label: fe.description,
+          period: p,
+          dueDate: date,
+          amount: clp.toString(),
+          overdue: date < today,
+        })
+      }
+    }
+
+    if (cardDue.size > 0) {
+      const cards = cardMapAll()
+      for (const [key, { card, period, date }] of cardDue) {
+        const owed = pendingByCard.get(key)
+        const c = cards.get(card)
+        if (!c || !owed || !owed.gt(Money.zero())) continue // paid (or nothing recorded)
+        dues.push({
+          kind: DueCard,
+          refId: card,
+          label: c.name,
+          period,
+          dueDate: date,
+          amount: owed.toString(),
+          overdue: date < today,
+        })
+      }
+    }
+
+    return dues.sort(
+      (a, b) =>
+        (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0) ||
+        (a.label < b.label ? -1 : a.label > b.label ? 1 : 0) ||
+        a.refId - b.refId,
+    )
+  }
+
   // reopenableIds mirrors Go's reopenableItems: confirmed items whose every
   // target (expense, income, fixed expense) is in the trash or gone.
   function reopenableIds(): Set<number> {
@@ -1957,6 +2256,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         refundId: null,
         description: fe.description,
         bankDescription: '',
+      currency: '',
+      originalAmount: '',
         category: fe.category,
         merchant: '',
         cardId: fe.cardId,
@@ -2166,6 +2467,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       refundId: r.id,
       description: r.description,
       bankDescription: '',
+      currency: '',
+      originalAmount: '',
       category: r.category,
       merchant: r.merchant,
       cardId: r.cardId,
@@ -2409,51 +2712,137 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   interface CategoryBudgetRow extends EffectiveDated {
     categoryId: number
+    capped: boolean // false = no cap from this month on; a capped $0 is a real cap
   }
 
-  // budgetsInEffect: the cap in effect at `period` for every active category
-  // that has one (amount > 0), ordered by category name.
-  function budgetsInEffect(period: string): CategoryBudgetView[] {
-    const cats = db
-      .query('SELECT * FROM categories WHERE user_id = ? AND deleted_at IS NULL', [uid()])
-      .map(rowToCategory)
+  function budgetRows(where: string, params: SqlValue[]): Map<number, CategoryBudgetRow[]> {
     const byCat = new Map<number, CategoryBudgetRow[]>()
-    for (const r of db.query('SELECT * FROM category_budgets WHERE user_id = ? AND effective_from <= ?', [
-      uid(),
-      period,
-    ])) {
+    for (const r of db.query(`SELECT * FROM category_budgets WHERE user_id = ? AND ${where}`, [uid(), ...params])) {
       const row: CategoryBudgetRow = {
         categoryId: asNumber(r.category_id),
         effectiveFrom: asString(r.effective_from),
         amount: asString(r.amount),
+        capped: asNumber(r.capped) === 1,
       }
-      const list = byCat.get(row.categoryId)
-      if (list) list.push(row)
-      else byCat.set(row.categoryId, [row])
+      byCat.set(row.categoryId, [...(byCat.get(row.categoryId) ?? []), row])
     }
+    return byCat
+  }
+
+  // budgetsInEffect: the cap in effect at `period` for every active category
+  // that has one ($0 included), ordered by category name.
+  function budgetsInEffect(period: string): CategoryBudgetView[] {
+    const cats = db
+      .query('SELECT * FROM categories WHERE user_id = ? AND deleted_at IS NULL', [uid()])
+      .map(rowToCategory)
+    const byCat = budgetRows('effective_from <= ?', [period])
     const out: CategoryBudgetView[] = []
     for (const c of cats) {
       const b = latestAsOf(byCat.get(c.id) ?? [], period)
-      if (!b || Money.fromString(b.amount).isZero()) continue
-      out.push({ categoryId: c.id, category: c.name, amount: b.amount, effectiveFrom: b.effectiveFrom })
+      if (!b || !b.capped) continue
+      out.push({ categoryId: c.id, category: c.name, amount: b.amount, effectiveFrom: b.effectiveFrom, rollover: c.rollover })
     }
     return out.sort((a, b) => compareStrings(a.category, b.category))
   }
 
+  // categorySpentByMonth mirrors Go: what each category was charged each month
+  // from `from` to `to` (inclusive) — cuotas, fixed charges and refunds.
+  function categorySpentByMonth(from: string, to: string): Map<string, Map<string, Money>> {
+    const out = new Map<string, Map<string, Money>>()
+    const add = (cat: string, period: string, amt: Money) => {
+      const byPeriod = out.get(cat) ?? new Map<string, Money>()
+      byPeriod.set(period, (byPeriod.get(period) ?? Money.zero()).add(amt))
+      out.set(cat, byPeriod)
+    }
+    if (from > to) return out
+    const insts = db
+      .query(
+        `SELECT * FROM installments WHERE user_id = ? AND period >= ? AND period <= ?
+         AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+        [uid(), from, to],
+      )
+      .map(rowToInstallment)
+    const exById = expenseMapActive(insts.map((i) => i.expenseId))
+    for (const inst of insts) {
+      const ex = exById.get(inst.expenseId)
+      if (ex) add(ex.category, inst.period, Money.fromString(inst.amount))
+    }
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    for (let m = from; m <= to; m = addMonths(m, 1)) {
+      for (const fe of fixed) {
+        if (billsIn(fe, m)) add(fe.category, m, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
+      }
+    }
+    for (const r of refundsIn(from, to)) add(r.category, r.period, Money.zero().sub(r.amount))
+    return out
+  }
+
+  // rolloverCarries mirrors Go: what each rollover category brings into
+  // `period` — unspent budget only (never a debt); a month without a cap
+  // starts over.
+  function rolloverCarries(period: string, views: CategoryBudgetView[]): Map<number, Money> {
+    const out = new Map<number, Money>()
+    const ids = views.filter((v) => v.rollover).map((v) => v.categoryId)
+    if (ids.length === 0) return out
+    const byCat = budgetRows(`category_id IN (${ids.map(() => '?').join(', ')}) AND effective_from < ?`, [...ids, period])
+    const starts = [...byCat.values()].flat().map((r) => r.effectiveFrom)
+    if (starts.length === 0) return out
+    const start = starts.reduce((a, b) => (b < a ? b : a))
+    const spent = categorySpentByMonth(start, addMonths(period, -1))
+    for (const v of views) {
+      if (!v.rollover) continue
+      let carry = Money.zero()
+      for (let m = start; m < period; m = addMonths(m, 1)) {
+        const b = latestAsOf(byCat.get(v.categoryId) ?? [], m)
+        if (!b || !b.capped) {
+          carry = Money.zero()
+          continue
+        }
+        carry = Money.fromString(b.amount).add(carry).sub(spent.get(v.category)?.get(m) ?? Money.zero())
+        if (carry.isNegative()) carry = Money.zero()
+      }
+      out.set(v.categoryId, carry)
+    }
+    return out
+  }
+
+  // putCategoryBudget mirrors Go: a cap (or its absence) from `fromPeriod` on.
+  function putCategoryBudget(categoryID: number, fromPeriod: string, amount: string, capped: boolean): OpResult {
+    if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+    return db.transaction((): OpResult => {
+      const owned = db.query('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        categoryID,
+        uid(),
+      ])
+      if (owned.length === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+      db.exec(
+        `INSERT INTO category_budgets (user_id, category_id, effective_from, amount, capped) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (category_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount, capped = EXCLUDED.capped`,
+        [uid(), categoryID, fromPeriod, amount, capped ? 1 : 0],
+      )
+      return {}
+    })
+  }
+
   function budgetStatuses(period: string, catTotals: Map<string, Money>): BudgetStatus[] {
-    return budgetsInEffect(period).map((v) => {
+    const views = budgetsInEffect(period)
+    const carried = rolloverCarries(period, views)
+    return views.map((v) => {
       const budget = Money.fromString(v.amount)
+      const carry = carried.get(v.categoryId) ?? Money.zero()
+      const available = budget.add(carry)
       const spent = catTotals.get(v.category) ?? Money.zero()
-      const over = spent.gt(budget)
+      const over = spent.gt(available)
       return {
         categoryId: v.categoryId,
         category: v.category,
         budget: budget.toString(),
+        carried: carry.toString(),
         spent: spent.toString(),
-        remaining: budget.sub(spent).toString(),
+        remaining: available.sub(spent).toString(),
         over,
         // Mirrors Go's nearCap: 80 % of a positive cap, the usual early warning.
-        near: !over && budget.gt(Money.zero()) && spent.mulInt(100).gte(budget.mulInt(budgetAlertPercent)),
+        near: !over && available.gt(Money.zero()) && spent.mulInt(100).gte(available.mulInt(budgetAlertPercent)),
       }
     })
   }
@@ -2581,8 +2970,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async CreateCategory(name: string): Promise<CategoryResult> {
-      const n = name.trim()
-      if (n === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
+      const { name: n, error } = validCategoryName(name)
+      if (error) return { error }
       try {
         const row = db.query(
           'INSERT INTO categories (user_id, name, created_at) VALUES (?, ?, ?) RETURNING *',
@@ -2597,8 +2986,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async UpdateCategory(id: number, name: string): Promise<CategoryResult> {
-      const n = name.trim()
-      if (n === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
+      const { name: n, error } = validCategoryName(name)
+      if (error) return { error }
       try {
         return db.transaction((): CategoryResult => {
           const oldRow = db.query('SELECT * FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
@@ -2845,6 +3234,151 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // Cuotas of an expense in the trash are frozen with it (mirrors Go).
+    // ---------- accounts (mirror of account.go) ----------
+
+    async ListAccounts(period: string): Promise<AccountsResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const accs = db.query('SELECT * FROM accounts WHERE user_id = ? ORDER BY name ASC', [uid()]).map(rowToAccount)
+      const from = accs.reduce((m, a) => (a.openingPeriod < m ? a.openingPeriod : m), period)
+      const flows = accountFlows(accs, from, period)
+      const flowOf = (id: number, m: string) => flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero() }
+      const views: AccountView[] = accs.map((a) => {
+        let balance = Money.zero()
+        if (a.openingPeriod <= period) {
+          balance = Money.fromString(a.openingBalance)
+          for (let m = a.openingPeriod; m <= period; m = addMonths(m, 1)) {
+            const f = flowOf(a.id, m)
+            balance = balance.add(f.in).sub(f.out)
+          }
+        }
+        const f = flowOf(a.id, period)
+        return { ...a, balance: balance.toString(), ingresos: f.in.toString(), gastos: f.out.toString() }
+      })
+      const none = flowOf(0, period)
+      return { data: { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString() } }
+    },
+
+    async CreateAccount(
+      name: string,
+      kind: string,
+      openingBalance: string,
+      openingPeriod: string,
+      receivesSalary: boolean,
+    ): Promise<AccountResult> {
+      const v = validAccount(name, kind, openingBalance, openingPeriod)
+      if (v.error) return { error: v.error }
+      return db.transaction((): AccountResult => {
+        const row = db.query(
+          `INSERT INTO accounts (user_id, name, kind, opening_balance, opening_period, receives_salary, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          [uid(), v.name, kind, v.balance, openingPeriod, receivesSalary ? 1 : 0, nowIso()],
+        )[0]
+        if (!row) throw new Error('INSERT accounts RETURNING produced no row')
+        const acc = rowToAccount(row)
+        keepOneSalaryAccount(acc)
+        return { data: acc }
+      })
+    },
+
+    async UpdateAccount(
+      id: number,
+      name: string,
+      kind: string,
+      openingBalance: string,
+      openingPeriod: string,
+      receivesSalary: boolean,
+    ): Promise<AccountResult> {
+      const v = validAccount(name, kind, openingBalance, openingPeriod)
+      if (v.error) return { error: v.error }
+      return db.transaction((): AccountResult => {
+        db.exec(
+          `UPDATE accounts SET name = ?, kind = ?, opening_balance = ?, opening_period = ?, receives_salary = ?
+           WHERE id = ? AND user_id = ?`,
+          [v.name, kind, v.balance, openingPeriod, receivesSalary ? 1 : 0, id, uid()],
+        )
+        if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+        const acc = rowToAccount(db.query('SELECT * FROM accounts WHERE id = ?', [id])[0]!)
+        keepOneSalaryAccount(acc)
+        return { data: acc }
+      })
+    },
+
+    async DeleteAccount(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM accounts WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+      return {}
+    },
+
+    async SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('expenses', expenseID, accountID, 'gasto no encontrado')
+    },
+
+    async SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('incomes', incomeID, accountID, 'ingreso no encontrado')
+    },
+
+    async SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult> {
+      return setAccountOf('cards', cardID, accountID, 'tarjeta no encontrada')
+    },
+
+    async LatestFxRate(): Promise<FxRateResult> {
+      return { data: latestFxRate() }
+    },
+
+    async SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult> {
+      const code = currency.trim().toUpperCase()
+      if (!/^[A-Z]{3}$/.test(code)) {
+        return { error: newError(ErrValidation, 'moneda inválida (use un código de 3 letras, ej. USD)') }
+      }
+      let original = ''
+      let rate = ''
+      if (code !== 'CLP') {
+        for (const [value, what] of [
+          [originalAmount, 'el monto original'],
+          [fxRate, 'la tasa'],
+        ] as const) {
+          const parsed = amountOrError(value)
+          if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(value) }
+          if (!parsed.amount.gt(Money.zero())) return { error: newError(ErrValidation, what + ' debe ser mayor a 0') }
+        }
+        original = Money.fromString(originalAmount.trim()).toString()
+        rate = Money.fromString(fxRate.trim()).toString()
+      }
+      db.exec('UPDATE expenses SET currency = ?, original_amount = ?, fx_rate = ? WHERE id = ? AND user_id = ?', [
+        code,
+        original,
+        rate,
+        expenseID,
+        uid(),
+      ])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      return {}
+    },
+
+    async SetInstallmentAmount(id: number, amount: string): Promise<OpResult> {
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+      const pending = pendingCuotaOf(id)
+      if (pending.error) return { error: pending.error }
+      db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [parsed.amount.toString(), id, uid()])
+      return {}
+    },
+
+    async PrepayExpense(expenseID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const live = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])
+      if (live.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      db.exec('UPDATE installments SET period = ? WHERE expense_id = ? AND user_id = ? AND status = ?', [
+        period,
+        expenseID,
+        uid(),
+        StatusPendiente,
+      ])
+      if (db.changes() === 0) return { error: newError(ErrValidation, 'el gasto no tiene cuotas pendientes') }
+      return {}
+    },
+
     async SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult> {
       const user = uid()
       const liveParent = 'expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)'
@@ -3038,6 +3572,26 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return {}
     },
 
+    async SetFixedExpenseDueDay(id: number, day: number | null): Promise<OpResult> {
+      if (day !== null && (!Number.isInteger(day) || day < 1 || day > 31)) {
+        return { error: newError(ErrValidation, 'el día de vencimiento debe estar entre 1 y 31') }
+      }
+      db.exec('UPDATE fixed_expenses SET due_day = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [day, id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+      return {}
+    },
+
+    async UpcomingDues(today: string, days: number): Promise<DuesResult> {
+      const parsed = /^\d{4}-\d{2}-\d{2}$/.test(today) ? parseDate(today) : null
+      if (!parsed || !inYearRange(parsed.parts.year)) {
+        return { error: newError(ErrValidation, 'fecha inválida (AAAA-MM-DD)') }
+      }
+      if (!Number.isInteger(days) || days < 0 || days > MAX_DUE_DAYS) {
+        return { error: newError(ErrValidation, `los días deben estar entre 0 y ${MAX_DUE_DAYS}`) }
+      }
+      return { data: upcomingDues(today, shiftDays(today, -DUE_LOOKBACK_DAYS), shiftDays(today, days)) }
+    },
+
     async DeleteFixedExpense(id: number): Promise<OpResult> {
       return softDeleteRow('fixed_expenses', id, 'gasto fijo no encontrado')
     },
@@ -3116,6 +3670,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           refundId: null,
           description: '',
           bankDescription: '',
+      currency: '',
+      originalAmount: '',
           category: '',
           merchant: '',
           cardId: null,
@@ -3136,6 +3692,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           mv.expenseId = ex.id
           mv.description = ex.description
           mv.bankDescription = ex.bankDescription
+          if (ex.currency !== '' && ex.currency !== 'CLP') {
+            mv.currency = ex.currency
+            mv.originalAmount = ex.originalAmount
+          }
           mv.merchant = ex.merchant
           mv.cardId = ex.cardId
           mv.kind = ex.kind
@@ -3415,6 +3975,84 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return {}
     },
 
+    // ---------- receivables (por cobrar; mirror of receivable.go) ----------
+
+    async CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult> {
+      const who = person.trim()
+      if (who === '') return { error: newError(ErrValidation, 'indica quién te debe') }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+      const amt = parsed.amount
+      return db.transaction((): ReceivableResult => {
+        const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
+        if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        const ex = rowToExpense(row)
+        const owed = sumAmounts('SELECT amount FROM receivables WHERE expense_id = ? AND user_id = ?', [expenseID, uid()])
+        const total = Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1))
+        if (owed.add(amt).gt(total)) {
+          return {
+            error: newError(ErrValidation, `lo que te deben supera lo que costó el gasto (quedan ${total.sub(owed).toString()})`),
+          }
+        }
+        const inserted = db.query(
+          'INSERT INTO receivables (user_id, expense_id, person, amount, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
+          [uid(), expenseID, who, amt.toString(), nowIso()],
+        )[0]
+        if (!inserted) throw new Error('INSERT receivables RETURNING produced no row')
+        return { data: rowToReceivable(inserted) }
+      })
+    },
+
+    async SettleReceivable(id: number, period: string): Promise<ReceivableResult> {
+      try {
+        return db.transaction((): ReceivableResult => {
+          const row = db.query(
+            `SELECT * FROM receivables WHERE id = ? AND user_id = ?
+             AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+            [id, uid()],
+          )[0]
+          if (!row) return { error: newError(ErrNotFound, 'cuenta por cobrar no encontrada') }
+          const rcv = rowToReceivable(row)
+          if (rcv.refundId !== null) return { error: newError(ErrConflict, 'ya está cobrada') }
+          const refund = insertRefund(rcv.expenseId, period, rcv.amount, 'Cobrado a ' + rcv.person)
+          if (refund.error || !refund.data) throw new TxAbort(refund.error ?? newError(ErrValidation, 'reembolso inválido'))
+          db.exec('UPDATE receivables SET refund_id = ? WHERE id = ?', [refund.data.id, id])
+          return { data: { ...rcv, refundId: refund.data.id } }
+        })
+      } catch (err) {
+        if (err instanceof TxAbort) return { error: err.appError }
+        throw err
+      }
+    },
+
+    async DeleteReceivable(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM receivables WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta por cobrar no encontrada') }
+      return {}
+    },
+
+    async ListReceivables(): Promise<ReceivablesResult> {
+      const rows = db.query(
+        `SELECT rcv.*, ex.description AS expense_description, ex.date AS expense_date,
+                COALESCE(rf.period, '') AS settled_period
+         FROM receivables AS rcv
+         JOIN expenses AS ex ON ex.id = rcv.expense_id AND ex.deleted_at IS NULL
+         LEFT JOIN refunds AS rf ON rf.id = rcv.refund_id
+         WHERE rcv.user_id = ?
+         ORDER BY rcv.refund_id IS NOT NULL, CASE WHEN rcv.refund_id IS NULL THEN rcv.id ELSE -rcv.id END`,
+        [uid()],
+      )
+      return {
+        data: rows.map((r) => ({
+          ...rowToReceivable(r),
+          expenseDescription: asString(r.expense_description),
+          expenseDate: asString(r.expense_date).slice(0, 10),
+          settledPeriod: asString(r.settled_period),
+        })),
+      }
+    },
+
     // ---------- reconciliations (conciliación) ----------
 
     async SetReconciliation(period: string, amount: string): Promise<ReconciliationResult> {
@@ -3450,23 +4088,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     // ---------- category budgets (presupuestos) ----------
 
     async SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult> {
-      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
-      const value = parsed.amount.toString()
-      return db.transaction((): OpResult => {
-        const owned = db.query('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
-          categoryID,
-          uid(),
-        ])
-        if (owned.length === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
-        db.exec(
-          `INSERT INTO category_budgets (user_id, category_id, effective_from, amount) VALUES (?, ?, ?, ?)
-           ON CONFLICT (category_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
-          [uid(), categoryID, fromPeriod, value],
-        )
-        return {}
-      })
+      return putCategoryBudget(categoryID, fromPeriod, parsed.amount.toString(), true)
+    },
+
+    async RemoveCategoryBudget(categoryID: number, fromPeriod: string): Promise<OpResult> {
+      return putCategoryBudget(categoryID, fromPeriod, '0', false)
+    },
+
+    async SetCategoryRollover(categoryID: number, on: boolean): Promise<OpResult> {
+      db.exec('UPDATE categories SET rollover = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        on ? 1 : 0,
+        categoryID,
+        uid(),
+      ])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+      return {}
     },
 
     async ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult> {
@@ -3915,6 +4553,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const created = placed
           ? insertExpense(ex, billing.cutoff, item.firstPeriod, item.installmentNumber - 1)
           : insertExpense(ex, billing.cutoff)
+        if (bankRounded(item, ex.installmentsTotal, ex.installmentAmount)) {
+          settleLastCuota(created.id, Money.fromString(item.amount))
+        }
+        recordItemCurrency(item, created.id, ex.installmentAmount.mulInt(Math.max(ex.installmentsTotal, 1)))
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           created.id,
@@ -4168,6 +4810,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // ---------- trash (papelera) ----------
+
+    async PurgeTrashItem(itemType: string, id: number): Promise<OpResult> {
+      const table = trashTables[itemType]
+      if (!table) return { error: newError(ErrValidation, 'tipo de elemento inválido: ' + itemType) }
+      db.exec(`DELETE FROM ${table} WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL`, [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'el elemento no está en la papelera') }
+      return {}
+    },
+
+    async EmptyTrash(): Promise<OpResult> {
+      db.transaction(() => {
+        for (const table of Object.values(trashTables)) {
+          db.exec(`DELETE FROM ${table} WHERE user_id = ? AND deleted_at IS NOT NULL`, [uid()])
+        }
+      })
+      return {}
+    },
 
     async ListTrash(): Promise<TrashResult> {
       const out: TrashItem[] = []

@@ -3,6 +3,8 @@ package mailsync
 import (
 	"strings"
 	"testing"
+
+	"github.com/emersion/go-imap/v2"
 )
 
 func TestParseMessagePrefersPlainTextAndDecodesCharsets(t *testing.T) {
@@ -51,5 +53,23 @@ func TestParseMessageFallsBackToHTML(t *testing.T) {
 	}
 	if strings.Contains(msg.Text, "color") || strings.Contains(msg.Text, "var x") {
 		t.Errorf("text %q kept style/script content", msg.Text)
+	}
+}
+
+func TestMessageRefFallsBackToTheIMAPUID(t *testing.T) {
+	for _, tc := range []struct {
+		name, messageID string
+		uid             uint32
+		want            string
+	}{
+		{"the Message-ID when present", "<abc@banco.test>", 7, "<abc@banco.test>"},
+		{"the UID without one", "", 7, "imap:42:7"},
+		{"another email, another reference", "", 8, "imap:42:8"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := messageRef(tc.messageID, 42, imap.UID(tc.uid)); got != tc.want {
+				t.Fatalf("messageRef = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

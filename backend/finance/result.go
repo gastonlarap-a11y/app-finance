@@ -86,17 +86,21 @@ type Movimiento struct {
 	Description   string `json:"description"`
 	// BankDescription is the bank's descriptor of a cuota's expense once merged
 	// with a bank movement ("" otherwise).
-	BankDescription string        `json:"bankDescription"`
-	Category        string        `json:"category"`
-	Merchant        string        `json:"merchant"`
-	CardID          *int64        `json:"cardId"`
-	CardName        string        `json:"cardName"`
-	Kind            string        `json:"kind"`
-	Number          int           `json:"number"`
-	Total           int           `json:"total"`
-	Amount          types.Decimal `json:"amount"`
-	Status          string        `json:"status"`
-	Date            *time.Time    `json:"date"` // nil para gastos fijos
+	BankDescription string `json:"bankDescription"`
+	// Currency/OriginalAmount: a cuota's expense bought in another currency
+	// (its total there); "" for pesos.
+	Currency       string        `json:"currency"`
+	OriginalAmount string        `json:"originalAmount"`
+	Category       string        `json:"category"`
+	Merchant       string        `json:"merchant"`
+	CardID         *int64        `json:"cardId"`
+	CardName       string        `json:"cardName"`
+	Kind           string        `json:"kind"`
+	Number         int           `json:"number"`
+	Total          int           `json:"total"`
+	Amount         types.Decimal `json:"amount"`
+	Status         string        `json:"status"`
+	Date           *time.Time    `json:"date"` // nil para gastos fijos
 	// UFAmount is the charge in UF when the fixed expense is priced in UF (Amount
 	// is its conversion to pesos); nil otherwise.
 	UFAmount *types.Decimal `json:"ufAmount"`
@@ -172,8 +176,9 @@ type BudgetStatus struct {
 	CategoryID int64         `json:"categoryId"`
 	Category   string        `json:"category"`
 	Budget     types.Decimal `json:"budget"`
+	Carried    types.Decimal `json:"carried"` // saldo no gastado traído de meses anteriores (categorías con traspaso)
 	Spent      types.Decimal `json:"spent"`
-	Remaining  types.Decimal `json:"remaining"` // negativo cuando se excede
+	Remaining  types.Decimal `json:"remaining"` // tope + traspaso − gastado; negativo cuando se excede
 	Over       bool          `json:"over"`
 	Near       bool          `json:"near"` // ya gastó el 80 % o más del tope, sin excederlo
 }
@@ -184,6 +189,7 @@ type CategoryBudgetView struct {
 	Category      string        `json:"category"`
 	Amount        types.Decimal `json:"amount"`
 	EffectiveFrom string        `json:"effectiveFrom"` // YYYY-MM desde el que rige
+	Rollover      bool          `json:"rollover"`      // lo no gastado pasa al mes siguiente
 }
 
 type CategoryBudgetsResult struct {

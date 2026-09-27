@@ -129,6 +129,7 @@ export function FixedExpensesView() {
                   {amountLabel(fe)} · {frequencyLabel(fe.intervalMonths)} · {fe.category || 'Sin categoría'}
                   {fe.cardName ? ` · ${fe.cardName}` : ''} · desde {fe.startPeriod}
                   {fe.endPeriod ? ` · hasta ${fe.endPeriod}` : ''}
+                  {fe.dueDay != null && fe.cardId == null && ` · vence el día ${fe.dueDay}`}
                   {fe.intervalMonths > 1 && fe.nextPeriod !== '' && ` · próximo cobro: ${periodLabel(fe.nextPeriod)}`}
                 </div>
               </div>
@@ -216,6 +217,7 @@ function FixedExpenseForm({
   const [startPeriod, setStartPeriod] = useState(fixed?.startPeriod ?? defaultPeriod)
   const [intervalMonths, setIntervalMonths] = useState(fixed?.intervalMonths ?? 1)
   const [currency, setCurrency] = useState(fixed?.currency ?? 'CLP')
+  const [dueDay, setDueDay] = useState(fixed?.dueDay != null ? String(fixed.dueDay) : '')
   const [busy, setBusy] = useState(false)
 
   const categoryOptions =
@@ -230,6 +232,11 @@ function FixedExpenseForm({
         ? await FinanceService.UpdateFixedExpense(fixed.id, description, category, card)
         : await FinanceService.CreateFixedExpense(description, category, card, startPeriod, amount, intervalMonths, currency)
       if (failed(res)) return
+      // One on a card is paid with the card: it reminds through its statement.
+      const day = card === null && dueDay !== '' ? Number(dueDay) : null
+      if (res.data && day !== (fixed?.dueDay ?? null) && failed(await FinanceService.SetFixedExpenseDueDay(res.data.id, day))) {
+        return
+      }
       onSaved()
       onClose()
     } finally {
@@ -310,6 +317,25 @@ function FixedExpenseForm({
             </Select>
           </Field>
         </div>
+
+        {cardId === '' && (
+          <Field label="Vence el día (opcional)">
+            <input
+              className={`${inputCls} w-24`}
+              type="number"
+              min="1"
+              max="31"
+              inputMode="numeric"
+              value={dueDay}
+              onChange={(e) => setDueDay(e.target.value)}
+              placeholder="5"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Te avisa unos días antes mientras siga pendiente. Si el mes es más corto, vence su último día. Los
+              cargados a una tarjeta se avisan con el vencimiento de su estado de cuenta.
+            </p>
+          </Field>
+        )}
 
         {editing && (
           <p className="text-xs text-slate-500">

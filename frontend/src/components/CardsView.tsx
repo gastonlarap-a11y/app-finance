@@ -6,6 +6,7 @@ import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
 import { CardStatementsSection } from './CardStatements'
+import { AccountSelect, AccountsSection, useAccounts } from './Accounts'
 
 export function CardsView() {
   const version = useVersion('ledger')
@@ -91,6 +92,7 @@ export function CardsView() {
           />
         )}
       </Section>
+      <AccountsSection />
       <CardStatementsSection />
     </div>
   )
@@ -102,6 +104,8 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
   const [limit, setLimit] = useState(card?.creditLimit ?? '')
   const [billingDay, setBillingDay] = useState(String(card?.billingDay ?? 24))
   const [lastDigits, setLastDigits] = useState(card?.lastDigits ?? '')
+  const accounts = useAccounts()
+  const [accountId, setAccountId] = useState<number | null>(card?.accountId ?? null)
   const [busy, setBusy] = useState(false)
 
   async function submit(e: SubmitEvent) {
@@ -113,6 +117,9 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
         ? await FinanceService.UpdateCard(card.id, name, limit || '0', day, lastDigits)
         : await FinanceService.CreateCard(name, limit || '0', day, lastDigits)
       if (failed(res)) return
+      if (res.data && accountId !== (card?.accountId ?? null) && failed(await FinanceService.SetCardAccount(res.data.id, accountId))) {
+        return
+      }
       onSaved()
       onClose()
     } finally {
@@ -149,6 +156,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
             Permiten asociar a esta tarjeta los movimientos importados de correos y estados de cuenta.
           </p>
         </Field>
+        <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label="Se paga desde la cuenta" noneLabel="Ninguna" />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>
             Cancelar

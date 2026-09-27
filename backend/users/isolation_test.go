@@ -164,6 +164,14 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if refund.Error != nil {
 		t.Fatalf("CreateRefund: %v", refund.Error)
 	}
+	owed := fin.CreateReceivable(ctx, expense.Data.ID, "Ana", "1000")
+	if owed.Error != nil {
+		t.Fatalf("CreateReceivable: %v", owed.Error)
+	}
+	acct := fin.CreateAccount(ctx, "Corriente", "corriente", "0", period, true)
+	if acct.Error != nil {
+		t.Fatalf("CreateAccount: %v", acct.Error)
+	}
 	if r := fin.SetExpenseTags(ctx, expense.Data.ID, []string{"Salud"}); r.Error != nil {
 		t.Fatalf("SetExpenseTags: %v", r.Error)
 	}
@@ -173,6 +181,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	tags, err := fin.ListTags(ctx)
 	if err != nil || len(tags) != 1 {
 		t.Fatalf("ListTags = %+v (err %v), want 1", tags, err)
+	}
+	dueDay := 10
+	if r := fin.SetFixedExpenseDueDay(ctx, fe.Data.ID, &dueDay); r.Error != nil {
+		t.Fatalf("SetFixedExpenseDueDay: %v", r.Error)
+	}
+	if r := fin.UpcomingDues(ctx, period+"-05", 10); r.Error != nil || len(r.Data) != 1 {
+		t.Fatalf("Gastón UpcomingDues = %+v, want his fixed expense", r)
 	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
@@ -193,6 +208,15 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.UpdateExpense(ctx, expense.Data.ID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1).Error}
 		}},
 		{"SetCategoryBudget", func() finance.OpResult { return fin.SetCategoryBudget(ctx, cat.Data.ID, period, "1") }},
+		{"RemoveCategoryBudget", func() finance.OpResult { return fin.RemoveCategoryBudget(ctx, cat.Data.ID, period) }},
+		{"SetCategoryRollover", func() finance.OpResult { return fin.SetCategoryRollover(ctx, cat.Data.ID, true) }},
+		{"PurgeTrashItem", func() finance.OpResult { return fin.PurgeTrashItem(ctx, "expense", expense.Data.ID) }},
+		{"PrepayExpense", func() finance.OpResult { return fin.PrepayExpense(ctx, expense.Data.ID, period) }},
+		{"SetExpenseCurrency", func() finance.OpResult { return fin.SetExpenseCurrency(ctx, expense.Data.ID, "USD", "1", "1") }},
+		{"SetInstallmentAmount", func() finance.OpResult {
+			return fin.SetInstallmentAmount(ctx, firstCuotaOf(t, bdb, expense.Data.ID), "1")
+		}},
+		{"SetFixedExpenseDueDay", func() finance.OpResult { return fin.SetFixedExpenseDueDay(ctx, fe.Data.ID, nil) }},
 		{"DeleteFixedExpense", func() finance.OpResult { return fin.DeleteFixedExpense(ctx, fe.Data.ID) }},
 		{"ConfirmImportItem", func() finance.OpResult {
 			return finance.OpResult{Error: fin.ConfirmImportItem(ctx, itemID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1, "").Error}
@@ -214,6 +238,19 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 			return finance.OpResult{Error: fin.CreateRefund(ctx, expense.Data.ID, period, "1", "").Error}
 		}},
 		{"DeleteRefund", func() finance.OpResult { return fin.DeleteRefund(ctx, refund.Data.ID) }},
+		{"CreateReceivable", func() finance.OpResult {
+			return finance.OpResult{Error: fin.CreateReceivable(ctx, expense.Data.ID, "x", "1").Error}
+		}},
+		{"SettleReceivable", func() finance.OpResult {
+			return finance.OpResult{Error: fin.SettleReceivable(ctx, owed.Data.ID, period).Error}
+		}},
+		{"DeleteReceivable", func() finance.OpResult { return fin.DeleteReceivable(ctx, owed.Data.ID) }},
+		{"UpdateAccount", func() finance.OpResult {
+			return finance.OpResult{Error: fin.UpdateAccount(ctx, acct.Data.ID, "x", "vista", "0", period, false).Error}
+		}},
+		{"DeleteAccount", func() finance.OpResult { return fin.DeleteAccount(ctx, acct.Data.ID) }},
+		{"SetExpenseAccount", func() finance.OpResult { return fin.SetExpenseAccount(ctx, expense.Data.ID, &acct.Data.ID) }},
+		{"SetExpenseAccount none", func() finance.OpResult { return fin.SetExpenseAccount(ctx, expense.Data.ID, nil) }},
 		{"ConfirmImportItemAsRefund", func() finance.OpResult {
 			return finance.OpResult{Error: fin.ConfirmImportItemAsRefund(ctx, creditID, expense.Data.ID, period, "1").Error}
 		}},
@@ -298,6 +335,15 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.SearchExpenses(ctx, finance.ExpenseFilter{Text: "77777777"}); r.Error != nil || r.Data.Count != 0 {
 		t.Fatalf("Camila search by Gastón's bank code = %+v, want nothing", r)
+	}
+	if r := fin.ListReceivables(ctx); r.Error != nil || len(r.Data) != 0 {
+		t.Fatalf("Camila ListReceivables = %+v, want none", r)
+	}
+	if r := fin.ListAccounts(ctx, period); r.Error != nil || len(r.Data.Accounts) != 0 {
+		t.Fatalf("Camila ListAccounts = %+v, want none", r)
+	}
+	if r := fin.UpcomingDues(ctx, period+"-05", 10); r.Error != nil || len(r.Data) != 0 {
+		t.Fatalf("Camila UpcomingDues = %+v, want none", r)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

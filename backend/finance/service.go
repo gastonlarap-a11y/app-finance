@@ -310,10 +310,24 @@ func (s *FinanceService) ListCategories(ctx context.Context) ([]Category, error)
 	return cats, err
 }
 
-func (s *FinanceService) CreateCategory(ctx context.Context, name string) CategoryResult {
+// validCategoryName trims a category name and refuses an empty one or the
+// name of the bucket that groups expenses without a category: a real category
+// called that would be summed together with them.
+func validCategoryName(name string) (string, *shared.AppError) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return CategoryResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+		return "", shared.NewError(shared.ErrValidation, "el nombre es obligatorio")
+	}
+	if strings.EqualFold(name, uncategorized) {
+		return "", shared.NewError(shared.ErrValidation, "«"+uncategorized+"» está reservado para los gastos sin categoría")
+	}
+	return name, nil
+}
+
+func (s *FinanceService) CreateCategory(ctx context.Context, name string) CategoryResult {
+	name, aerr := validCategoryName(name)
+	if aerr != nil {
+		return CategoryResult{Error: aerr}
 	}
 	cat := &Category{UserID: s.uid(), Name: name}
 	if _, err := s.db.NewInsert().Model(cat).Returning("*").Exec(ctx); err != nil {
@@ -328,9 +342,9 @@ func (s *FinanceService) CreateCategory(ctx context.Context, name string) Catego
 // UpdateCategory renames a category and cascades the new name to every expense
 // and fixed expense that used the old name (both store the category as text).
 func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name string) CategoryResult {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return CategoryResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+	name, aerr := validCategoryName(name)
+	if aerr != nil {
+		return CategoryResult{Error: aerr}
 	}
 	uid := s.uid()
 	cat := new(Category)
@@ -744,6 +758,7 @@ func validateExpense(
 		Kind:              kind,
 		InstallmentAmount: amt,
 		InstallmentsTotal: installmentsTotal,
+		Currency:          CurrencyCLP,
 	}, nil
 }
 
@@ -1388,6 +1403,9 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 			mv.ExpenseID = ex.ID
 			mv.Description = ex.Description
 			mv.BankDescription = ex.BankDescription
+			if ex.Currency != "" && ex.Currency != CurrencyCLP {
+				mv.Currency, mv.OriginalAmount = ex.Currency, ex.OriginalAmount
+			}
 			mv.Category = ex.Category
 			mv.Merchant = ex.Merchant
 			mv.CardID = ex.CardID
@@ -1727,6 +1745,50 @@ func monthOf(period string) int {
 }
 
 // ---------- trash (papelera) ----------
+
+// trashModels maps a TrashItem type to its model. Deleting a row for good
+// takes its children along by ON DELETE CASCADE (an expense's cuotas, a
+// goal's contributions, a fixed expense's amounts and payments, a category's
+// budgets) and unlinks what points at it by ON DELETE SET NULL (an inbox item
+// becomes reopenable, an expense loses a purged card).
+var trashModels = map[string]any{
+	"card":         (*Card)(nil),
+	"category":     (*Category)(nil),
+	"merchant":     (*Merchant)(nil),
+	"income":       (*Income)(nil),
+	"expense":      (*Expense)(nil),
+	"savingsgoal":  (*SavingsGoal)(nil),
+	"fixedexpense": (*FixedExpense)(nil),
+}
+
+// PurgeTrashItem deletes one record of the trash for good (only a record in
+// the trash: the trash is the confirm step).
+func (s *FinanceService) PurgeTrashItem(ctx context.Context, itemType string, id int64) OpResult {
+	model, ok := trashModels[itemType]
+	if !ok {
+		return OpResult{Error: shared.NewError(shared.ErrValidation, "tipo de elemento inválido: "+itemType)}
+	}
+	res, err := s.db.NewDelete().Model(model).WhereDeleted().
+		Where("id = ? AND user_id = ?", id, s.uid()).ForceDelete().Exec(ctx)
+	return OpResult{Error: requireOne(res, err, "el elemento no está en la papelera")}
+}
+
+// EmptyTrash deletes every record in the active profile's trash for good.
+func (s *FinanceService) EmptyTrash(ctx context.Context) OpResult {
+	uid := s.uid()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		for _, model := range trashModels {
+			if _, err := tx.NewDelete().Model(model).WhereDeleted().Where("user_id = ?", uid).ForceDelete().Exec(ctx); err != nil {
+				return fmt.Errorf("emptying trash: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
+}
 
 // ListTrash returns every soft-deleted record for the active user across all
 // entity types, newest deletion first.

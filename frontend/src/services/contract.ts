@@ -29,14 +29,51 @@ export interface Card {
   creditLimit: string
   billingDay: number
   lastDigits: string // last 4 digits, '' = not informed
+  accountId: number | null // the account it is paid from
   createdAt: string
   deletedAt?: string | null
+}
+
+// Accounts (checking, savings, cash): a lens on the same ledger, with a
+// balance each; the app's total balance does not change.
+export interface Account {
+  id: number
+  userId: number
+  name: string
+  kind: string // 'corriente' | 'vista' | 'efectivo' | 'ahorro' | 'otra'
+  openingBalance: string
+  openingPeriod: string // YYYY-MM the balance counts from
+  receivesSalary: boolean
+  createdAt: string
+}
+
+export interface AccountView extends Account {
+  balance: string // at the close of the month asked for
+  ingresos: string // that month
+  gastos: string // that month
+}
+
+export interface AccountsSummary {
+  accounts: AccountView[]
+  unassignedIngresos: string // the month's income no account claims
+  unassignedGastos: string
+}
+
+export interface AccountResult {
+  data?: Account | null
+  error?: AppError | null
+}
+
+export interface AccountsResult {
+  data?: AccountsSummary | null
+  error?: AppError | null
 }
 
 export interface Category {
   id: number
   userId: number
   name: string
+  rollover: boolean // unspent budget carries into the next month
   createdAt: string
   deletedAt?: string | null
 }
@@ -55,6 +92,7 @@ export interface Income {
   period: string
   description: string
   amount: string
+  accountId: number | null // lands in this account
   createdAt: string
   deletedAt?: string | null
 }
@@ -67,7 +105,13 @@ export interface Expense {
   category: string
   merchant: string
   bankDescription: string // the bank's descriptor once merged with a bank movement ('' = none)
+  // A purchase in another currency: its pesos stay in installmentAmount (what
+  // every total uses) plus the original total and the rate used.
+  currency: string // 'CLP' unless bought in another currency
+  originalAmount: string // total in `currency`; '' for CLP
+  fxRate: string // pesos per unit of `currency`; '' for CLP
   cardId: number | null
+  accountId: number | null // paid from this account (null = its card's, or none)
   kind: string
   installmentAmount: string
   installmentsTotal: number
@@ -109,8 +153,26 @@ export interface FixedExpense {
   endPeriod: string
   intervalMonths: number // bills every N months from startPeriod (1, 2, 3, 4, 6, 12)
   currency: string // 'CLP' | 'UF': currency of its amounts
+  dueDay: number | null // day of the month it falls due (1–31; null = no reminder)
   createdAt: string
   deletedAt?: string | null
+}
+
+// A payment coming up (or just missed) that is still unpaid: a card's
+// statement ("pagar hasta") or a fixed expense with a due day.
+export interface Due {
+  kind: string // 'tarjeta' | 'fijo'
+  refId: number // card id | fixed expense id
+  label: string
+  period: string // YYYY-MM billed
+  dueDate: string // YYYY-MM-DD
+  amount: string // still pending, in pesos
+  overdue: boolean
+}
+
+export interface DuesResult {
+  data?: Due[] | null
+  error?: AppError | null
 }
 
 export interface FixedExpenseView extends FixedExpense {
@@ -135,6 +197,8 @@ export interface Movimiento {
   refundId: number | null // set only for refunds (negative amount)
   description: string
   bankDescription: string // the bank's descriptor of a cuota's expense once merged ('' otherwise)
+  currency: string // a cuota's expense bought in another currency; '' for pesos
+  originalAmount: string // that purchase's total in `currency`; '' for pesos
   category: string
   merchant: string
   cardId: number | null
@@ -208,8 +272,9 @@ export interface BudgetStatus {
   categoryId: number
   category: string
   budget: string
+  carried: string // unspent budget brought from earlier months (rollover categories)
   spent: string
-  remaining: string // negative when over budget
+  remaining: string // budget + carried − spent; negative when over budget
   over: boolean
   near: boolean // spent 80 % or more of the cap, without exceeding it
 }
@@ -219,6 +284,7 @@ export interface CategoryBudgetView {
   category: string
   amount: string
   effectiveFrom: string // YYYY-MM
+  rollover: boolean // unspent budget carries into the next month
 }
 
 export interface YearMonth {
@@ -453,6 +519,39 @@ export interface Refund {
   amount: string // positive
   description: string
   createdAt: string
+}
+
+// The part of an expense someone else owes (a split bill). Settling it records
+// a refund of the expense in the month the money arrives.
+export interface Receivable {
+  id: number
+  userId: number
+  expenseId: number
+  person: string
+  amount: string // positive
+  refundId: number | null // null = still owed
+  createdAt: string
+}
+
+export interface ReceivableView extends Receivable {
+  expenseDescription: string
+  expenseDate: string // YYYY-MM-DD
+  settledPeriod: string // YYYY-MM; '' = still owed
+}
+
+export interface FxRateResult {
+  data: string // CLP per USD from the last international card payment; '' = none known
+  error?: AppError | null
+}
+
+export interface ReceivableResult {
+  data?: Receivable | null
+  error?: AppError | null
+}
+
+export interface ReceivablesResult {
+  data?: ReceivableView[] | null
+  error?: AppError | null
 }
 
 export interface MerchantRule {
@@ -769,7 +868,29 @@ export interface FinanceServiceContract {
   DeleteExpense(id: number): Promise<OpResult>
   RestoreExpense(id: number): Promise<OpResult>
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
+  SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
+  PrepayExpense(expenseID: number, period: string): Promise<OpResult>
+  SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult>
+  ListAccounts(period: string): Promise<AccountsResult>
+  CreateAccount(name: string, kind: string, openingBalance: string, openingPeriod: string, receivesSalary: boolean): Promise<AccountResult>
+  UpdateAccount(
+    id: number,
+    name: string,
+    kind: string,
+    openingBalance: string,
+    openingPeriod: string,
+    receivesSalary: boolean,
+  ): Promise<AccountResult>
+  DeleteAccount(id: number): Promise<OpResult>
+  SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult>
+  SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult>
+  SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult>
+  LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
+  CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>
+  SettleReceivable(id: number, period: string): Promise<ReceivableResult>
+  DeleteReceivable(id: number): Promise<OpResult>
+  ListReceivables(): Promise<ReceivablesResult>
   DeleteRefund(id: number): Promise<OpResult>
 
   ListFixedExpenses(): Promise<FixedExpenseView[]>
@@ -782,6 +903,8 @@ export interface FinanceServiceContract {
   ): Promise<FixedExpenseResult>
   SetFixedExpenseAmount(id: number, fromPeriod: string, amount: string): Promise<OpResult>
   EndFixedExpense(id: number, fromPeriod: string): Promise<OpResult>
+  SetFixedExpenseDueDay(id: number, day: number | null): Promise<OpResult>
+  UpcomingDues(today: string, days: number): Promise<DuesResult>
   DeleteFixedExpense(id: number): Promise<OpResult>
   RestoreFixedExpense(id: number): Promise<OpResult>
   SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult>
@@ -796,6 +919,8 @@ export interface FinanceServiceContract {
   DeleteReconciliation(period: string): Promise<OpResult>
 
   SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult>
+  RemoveCategoryBudget(categoryID: number, fromPeriod: string): Promise<OpResult>
+  SetCategoryRollover(categoryID: number, on: boolean): Promise<OpResult>
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
@@ -839,6 +964,8 @@ export interface FinanceServiceContract {
   DeleteCardStatement(id: number): Promise<OpResult>
 
   ListTrash(): Promise<TrashResult>
+  PurgeTrashItem(itemType: string, id: number): Promise<OpResult>
+  EmptyTrash(): Promise<OpResult>
 }
 
 // ---------- settings (desktop-native; the web build answers with WEB_ONLY errors) ----------
@@ -859,6 +986,7 @@ export type StateResult = Result<SettingsState>
 export interface ChooseFolderResult {
   canceled?: boolean
   path?: string
+  source?: string // where a downloaded backup came from (Drive: device and date)
   error?: AppError | null
 }
 
@@ -1027,4 +1155,5 @@ export interface UsersServiceContract {
   DeleteUser(id: number): Promise<UserResult>
   RestoreUser(id: number): Promise<OpResult>
   ListDeletedUsers(): Promise<User[]>
+  PurgeUser(id: number): Promise<OpResult>
 }

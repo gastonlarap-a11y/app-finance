@@ -26,6 +26,7 @@ type StateResult struct {
 
 type ChooseFolderResult struct {
 	Path     string           `json:"path"`
+	Source   string           `json:"source"` // where a downloaded backup came from (Drive: device and date); "" otherwise
 	Canceled bool             `json:"canceled"`
 	Error    *shared.AppError `json:"error,omitempty"`
 }

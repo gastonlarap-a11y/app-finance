@@ -16,8 +16,8 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
-import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
+import { greaterThan, isNegative, isZero, ratio, subtract, sum } from '@/lib/money'
+import { currentPeriod, formatAmount, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
 import { BankCodes, BankDescription, Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
@@ -26,6 +26,9 @@ import { TrendPanel } from './TrendPanel'
 import { StatementBanner } from './CardStatements'
 import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
 import { RefundDialog } from './RefundDialog'
+import { CuotaDialog } from './CuotaDialog'
+import { ReceivableDialog, ReceivablesPanel } from './Receivables'
+import { DuesBanner } from './DuesBanner'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -65,6 +68,8 @@ export function MonthView() {
   const [filterCardId, setFilterCardId] = useState<number | ''>('')
   const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
   const [refundFor, setRefundFor] = useState<Movimiento | null>(null)
+  const [cuotaFor, setCuotaFor] = useState<Movimiento | null>(null)
+  const [owedFor, setOwedFor] = useState<Movimiento | null>(null)
   const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
 
   function openNewExpense() {
@@ -170,13 +175,14 @@ export function MonthView() {
 
   return (
     <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
+      <DuesBanner />
       {overBudget.length > 0 && (
         <div role="status" className="rounded-base bg-danger/10 px-4 py-3 text-sm text-red-200 ring-1 ring-danger/30">
           Presupuesto excedido en{' '}
           {overBudget.map((b, i) => (
             <span key={b.categoryId}>
               {i > 0 && ', '}
-              <strong>{b.category}</strong> ({formatCLP(b.spent)} de {formatCLP(b.budget)})
+              <strong>{b.category}</strong> ({formatCLP(b.spent)} de {formatCLP(sum([b.budget, b.carried]))})
             </span>
           ))}
           .
@@ -188,7 +194,7 @@ export function MonthView() {
           {nearBudget.map((b, i) => (
             <span key={b.categoryId}>
               {i > 0 && ', '}
-              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(b.budget)})
+              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(sum([b.budget, b.carried]))})
             </span>
           ))}
           .
@@ -319,6 +325,11 @@ export function MonthView() {
                                   {m.description}
                                 </span>
                                 <BankDescription text={m.bankDescription} />
+                                {m.currency !== '' && (
+                                  <span className="block text-[11px] text-slate-500">
+                                    {formatAmount(m.originalAmount, m.currency)} en total
+                                  </span>
+                                )}
                                 <TagChips tags={m.tags} />
                                 <BankCodes codes={m.references} />
                               </td>
@@ -433,6 +444,24 @@ export function MonthView() {
                                       ↩
                                     </IconButton>{' '}
                                     <IconButton
+                                      label={`Me deben parte de ${m.description}`}
+                                      onClick={() => setOwedFor(m)}
+                                      className="text-slate-400 hover:text-primary"
+                                    >
+                                      👥
+                                    </IconButton>{' '}
+                                    {m.total > 1 && m.status !== 'pagado' && (
+                                      <>
+                                        <IconButton
+                                          label={`Cuotas de ${m.description}: monto o prepago`}
+                                          onClick={() => setCuotaFor(m)}
+                                          className="text-slate-400 hover:text-primary"
+                                        >
+                                          ⋯
+                                        </IconButton>{' '}
+                                      </>
+                                    )}
+                                    <IconButton
                                       label={`Eliminar ${m.description}`}
                                       onClick={() => setConfirmExpId(m.expenseId)}
                                       className="text-slate-400 hover:text-danger"
@@ -453,6 +482,10 @@ export function MonthView() {
             )}
           </Section>
 
+          <div className="mt-5">
+            <ReceivablesPanel period={summary.period} />
+          </div>
+
           {summary.porCategoria.length > 0 && (
             <div className="mt-5">
               <Section title="Por categoría">
@@ -466,7 +499,7 @@ export function MonthView() {
                           <div className="flex-1">
                             {budget ? (
                               <Bar
-                                fill={ratio(budget.spent, budget.budget)}
+                                fill={ratio(budget.spent, sum([budget.budget, budget.carried]))}
                                 tone={budget.over ? 'danger' : budget.near ? 'warning' : 'success'}
                               />
                             ) : (
@@ -480,8 +513,9 @@ export function MonthView() {
                             className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : budget.near ? 'text-warning' : 'text-slate-500'}`}
                           >
                             {budget.over
-                              ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(budget.budget)}`
-                              : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(budget.budget)}`}
+                              ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(sum([budget.budget, budget.carried]))}`
+                              : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(sum([budget.budget, budget.carried]))}`}
+                            {!isZero(budget.carried) && ` (incluye ${formatCLP(budget.carried)} traspasado)`}
                           </div>
                         )}
                       </li>
@@ -556,6 +590,27 @@ export function MonthView() {
           }
           onClose={() => setShowForm(false)}
           onSaved={reload}
+        />
+      )}
+      {owedFor && (
+        <ReceivableDialog
+          expense={owedFor}
+          onClose={() => setOwedFor(null)}
+          onSaved={() => {
+            setOwedFor(null)
+            reload()
+          }}
+        />
+      )}
+      {cuotaFor && (
+        <CuotaDialog
+          cuota={cuotaFor}
+          defaultPeriod={summary.period}
+          onClose={() => setCuotaFor(null)}
+          onSaved={() => {
+            setCuotaFor(null)
+            reload()
+          }}
         />
       )}
       {refundFor && (

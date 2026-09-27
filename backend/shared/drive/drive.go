@@ -294,9 +294,27 @@ func isGone(ctx context.Context, svc *gdrive.Service, id string) (bool, error) {
 	return f.Trashed, nil
 }
 
-// Upload uploads localFile into folderName (created if needed), overwriting the
-// single backup file. Returns the (possibly new) folder and file ids to cache.
-func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, folderID, fileID string) (string, string, error) {
+// ownsFile reports whether the cached backup file is still this device's to
+// overwrite: live, and named fileName or legacyName (the one file every device
+// shared before backups were named per device — the first device to upload
+// claims it by renaming it). A file another device renamed to its own name is
+// left alone.
+func ownsFile(ctx context.Context, svc *gdrive.Service, id, fileName, legacyName string) (bool, error) {
+	f, err := svc.Files.Get(id).Fields("id,name,trashed").Context(ctx).Do()
+	if ge, ok := errors.AsType[*googleapi.Error](err); ok && ge.Code == http.StatusNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("consultando Drive: %w", err)
+	}
+	return !f.Trashed && (f.Name == fileName || f.Name == legacyName), nil
+}
+
+// Upload uploads localFile as this device's backup, fileName, in folderName
+// (created if needed), overwriting that file. Each device writes its own file,
+// so two computers on one Google account never overwrite each other's copy.
+// Returns the (possibly new) folder and file ids to cache.
+func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, legacyName, folderID, fileID string) (string, string, error) {
 	svc, err := m.service(ctx)
 	if err != nil {
 		return "", "", err
@@ -314,11 +332,11 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 	defer f.Close()
 
 	if fileID != "" {
-		gone, err := isGone(ctx, svc, fileID)
+		own, err := ownsFile(ctx, svc, fileID, fileName, legacyName)
 		if err != nil {
 			return folderID, "", err
 		}
-		if gone {
+		if !own {
 			fileID = ""
 		}
 	}
@@ -334,7 +352,8 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 	}
 
 	if fileID != "" {
-		if _, e := svc.Files.Update(fileID, &gdrive.File{}).Media(f).Context(ctx).Do(); e != nil {
+		// Setting the name renames a claimed legacy file to this device's.
+		if _, e := svc.Files.Update(fileID, &gdrive.File{Name: fileName}).Media(f).Context(ctx).Do(); e != nil {
 			return folderID, "", fmt.Errorf("actualizar archivo en Drive: %w", e)
 		}
 		return folderID, fileID, nil
@@ -350,34 +369,40 @@ func (m *Manager) Upload(ctx context.Context, localFile, folderName, fileName, f
 // ErrNoRemoteBackup means Drive holds no backup this app uploaded.
 var ErrNoRemoteBackup = errors.New("no hay un respaldo de la app en Google Drive")
 
-// Download saves the Drive backup to dest: the cached fileID while it is still
-// live, else the newest non-trashed file named fileName the app can see (the
-// drive.file scope only shows files this app created).
-func (m *Manager) Download(ctx context.Context, fileName, fileID, dest string) error {
+// RemoteBackup is the Drive backup Download picked: its file name (which
+// names the device that uploaded it) and when it was last written.
+type RemoteBackup struct {
+	Name     string
+	Modified time.Time
+}
+
+// Download saves to dest the newest backup of any device the app can see in
+// Drive (the drive.file scope only shows files this app created): files named
+// like prefix ("app-finance-<device>.db", or the shared legacy "app-finance.db").
+func (m *Manager) Download(ctx context.Context, prefix, dest string) (RemoteBackup, error) {
 	svc, err := m.service(ctx)
 	if err != nil {
-		return err
+		return RemoteBackup{}, err
 	}
-	if fileID != "" {
-		gone, err := isGone(ctx, svc, fileID)
-		if err != nil {
-			return err
-		}
-		if gone {
-			fileID = ""
-		}
+	q := fmt.Sprintf("name contains %s and trashed=false and mimeType!='application/vnd.google-apps.folder'", quote(prefix))
+	list, err := svc.Files.List().Q(q).OrderBy("modifiedTime desc").PageSize(1).
+		Fields("files(id,name,modifiedTime)").Context(ctx).Do()
+	if err != nil {
+		return RemoteBackup{}, fmt.Errorf("buscando el respaldo en Drive: %w", err)
 	}
-	if fileID == "" {
-		q := fmt.Sprintf("name=%s and trashed=false and mimeType!='application/vnd.google-apps.folder'", quote(fileName))
-		list, err := svc.Files.List().Q(q).OrderBy("modifiedTime desc").PageSize(1).Fields("files(id)").Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("buscando el respaldo en Drive: %w", err)
-		}
-		if len(list.Files) == 0 {
-			return ErrNoRemoteBackup
-		}
-		fileID = list.Files[0].Id
+	if len(list.Files) == 0 {
+		return RemoteBackup{}, ErrNoRemoteBackup
 	}
+	picked := list.Files[0]
+	remote := RemoteBackup{Name: picked.Name}
+	if t, err := time.Parse(time.RFC3339, picked.ModifiedTime); err == nil {
+		remote.Modified = t
+	}
+	return remote, m.fetch(ctx, svc, picked.Id, dest)
+}
+
+// fetch writes the Drive file id to dest.
+func (m *Manager) fetch(ctx context.Context, svc *gdrive.Service, fileID, dest string) error {
 	resp, err := svc.Files.Get(fileID).Context(ctx).Download()
 	if err != nil {
 		return fmt.Errorf("descargando el respaldo de Drive: %w", err)

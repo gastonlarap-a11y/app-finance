@@ -86,12 +86,12 @@ describe('YearSummary.categoriaMeses', () => {
 })
 
 describe('presupuestos por categoría', () => {
-  it('rigen desde su mes, se exceden, se quitan con 0 y viajan con la categoría', async () => {
+  it('rigen desde su mes, se exceden, se quitan y viajan con la categoría', async () => {
     const cat = ok(await finance.CreateCategory('Comida'))
     const id = cat.data!.id
     ok(await finance.SetCategoryBudget(id, '2030-01', '100000'))
     ok(await finance.SetCategoryBudget(id, '2030-03', '80000'))
-    ok(await finance.SetCategoryBudget(id, '2030-05', '0'))
+    ok(await finance.RemoveCategoryBudget(id, '2030-05'))
     ok(await finance.CreateExpense('2030-03-02', 'Super', 'Comida', '', null, 'unico', '90000', 1))
 
     const at = async (period: string) => ok(await finance.MonthlySummary(period)).data!.presupuestos
@@ -102,7 +102,7 @@ describe('presupuestos por categoría', () => {
 
     ok(await finance.UpdateCategory(id, 'Alimentación'))
     expect(ok(await finance.ListCategoryBudgets('2030-03')).data).toEqual([
-      { categoryId: id, category: 'Alimentación', amount: '80000', effectiveFrom: '2030-03' },
+      { categoryId: id, category: 'Alimentación', amount: '80000', effectiveFrom: '2030-03', rollover: false },
     ])
     ok(await finance.DeleteCategory(id))
     expect(ok(await finance.ListCategoryBudgets('2030-03')).data).toEqual([])
@@ -225,12 +225,26 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await finance.CreateFixedExpense('Arriendo', '', null, reconciled, '10', 12, 'UF'))
     expect((await finance.UFMonthsNeeded())[0]).toBe(reconciled)
     const refund = ok(await finance.CreateRefund(expense.data!.id, period, '1000', '')).data!
+    const owed = ok(await finance.CreateReceivable(expense.data!.id, 'Ana', '1000')).data!
+    const acct = ok(await finance.CreateAccount('Corriente', 'corriente', '0', period, true)).data!
+    const cuotaID = ok(await finance.MonthlySummary(period)).data!.movimientos.find(
+      (m) => m.expenseId === expense.data!.id,
+    )!.installmentId
+    ok(await finance.SetFixedExpenseDueDay(fe.data!.id, 10))
+    expect(ok(await finance.UpcomingDues(`${period}-05`, 10)).data).toHaveLength(1)
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
       () => finance.SetFixedExpenseAmount(fe.data!.id, period, '1'),
       () => finance.SetFixedExpensePaid(fe.data!.id, period, true),
       () => finance.SetCategoryBudget(cat.data!.id, period, '1'),
+      () => finance.RemoveCategoryBudget(cat.data!.id, period),
+      () => finance.SetCategoryRollover(cat.data!.id, true),
+      () => finance.PurgeTrashItem('expense', expense.data!.id),
+      () => finance.PrepayExpense(expense.data!.id, period),
+      () => finance.SetExpenseCurrency(expense.data!.id, 'USD', '1', '1'),
+      () => finance.SetInstallmentAmount(cuotaID, '1'),
+      () => finance.SetFixedExpenseDueDay(fe.data!.id, null),
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
       () => finance.LinkImportItem(itemID, expense.data!.id),
@@ -243,6 +257,13 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.DeleteReconciliation(reconciled),
       () => finance.CreateRefund(expense.data!.id, period, '1', ''),
       () => finance.DeleteRefund(refund.id),
+      () => finance.CreateReceivable(expense.data!.id, 'x', '1'),
+      () => finance.SettleReceivable(owed.id, period),
+      () => finance.DeleteReceivable(owed.id),
+      () => finance.UpdateAccount(acct.id, 'x', 'vista', '0', period, false),
+      () => finance.DeleteAccount(acct.id),
+      () => finance.SetExpenseAccount(expense.data!.id, acct.id),
+      () => finance.SetExpenseAccount(expense.data!.id, null),
       () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
@@ -259,6 +280,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
 
     expect(ok(await finance.SearchExpenses(filter())).data?.count).toBe(0)
     expect(ok(await finance.SearchExpenses(filter({ text: '77777777' }))).data?.count).toBe(0) // Gastón's bank code
+    expect(ok(await finance.ListReceivables()).data).toEqual([])
+    expect(ok(await finance.ListAccounts(period)).data?.accounts).toEqual([])
+    expect(ok(await finance.UpcomingDues(`${period}-05`, 10)).data).toEqual([])
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])

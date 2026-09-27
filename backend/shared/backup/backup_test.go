@@ -80,6 +80,31 @@ func TestSeriesPruneKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestDriveFileNamesNameTheDevice(t *testing.T) {
+	for host, want := range map[string]string{
+		"MacBook-Pro-de-Ana.local": "macbook-pro-de-ana",
+		"DESKTOP_7Q2 (Oficina)":    "desktop-7q2-oficina",
+		"---":                      "",
+	} {
+		if got := slugify(host); got != want {
+			t.Errorf("slugify(%q) = %q, want %q", host, got, want)
+		}
+	}
+	name := DriveFileName("app-finance.db", "macbook-pro")
+	if name != "app-finance-macbook-pro.db" {
+		t.Fatalf("DriveFileName = %q", name)
+	}
+	for file, want := range map[string]string{
+		name:             "macbook-pro",
+		"app-finance.db": "", // the shared legacy file
+		"otra-cosa.db":   "",
+	} {
+		if got := DriveDevice("app-finance.db", file); got != want {
+			t.Errorf("DriveDevice(%q) = %q, want %q", file, got, want)
+		}
+	}
+}
+
 func TestRunRefusesFreshDatabaseOverExistingBackups(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

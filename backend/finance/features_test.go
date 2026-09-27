@@ -102,7 +102,7 @@ func TestCategoryBudgets(t *testing.T) {
 	id := cat.Data.ID
 	mustOK(t, "SetCategoryBudget 2030-01", s.SetCategoryBudget(ctx, id, "2030-01", "100000").Error)
 	mustOK(t, "SetCategoryBudget 2030-03", s.SetCategoryBudget(ctx, id, "2030-03", "80000").Error)
-	mustOK(t, "SetCategoryBudget 2030-05 (sin tope)", s.SetCategoryBudget(ctx, id, "2030-05", "0").Error)
+	mustOK(t, "RemoveCategoryBudget 2030-05 (sin tope)", s.RemoveCategoryBudget(ctx, id, "2030-05").Error)
 	mustOK(t, "CreateExpense", s.CreateExpense(ctx, "2030-03-02", "Super", "Comida", "", nil, KindUnico, "90000", 1).Error)
 
 	tests := []struct {
@@ -114,7 +114,7 @@ func TestCategoryBudgets(t *testing.T) {
 		{"antes del primer tope", "2029-12", "", false},
 		{"primer tope", "2030-02", "100000", false},
 		{"cambio desde marzo no reescribe febrero, y se excede", "2030-03", "80000", true},
-		{"monto 0 quita el tope", "2030-06", "", false},
+		{"quitar el tope", "2030-06", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

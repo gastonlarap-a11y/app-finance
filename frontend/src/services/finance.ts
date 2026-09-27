@@ -12,6 +12,9 @@ import type { FinanceServiceContract } from '@/services/contract'
 export const FinanceService: FinanceServiceContract = Bound
 
 export type {
+  Account,
+  AccountView,
+  AccountsSummary,
   BudgetStatus,
   Card,
   CardDebt,
@@ -34,6 +37,8 @@ export type {
   CategoryResult,
   CategoryTotal,
   CategoryYearRow,
+  Due,
+  DuesResult,
   Expense,
   ExpenseFilter,
   ExpenseHit,
