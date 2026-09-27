@@ -39,7 +39,7 @@ export function RefundDialog({
   return (
     <Modal title={`Reembolso de «${expenseDescription}»`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           La devolución rebaja los gastos de {period ? periodLabel(period) : 'su mes'} en la categoría del gasto. Puede ser parcial.
         </p>
         <div className="grid grid-cols-2 gap-3">
@@ -54,11 +54,11 @@ export function RefundDialog({
           <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Devolución en tienda" />
         </Field>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy || amount === ''}>
-            {busy ? 'Guardando…' : 'Registrar'}
+          <Button type="submit" loading={busy} disabled={amount === ''}>
+            Registrar
           </Button>
         </div>
       </form>

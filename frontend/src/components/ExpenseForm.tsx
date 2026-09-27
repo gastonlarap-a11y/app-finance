@@ -4,7 +4,7 @@ import { errMsg, failed } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
 import { perInstallment, times, toPesos } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
-import { Button, Field, Modal, MoneyInput, Select, inputCls } from './ui'
+import { Button, Callout, Field, Modal, MoneyInput, Select, inputCls } from './ui'
 import { AccountSelect, useAccounts } from './Accounts'
 
 const MAX_CUOTAS = 120
@@ -206,8 +206,8 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
     <Modal title={TITLES[target.mode]} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4" aria-describedby={error ? 'expense-form-error' : undefined}>
         {importItem && (
-          <p className="rounded bg-surface px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-800">
-            Glosa del banco: <span className="font-mono text-slate-100">{importItem.description}</span> ·{' '}
+          <p className="rounded-lg bg-sunken px-3 py-2 text-sm text-fg-muted ring-1 ring-inset ring-line">
+            Glosa del banco: <span className="font-mono text-fg">{importItem.description}</span> ·{' '}
             <span className="tabular-nums">{formatAmount(importItem.amount, importItem.currency)}</span>
             {importItem.installmentsTotal > 1 && <> en {importItem.installmentsTotal} cuotas</>}
             {importItem.installmentNumber > 1 && <> (el estado de cuenta cobra la cuota {importItem.installmentNumber})</>}
@@ -256,7 +256,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         )}
 
         {target.mode !== 'confirm' && (
-          <div className="space-y-2 rounded bg-surface p-3 ring-1 ring-slate-800">
+          <div className="space-y-2 rounded-lg bg-sunken p-3 ring-1 ring-inset ring-line">
             <div className="grid grid-cols-3 gap-3">
               <Field label="Moneda">
                 <Select
@@ -283,13 +283,14 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
               )}
             </div>
             {foreign && (
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
                 <span>
                   {toPesos(original, rate) !== '' ? <>≈ {formatCLP(toPesos(original, rate))} en total.</> : 'Indica el total y la tasa.'}
                   {currency === 'USD' && usdRate.data && <> Tu último pago en dólares fue a {usdRate.data}.</>}
                 </span>
                 <Button
-                  variant="ghost"
+                  variant="secondary"
+                  size="sm"
                   disabled={toPesos(original, rate) === ''}
                   onClick={() => {
                     const pesos = toPesos(original, rate)
@@ -304,9 +305,9 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         )}
 
         {isCuotas && amount && cuotas !== null && (
-          <p className="text-sm text-slate-300">
-            Total de la compra: <strong className="tabular-nums">{formatCLP(times(amount, cuotas))}</strong>{' '}
-            <span className="text-slate-500">
+          <p className="text-sm text-fg-muted">
+            Total de la compra: <strong className="tabular-nums text-fg">{formatCLP(times(amount, cuotas))}</strong>{' '}
+            <span className="text-fg-subtle">
               ({cuotas} × {formatCLP(amount)})
             </span>
           </p>
@@ -381,15 +382,15 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         />
 
         {firstPeriod && (
-          <p className="text-xs text-slate-400">
-            Primera cuota en: <strong>{periodLabel(firstPeriod)}</strong>
+          <p className="text-xs text-fg-muted">
+            Primera cuota en: <strong className="text-fg">{periodLabel(firstPeriod)}</strong>
             {statementPlaced && importItem.installmentNumber > 1 && (
               <> · según el estado de cuenta; las {importItem.installmentNumber - 1} cuotas anteriores quedan pagadas</>
             )}
           </p>
         )}
 
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-subtle">
           {isCuotas
             ? 'La cuota se factura cada mes (según el día de corte de la tarjeta) hasta completar el total.'
             : 'Pago único: se carga una sola vez en el mes de la compra.'}
@@ -397,13 +398,13 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         </p>
 
         {importItem && (
-          <div className="space-y-2 rounded bg-surface p-3 ring-1 ring-slate-800">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={learnRule} onChange={(e) => setLearnRule(e.target.checked)} />
+          <div className="space-y-2 rounded-lg bg-sunken p-3 ring-1 ring-inset ring-line">
+            <label className="flex items-center gap-2 text-sm text-fg">
+              <input type="checkbox" className="size-4 accent-accent" checked={learnRule} onChange={(e) => setLearnRule(e.target.checked)} />
               Recordar comercio y categoría para glosas que empiecen con…
             </label>
             {learnRule && !ruleUseful && (
-              <p className="text-xs text-amber-200">Elige un comercio o una categoría para que la regla sugiera algo.</p>
+              <p className="text-xs text-caution-fg">Elige un comercio o una categoría para que la regla sugiera algo.</p>
             )}
             {learnRule && ruleUseful && (
               <Field label="Patrón de la glosa">
@@ -414,7 +415,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
                   required
                   aria-describedby="rule-pattern-help"
                 />
-                <p id="rule-pattern-help" className="mt-1 text-xs text-slate-500">
+                <p id="rule-pattern-help" className="mt-1 text-xs text-fg-subtle">
                   Se ignoran mayúsculas, números y letras sueltas: «cruz verde» cubre «CRUZ VERDE L9093 CHILLAN C».
                 </p>
               </Field>
@@ -423,17 +424,19 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         )}
 
         {error && (
-          <p id="expense-form-error" role="alert" className="rounded bg-danger/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </p>
+          <div id="expense-form-error">
+            <Callout tone="negative" role="alert">
+              {error}
+            </Callout>
+          </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : target.mode === 'edit' ? 'Guardar' : target.mode === 'confirm' ? 'Confirmar' : 'Agregar'}
+          <Button type="submit" loading={busy}>
+            {target.mode === 'edit' ? 'Guardar' : target.mode === 'confirm' ? 'Confirmar' : 'Agregar'}
           </Button>
         </div>
       </form>

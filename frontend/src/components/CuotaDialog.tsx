@@ -44,7 +44,7 @@ export function CuotaDialog({
         <Field label="Monto de esta cuota">
           <MoneyInput value={amount} onChange={setAmount} required placeholder={cuota.amount} />
         </Field>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-subtle">
           Útil cuando el banco redondea la última cuota. Si después editas el gasto, su monto de cuota vuelve a aplicarse a las cuotas
           pendientes.
         </p>
@@ -55,17 +55,17 @@ export function CuotaDialog({
         </div>
       </form>
 
-      <div className="mt-6 space-y-3 border-t border-slate-800 pt-4">
-        <h4 className="text-sm font-semibold text-slate-200">Pagar el saldo por adelantado</h4>
+      <div className="mt-6 space-y-3 border-t border-line pt-4">
+        <h4 className="text-sm font-semibold text-fg">Pagar el saldo por adelantado</h4>
         <Field label="Mes en que lo pagas">
           <input type="month" className={inputCls} value={period} onChange={(e) => setPeriod(e.target.value)} required />
         </Field>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-subtle">
           Todas las cuotas pendientes (incluida esta de {formatCLP(cuota.amount)}) pasan a{' '}
           {period ? periodLabel(period) : 'ese mes'}; las ya pagadas no se tocan.
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cerrar
           </Button>
           <Button disabled={busy || period === ''} onClick={() => void run(() => FinanceService.PrepayExpense(cuota.expenseId, period))}>

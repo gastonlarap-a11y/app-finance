@@ -59,6 +59,8 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       autoFocus={autoFocus}
+      // Modal focuses this on open: React's autoFocus runs while a <dialog> is still closed.
+      data-autofocus={autoFocus || undefined}
       title={title}
       className={`inline-flex items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors select-none disabled:cursor-not-allowed disabled:opacity-50 ${SIZE[size]} ${look} ${className}`}
     >

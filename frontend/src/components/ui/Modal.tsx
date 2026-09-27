@@ -25,8 +25,12 @@ export function Modal({
     if (!dialog.open) dialog.showModal()
     // React's autoFocus runs while the dialog is still closed (display: none),
     // so it is a no-op and showModal() lands on the first focusable — the close
-    // button. Move focus to the first form field instead.
-    dialog.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')?.focus()
+    // button. Move focus to the control marked autoFocus (data-autofocus), or
+    // else to the first form field.
+    const target =
+      dialog.querySelector<HTMLElement>('[data-autofocus]') ??
+      dialog.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')
+    target?.focus()
     return () => dialog.close()
   }, [])
 

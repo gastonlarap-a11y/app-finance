@@ -63,7 +63,7 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
   return (
     <Modal title={title} onClose={onClose}>
       <form onSubmit={save} className="space-y-4">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           {mode === 'cierre'
             ? 'Ingresa el saldo que muestra tu banco al cierre del mes. Desde ahí se arrastra el saldo a los meses siguientes.'
             : `Ingresa con cuánto partiste este mes (el saldo real al cierre de ${periodLabel(target)}). Los meses anteriores dejan de sumarse.`}
@@ -71,17 +71,21 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
         <Field label="Saldo real">
           <MoneyInput value={magnitude} onChange={setMagnitude} required placeholder="0" />
         </Field>
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <input type="checkbox" checked={negative} onChange={(e) => setNegative(e.target.checked)} />
+        <label className="flex items-center gap-2 text-sm text-fg-muted">
+          <input type="checkbox" className="size-4 accent-accent" checked={negative} onChange={(e) => setNegative(e.target.checked)} />
           Saldo negativo (cuenta sobregirada)
         </label>
-        <dl className="grid grid-cols-2 gap-1 rounded bg-surface p-3 text-sm">
-          <dt className="text-slate-400">{mode === 'cierre' ? 'Calculado por la app' : 'Arrastre calculado'}</dt>
-          <dd className="text-right">{formatCLP(computed)}</dd>
+        <dl className="grid grid-cols-2 gap-1 rounded-lg bg-sunken p-3 text-sm">
+          <dt className="text-fg-muted">{mode === 'cierre' ? 'Calculado por la app' : 'Arrastre calculado'}</dt>
+          <dd className="text-right tabular-nums text-fg">{formatCLP(computed)}</dd>
           {difference !== null && (
             <>
-              <dt className="text-slate-400">Diferencia</dt>
-              <dd className={`text-right font-medium ${compare(difference, '0') < 0 ? 'text-danger' : compare(difference, '0') > 0 ? 'text-success' : ''}`}>
+              <dt className="text-fg-muted">Diferencia</dt>
+              <dd
+                className={`text-right font-medium tabular-nums ${
+                  compare(difference, '0') < 0 ? 'text-negative-fg' : compare(difference, '0') > 0 ? 'text-positive-fg' : 'text-fg'
+                }`}
+              >
                 {formatCLP(difference)}
               </dd>
             </>
@@ -89,18 +93,18 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
         </dl>
         <div className="flex flex-wrap justify-between gap-2">
           {recorded !== null ? (
-            <Button variant="ghost" onClick={remove} disabled={busy}>
+            <Button variant="quiet" onClick={remove} disabled={busy}>
               Quitar
             </Button>
           ) : (
             <span />
           )}
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="secondary" onClick={onClose}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={busy || amount === ''}>
-              {busy ? 'Guardando…' : 'Guardar'}
+            <Button type="submit" loading={busy} disabled={amount === ''}>
+              Guardar
             </Button>
           </div>
         </div>

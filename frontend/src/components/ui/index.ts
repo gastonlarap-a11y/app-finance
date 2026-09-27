@@ -6,6 +6,7 @@ export { Badge, Callout, Empty, EmptyState, QueryError, Skeleton, SkeletonRows, 
 export { SegmentedControl, TabPanel, Tabs, type ChoiceOption } from './Tabs'
 export { Menu, Toggletip, type MenuAction } from './Menu'
 export { ConfirmAction } from './ConfirmAction'
+export { ConfirmDialog } from './ConfirmDialog'
 export { tbl } from './table'
 export { PageHeader, Section, StatCard } from './layout'
 export { Field, Input, MoneyInput, Select, Switch, inputCls } from './form'

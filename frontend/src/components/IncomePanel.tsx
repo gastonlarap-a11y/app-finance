@@ -1,12 +1,13 @@
 import { useState, type SubmitEvent } from 'react'
 import { useAtomValue } from 'jotai'
+import { Plus, X } from 'lucide-react'
 import { FinanceService } from '@/services/finance'
 import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
-import { Button, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
+import { Button, Callout, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
 import { useAccounts } from './Accounts'
 
 export function IncomePanel() {
@@ -75,38 +76,44 @@ export function IncomePanel() {
   return (
     <Section title="Ingresos">
       {query.status === 'error' && (
-        <p role="alert" className="mb-3 rounded bg-danger/10 px-3 py-2 text-sm text-red-200">
-          No se pudo cargar el sueldo: {query.error}.{' '}
-          <button type="button" className="underline" onClick={reload}>
-            Reintentar
-          </button>
-        </p>
+        <Callout
+          tone="negative"
+          role="alert"
+          className="mb-4"
+          action={
+            <Button variant="secondary" size="sm" onClick={reload}>
+              Reintentar
+            </Button>
+          }
+        >
+          No se pudo cargar el sueldo: {query.error}.
+        </Callout>
       )}
-      <div className="space-y-4">
+      <div className="space-y-5">
         <div>
           <Field label="Sueldo de este mes">
             <div className="flex gap-2">
               <MoneyInput value={salary} onChange={(v) => setDraft({ key, value: v })} placeholder="0" />
-              <Button variant="ghost" onClick={saveSalary} disabled={!loaded || busy || salary === savedSalary}>
-                {busy ? 'Guardando…' : 'Guardar'}
+              <Button variant="secondary" onClick={saveSalary} loading={busy} disabled={!loaded || salary === savedSalary}>
+                Guardar
               </Button>
             </div>
           </Field>
-          <p className="mt-1 text-xs text-slate-500">Solo para este mes.</p>
+          <p className="mt-1 text-xs text-fg-subtle">Solo para este mes.</p>
         </div>
 
         <div>
-          <div className="mb-2 text-sm text-slate-300">Extras / bonos de este mes</div>
+          <p className="mb-2 text-sm font-medium text-fg-muted">Extras / bonos de este mes</p>
           {loaded && loaded.extras.length > 0 && (
-            <ul className="mb-3 space-y-1">
+            <ul className="mb-3 divide-y divide-line">
               {loaded.extras.map((x) => (
-                <li key={x.id} className="flex items-center justify-between text-sm">
-                  <span className="truncate text-slate-300">{x.description}</span>
-                  <span className="flex items-center gap-2">
+                <li key={x.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+                  <span className="min-w-0 truncate text-fg">{x.description}</span>
+                  <span className="flex shrink-0 items-center gap-1.5">
                     {accounts.length > 0 && (
                       <select
                         aria-label={`Cuenta de ${x.description}`}
-                        className="rounded bg-slate-800 px-1 py-0.5 text-xs text-slate-300"
+                        className="h-7 rounded-md bg-sunken px-1 text-xs text-fg-muted outline-none ring-1 ring-inset ring-line focus:ring-2 focus:ring-focus"
                         value={x.accountId === null ? '' : String(x.accountId)}
                         onChange={(e) => void setIncomeAccount(x.id, e.target.value === '' ? null : Number(e.target.value))}
                       >
@@ -118,10 +125,8 @@ export function IncomePanel() {
                         ))}
                       </select>
                     )}
-                    <span className="tabular-nums text-success">{formatCLP(x.amount)}</span>
-                    <IconButton label={`Eliminar ${x.description}`} onClick={() => removeExtra(x.id)} className="text-slate-500 hover:text-danger">
-                      ✕
-                    </IconButton>
+                    <span className="tabular-nums text-positive-fg">{formatCLP(x.amount)}</span>
+                    <IconButton label={`Eliminar ${x.description}`} icon={X} tone="danger" size="sm" onClick={() => void removeExtra(x.id)} />
                   </span>
                 </li>
               ))}
@@ -151,13 +156,12 @@ export function IncomePanel() {
                 placeholder="0"
                 required
               />
-              <Button type="submit">
-                <span aria-hidden="true">+</span>
+              <Button type="submit" icon={Plus} className="shrink-0 px-3">
                 <span className="sr-only">Agregar ingreso extra</span>
               </Button>
             </div>
             {formError && (
-              <p role="alert" className="text-xs text-danger">
+              <p role="alert" className="text-xs text-negative-fg">
                 {formError}
               </p>
             )}

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { page, userEvent } from 'vitest/browser'
 import { render } from 'vitest-browser-react'
-import { ConfirmAction } from '../ui'
+import { ConfirmAction, ConfirmDialog } from '../ui'
 
 describe('ConfirmAction', () => {
   it('asks first, with focus on the safe choice', async () => {
@@ -39,5 +39,35 @@ describe('ConfirmAction', () => {
     await page.getByRole('button', { name: 'Eliminar Arriendo' }).click()
     await page.getByRole('button', { name: 'Otro' }).click()
     await expect.element(page.getByRole('group')).not.toBeInTheDocument()
+  })
+})
+
+describe('ConfirmDialog', () => {
+  it('opens with focus on «Cancelar» and runs the action once confirmed', async () => {
+    const onConfirm = vi.fn()
+    const onClose = vi.fn()
+    await render(
+      <ConfirmDialog title="Eliminar gasto" onConfirm={onConfirm} onClose={onClose}>
+        ¿Eliminar «Parlante»?
+      </ConfirmDialog>,
+    )
+    await expect.element(page.getByRole('dialog', { name: 'Eliminar gasto' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Cancelar' })).toHaveFocus()
+    await page.getByRole('button', { name: 'Eliminar', exact: true }).click()
+    expect(onConfirm).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('closes on Escape without confirming', async () => {
+    const onConfirm = vi.fn()
+    const onClose = vi.fn()
+    await render(
+      <ConfirmDialog title="Eliminar gasto" onConfirm={onConfirm} onClose={onClose}>
+        ¿Eliminar?
+      </ConfirmDialog>,
+    )
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onConfirm).not.toHaveBeenCalled()
   })
 })

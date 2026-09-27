@@ -1,7 +1,9 @@
+import { CalendarClock, CalendarDays, CircleAlert, CreditCard } from 'lucide-react'
 import { FinanceService, type Due } from '@/services/finance'
 import { useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, todayISO } from '@/lib/format'
+import { Callout } from './ui'
 
 // How far ahead the banner looks (the desktop notification looks 3 days).
 const BANNER_DAYS = 7
@@ -33,25 +35,28 @@ export function DuesBanner() {
   const overdue = dues.some((d) => d.overdue)
 
   return (
-    <div
+    <Callout
+      tone={overdue ? 'negative' : 'info'}
       role="status"
-      className={`rounded-base px-4 py-3 text-sm ring-1 ${
-        overdue ? 'bg-danger/10 text-red-200 ring-danger/30' : 'bg-primary/10 text-slate-200 ring-primary/30'
-      }`}
+      icon={overdue ? CircleAlert : CalendarClock}
+      title={overdue ? 'Pagos vencidos o por vencer' : 'Próximos vencimientos'}
     >
-      <div className="mb-1 font-medium">{overdue ? 'Pagos vencidos o por vencer' : 'Próximos vencimientos'}</div>
-      <ul className="space-y-0.5">
-        {dues.map((d) => (
-          <li key={`${d.kind}-${d.refId}-${d.period}`} className="flex flex-wrap justify-between gap-x-3">
-            <span>
-              {d.kind === 'tarjeta' ? '💳 ' : '📅 '}
-              <strong>{d.label}</strong> · {dueWhen(d.dueDate, today)}
-            </span>
-            <span className={`tabular-nums ${d.overdue ? 'text-danger' : ''}`}>{formatCLP(d.amount)}</span>
-          </li>
-        ))}
+      <ul className="space-y-1">
+        {dues.map((d) => {
+          const Icon = d.kind === 'tarjeta' ? CreditCard : CalendarDays
+          return (
+            <li key={`${d.kind}-${d.refId}-${d.period}`} className="flex flex-wrap items-center justify-between gap-x-3">
+              <span className="inline-flex flex-wrap items-center gap-x-1.5">
+                <Icon aria-hidden="true" className="size-3.5 text-fg-muted" />
+                <strong className="font-medium">{d.label}</strong>
+                <span className="text-fg-muted">· {dueWhen(d.dueDate, today)}</span>
+              </span>
+              <span className={`tabular-nums ${d.overdue ? 'font-semibold text-negative-fg' : ''}`}>{formatCLP(d.amount)}</span>
+            </li>
+          )
+        })}
       </ul>
-      <p className="mt-1 text-xs text-slate-400">Desaparecen al marcarlos pagados en el mes correspondiente.</p>
-    </div>
+      <p className="text-xs text-fg-muted">Desaparecen al marcarlos pagados en el mes correspondiente.</p>
+    </Callout>
   )
 }

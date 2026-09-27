@@ -1,20 +1,25 @@
+import { Equal, TrendingDown, TrendingUp } from 'lucide-react'
 import { FinanceService, type TrendMonth } from '@/services/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { maxAbs, pctChange, ratio } from '@/lib/money'
 import { formatCLP, monthLabel } from '@/lib/format'
-import { QueryError, Section } from './ui'
+import { QueryError, Section, Skeleton, tbl } from './ui'
 
 const WINDOW = 6
 
-// Delta renders a percent change; for spending, going up is bad (danger).
+// Delta renders a percent change; for spending, going up is bad. The words
+// ("más", "menos") carry the meaning, the color only reinforces it.
 function Delta({ current, base, label }: { current: string; base: string; label: string }) {
   const pct = pctChange(current, base)
-  if (pct === null) return <span className="text-slate-500">sin datos {label}</span>
-  const tone = pct > 0 ? 'text-danger' : pct < 0 ? 'text-success' : 'text-slate-400'
+  if (pct === null) return <span className="text-fg-subtle">sin datos {label}</span>
+  const Icon = pct > 0 ? TrendingUp : pct < 0 ? TrendingDown : Equal
+  const tone = pct > 0 ? 'text-negative-fg' : pct < 0 ? 'text-positive-fg' : 'text-fg-muted'
+  const words = pct > 0 ? `${pct}% más` : pct < 0 ? `${Math.abs(pct)}% menos` : 'igual'
   return (
-    <span className={tone}>
-      {pct > 0 ? '▲' : pct < 0 ? '▼' : '='} {Math.abs(pct)}% {label}
+    <span className={`inline-flex items-center gap-1 ${tone}`}>
+      <Icon aria-hidden="true" className="size-3.5" />
+      {words} {label}
     </span>
   )
 }
@@ -33,11 +38,12 @@ function Sparkline({ months }: { months: TrendMonth[] }) {
       <polyline
         points={points.map(([x, y]) => `${x},${y}`).join(' ')}
         fill="none"
-        stroke="var(--color-primary)"
+        stroke="var(--color-accent-fg)"
         strokeWidth="2"
         strokeLinejoin="round"
+        strokeLinecap="round"
       />
-      {last && <circle cx={last[0]} cy={last[1]} r="3" fill="var(--color-primary)" />}
+      {last && <circle cx={last[0]} cy={last[1]} r="3.5" fill="var(--color-accent-fg)" />}
     </svg>
   )
 }
@@ -55,7 +61,13 @@ export function TrendPanel({ period }: { period: string }) {
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const tr = query.data
-  if (!tr) return null
+  if (!tr) {
+    return (
+      <Section title={`Tendencia (${WINDOW} meses)`}>
+        <Skeleton className="h-20 w-full" />
+      </Section>
+    )
+  }
   // Backend sorts by this month's spend; the top rows are the ones worth reading.
   const movers = tr.categories.slice(0, 6)
 
@@ -63,21 +75,21 @@ export function TrendPanel({ period }: { period: string }) {
     <Section title={`Tendencia (${WINDOW} meses)`}>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1 text-sm">
-          <div>
+          <div className="text-fg">
             Este mes: <strong className="tabular-nums">{formatCLP(tr.current)}</strong>
           </div>
           <div>
-            <Delta current={tr.current} base={tr.previous} label="vs mes anterior" />{' '}
-            <span className="text-slate-500">({formatCLP(tr.previous)})</span>
+            <Delta current={tr.current} base={tr.previous} label="que el mes anterior" />{' '}
+            <span className="text-fg-subtle">({formatCLP(tr.previous)})</span>
           </div>
           <div>
-            <Delta current={tr.current} base={tr.average} label="vs promedio" />{' '}
-            <span className="text-slate-500">({formatCLP(tr.average)})</span>
+            <Delta current={tr.current} base={tr.average} label="que el promedio" />{' '}
+            <span className="text-fg-subtle">({formatCLP(tr.average)})</span>
           </div>
         </div>
         <div className="flex flex-col items-end gap-1">
           <Sparkline months={tr.months} />
-          <div className="flex w-full max-w-60 justify-between text-[10px] text-slate-500" aria-hidden="true">
+          <div className="flex w-full max-w-60 justify-between text-[10px] text-fg-subtle" aria-hidden="true">
             {tr.months.map((m) => (
               <span key={m.period}>{monthLabel(m.period).slice(0, 3)}</span>
             ))}
@@ -86,28 +98,30 @@ export function TrendPanel({ period }: { period: string }) {
       </div>
 
       {movers.length > 0 && (
-        <table className="mt-4 w-full text-sm">
-          <thead className="text-left text-xs uppercase text-slate-400">
-            <tr>
-              <th className="pb-2">Categoría</th>
-              <th className="pb-2 text-right">Este mes</th>
-              <th className="hidden pb-2 text-right sm:table-cell">Promedio</th>
-              <th className="pb-2 text-right">Cambio</th>
-            </tr>
-          </thead>
-          <tbody>
-            {movers.map((c) => (
-              <tr key={c.category} className="border-t border-slate-800">
-                <td className="py-1.5 text-slate-300">{c.category}</td>
-                <td className="py-1.5 text-right tabular-nums">{formatCLP(c.current)}</td>
-                <td className="hidden py-1.5 text-right tabular-nums text-slate-400 sm:table-cell">{formatCLP(c.average)}</td>
-                <td className="py-1.5 text-right text-xs">
-                  <Delta current={c.current} base={c.average} label="" />
-                </td>
+        <div className={`mt-4 ${tbl.wrap}`}>
+          <table className={tbl.table}>
+            <thead className={tbl.thead}>
+              <tr>
+                <th className={tbl.th}>Categoría</th>
+                <th className={`${tbl.th} text-right`}>Este mes</th>
+                <th className={`${tbl.th} hidden text-right sm:table-cell`}>Promedio</th>
+                <th className={`${tbl.th} text-right`}>Cambio</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {movers.map((c) => (
+                <tr key={c.category} className={tbl.row}>
+                  <td className={`${tbl.td} text-fg`}>{c.category}</td>
+                  <td className={`${tbl.td} ${tbl.num}`}>{formatCLP(c.current)}</td>
+                  <td className={`${tbl.td} ${tbl.num} hidden text-fg-muted sm:table-cell`}>{formatCLP(c.average)}</td>
+                  <td className={`${tbl.td} text-right text-xs`}>
+                    <Delta current={c.current} base={c.average} label="" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Section>
   )

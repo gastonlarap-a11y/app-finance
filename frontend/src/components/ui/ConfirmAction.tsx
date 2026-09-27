@@ -1,5 +1,5 @@
 import { useState, type FocusEvent, type KeyboardEvent } from 'react'
-import { Trash2, type LucideIcon } from 'lucide-react'
+import { Trash, type LucideIcon } from 'lucide-react'
 import { Button, IconButton } from './Button'
 
 type Phase = 'idle' | 'asking' | 'returning'
@@ -11,7 +11,7 @@ type Phase = 'idle' | 'asking' | 'returning'
 export function ConfirmAction({
   label,
   onConfirm,
-  icon = Trash2,
+  icon = Trash,
   iconOnly = false,
   question = '¿Eliminar?',
   confirmLabel = 'Eliminar',

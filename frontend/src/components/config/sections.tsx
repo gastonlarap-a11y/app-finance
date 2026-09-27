@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CloudUpload, CreditCard, Landmark, Mail, Palette, RefreshCw, Shapes, Store, Tag, Trash2, Users, WandSparkles, type LucideIcon } from 'lucide-react'
+import { CloudUpload, CreditCard, Landmark, Mail, Palette, RefreshCw, Shapes, Store, Tag, Trash, Users, WandSparkles, type LucideIcon } from 'lucide-react'
 import { IS_WEB } from '@/lib/platform'
 import { CONFIG_SECTIONS, DESKTOP_ONLY_SECTIONS, type ConfigSection } from '@/lib/route'
 import { AccountsSettings } from '../Accounts'
@@ -80,7 +80,7 @@ const SECTIONS: Record<ConfigSection, SectionDef> = {
     render: () => <MailSettings />,
   },
   perfiles: { group: 'Datos', label: 'Perfiles', description: 'Quién usa la app', icon: Users, render: () => <ProfilesSettings /> },
-  papelera: { group: 'Datos', label: 'Papelera', description: 'Restaurar lo eliminado', icon: Trash2, render: () => <TrashView /> },
+  papelera: { group: 'Datos', label: 'Papelera', description: 'Restaurar lo eliminado', icon: Trash, render: () => <TrashView /> },
   apariencia: { group: 'App', label: 'Apariencia', description: 'Tema y barra lateral', icon: Palette, render: () => <AppearanceSettings /> },
   actualizaciones: {
     group: 'App',
