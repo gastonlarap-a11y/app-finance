@@ -40,7 +40,11 @@ jobs:
         with:
           node-version-file: frontend/.nvmrc
       - run: npm ci
-      - run: npm run test
+      # Engine and lib tests only: they guard the exact code being published.
+      # The UI tests (vitest browser project, headless Chromium) already passed
+      # in the CI run of this same commit that triggered this deploy; rerunning
+      # them here would only add a browser download to every deploy.
+      - run: npx vitest run --project unit
       - run: npm run build:web
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
