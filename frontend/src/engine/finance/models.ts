@@ -15,6 +15,7 @@ import type {
   MerchantRule,
   PeriodSalary,
   Reconciliation,
+  Receivable,
   Refund,
   SavingsContribution,
   Tag,
@@ -110,6 +111,18 @@ export function rowToRefund(r: SqlRow): Refund {
     period: asString(r.period),
     amount: asString(r.amount),
     description: asString(r.description),
+    createdAt: asString(r.created_at),
+  }
+}
+
+export function rowToReceivable(r: SqlRow): Receivable {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    expenseId: asNumber(r.expense_id),
+    person: asString(r.person),
+    amount: asString(r.amount),
+    refundId: asNullableNumber(r.refund_id),
     createdAt: asString(r.created_at),
   }
 }

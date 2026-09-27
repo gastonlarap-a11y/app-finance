@@ -50,6 +50,8 @@ import type {
   OpResult,
   PeriodSalary,
   ReconciliationResult,
+  ReceivableResult,
+  ReceivablesResult,
   RefundResult,
   RecurringResult,
   RecurringSuggestion,
@@ -155,6 +157,7 @@ import {
   rowToMerchantRule,
   rowToPeriodSalary,
   rowToReconciliation,
+  rowToReceivable,
   rowToRefund,
   rowToTag,
   rowToSavingsContribution,
@@ -3586,6 +3589,84 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       db.exec('DELETE FROM refunds WHERE id = ? AND user_id = ?', [id, uid()])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'reembolso no encontrado') }
       return {}
+    },
+
+    // ---------- receivables (por cobrar; mirror of receivable.go) ----------
+
+    async CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult> {
+      const who = person.trim()
+      if (who === '') return { error: newError(ErrValidation, 'indica quién te debe') }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+      const amt = parsed.amount
+      return db.transaction((): ReceivableResult => {
+        const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
+        if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        const ex = rowToExpense(row)
+        const owed = sumAmounts('SELECT amount FROM receivables WHERE expense_id = ? AND user_id = ?', [expenseID, uid()])
+        const total = Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1))
+        if (owed.add(amt).gt(total)) {
+          return {
+            error: newError(ErrValidation, `lo que te deben supera lo que costó el gasto (quedan ${total.sub(owed).toString()})`),
+          }
+        }
+        const inserted = db.query(
+          'INSERT INTO receivables (user_id, expense_id, person, amount, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
+          [uid(), expenseID, who, amt.toString(), nowIso()],
+        )[0]
+        if (!inserted) throw new Error('INSERT receivables RETURNING produced no row')
+        return { data: rowToReceivable(inserted) }
+      })
+    },
+
+    async SettleReceivable(id: number, period: string): Promise<ReceivableResult> {
+      try {
+        return db.transaction((): ReceivableResult => {
+          const row = db.query(
+            `SELECT * FROM receivables WHERE id = ? AND user_id = ?
+             AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+            [id, uid()],
+          )[0]
+          if (!row) return { error: newError(ErrNotFound, 'cuenta por cobrar no encontrada') }
+          const rcv = rowToReceivable(row)
+          if (rcv.refundId !== null) return { error: newError(ErrConflict, 'ya está cobrada') }
+          const refund = insertRefund(rcv.expenseId, period, rcv.amount, 'Cobrado a ' + rcv.person)
+          if (refund.error || !refund.data) throw new TxAbort(refund.error ?? newError(ErrValidation, 'reembolso inválido'))
+          db.exec('UPDATE receivables SET refund_id = ? WHERE id = ?', [refund.data.id, id])
+          return { data: { ...rcv, refundId: refund.data.id } }
+        })
+      } catch (err) {
+        if (err instanceof TxAbort) return { error: err.appError }
+        throw err
+      }
+    },
+
+    async DeleteReceivable(id: number): Promise<OpResult> {
+      db.exec('DELETE FROM receivables WHERE id = ? AND user_id = ?', [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta por cobrar no encontrada') }
+      return {}
+    },
+
+    async ListReceivables(): Promise<ReceivablesResult> {
+      const rows = db.query(
+        `SELECT rcv.*, ex.description AS expense_description, ex.date AS expense_date,
+                COALESCE(rf.period, '') AS settled_period
+         FROM receivables AS rcv
+         JOIN expenses AS ex ON ex.id = rcv.expense_id AND ex.deleted_at IS NULL
+         LEFT JOIN refunds AS rf ON rf.id = rcv.refund_id
+         WHERE rcv.user_id = ?
+         ORDER BY rcv.refund_id IS NOT NULL, CASE WHEN rcv.refund_id IS NULL THEN rcv.id ELSE -rcv.id END`,
+        [uid()],
+      )
+      return {
+        data: rows.map((r) => ({
+          ...rowToReceivable(r),
+          expenseDescription: asString(r.expense_description),
+          expenseDate: asString(r.expense_date).slice(0, 10),
+          settledPeriod: asString(r.settled_period),
+        })),
+      }
     },
 
     // ---------- reconciliations (conciliación) ----------

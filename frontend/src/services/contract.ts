@@ -458,6 +458,34 @@ export interface Refund {
   createdAt: string
 }
 
+// The part of an expense someone else owes (a split bill). Settling it records
+// a refund of the expense in the month the money arrives.
+export interface Receivable {
+  id: number
+  userId: number
+  expenseId: number
+  person: string
+  amount: string // positive
+  refundId: number | null // null = still owed
+  createdAt: string
+}
+
+export interface ReceivableView extends Receivable {
+  expenseDescription: string
+  expenseDate: string // YYYY-MM-DD
+  settledPeriod: string // YYYY-MM; '' = still owed
+}
+
+export interface ReceivableResult {
+  data?: Receivable | null
+  error?: AppError | null
+}
+
+export interface ReceivablesResult {
+  data?: ReceivableView[] | null
+  error?: AppError | null
+}
+
 export interface MerchantRule {
   id: number
   userId: number
@@ -775,6 +803,10 @@ export interface FinanceServiceContract {
   SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
   PrepayExpense(expenseID: number, period: string): Promise<OpResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
+  CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>
+  SettleReceivable(id: number, period: string): Promise<ReceivableResult>
+  DeleteReceivable(id: number): Promise<OpResult>
+  ListReceivables(): Promise<ReceivablesResult>
   DeleteRefund(id: number): Promise<OpResult>
 
   ListFixedExpenses(): Promise<FixedExpenseView[]>

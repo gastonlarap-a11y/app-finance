@@ -27,6 +27,7 @@ import { StatementBanner } from './CardStatements'
 import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
 import { RefundDialog } from './RefundDialog'
 import { CuotaDialog } from './CuotaDialog'
+import { ReceivableDialog, ReceivablesPanel } from './Receivables'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -67,6 +68,7 @@ export function MonthView() {
   const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
   const [refundFor, setRefundFor] = useState<Movimiento | null>(null)
   const [cuotaFor, setCuotaFor] = useState<Movimiento | null>(null)
+  const [owedFor, setOwedFor] = useState<Movimiento | null>(null)
   const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
 
   function openNewExpense() {
@@ -434,6 +436,13 @@ export function MonthView() {
                                     >
                                       ↩
                                     </IconButton>{' '}
+                                    <IconButton
+                                      label={`Me deben parte de ${m.description}`}
+                                      onClick={() => setOwedFor(m)}
+                                      className="text-slate-400 hover:text-primary"
+                                    >
+                                      👥
+                                    </IconButton>{' '}
                                     {m.total > 1 && m.status !== 'pagado' && (
                                       <>
                                         <IconButton
@@ -465,6 +474,10 @@ export function MonthView() {
               </>
             )}
           </Section>
+
+          <div className="mt-5">
+            <ReceivablesPanel period={summary.period} />
+          </div>
 
           {summary.porCategoria.length > 0 && (
             <div className="mt-5">
@@ -570,6 +583,16 @@ export function MonthView() {
           }
           onClose={() => setShowForm(false)}
           onSaved={reload}
+        />
+      )}
+      {owedFor && (
+        <ReceivableDialog
+          expense={owedFor}
+          onClose={() => setOwedFor(null)}
+          onSaved={() => {
+            setOwedFor(null)
+            reload()
+          }}
         />
       )}
       {cuotaFor && (
