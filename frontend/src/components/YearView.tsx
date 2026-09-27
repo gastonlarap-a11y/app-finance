@@ -1,23 +1,28 @@
 import { useAtom } from 'jotai'
+import { ChartColumn, CircleCheck, CircleX } from 'lucide-react'
 import { FinanceService, type CategoryYearRow, type YearSummary } from '@/services/finance'
 import { periodAtom } from '@/atoms/finance'
 import { navigate } from '@/lib/useRoute'
-import { Link } from './Link'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
 import { formatCLP, monthLabel, yearOf } from '@/lib/format'
-import { Bar, Empty, QueryError, Section, Spinner, StatCard } from './ui'
+import { Bar, Button, EmptyState, QueryError, Section, Skeleton, StatCard, tbl } from './ui'
 import { ExportButton } from './ExportButton'
 import { exportBasename, yearTable } from '@/lib/exportTables'
 
 function signTone(v: string): string {
-  return isNegative(v) ? 'text-danger' : 'text-success'
+  return isNegative(v) ? 'text-negative-fg' : 'text-positive-fg'
 }
 
 function hasActivity(data: YearSummary): boolean {
   return data.months.some((m) => !isZero(m.ingresos) || !isZero(m.gastos))
 }
+
+// Heatmap tint range (percent of the accent over the card). Capped so the
+// cell's text keeps AA contrast on the most intense cell in both themes.
+const HEAT_MIN = 12
+const HEAT_MAX = 70
 
 export function YearView() {
   const [period, setPeriod] = useAtom(periodAtom)
@@ -38,14 +43,22 @@ export function YearView() {
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
   const data = query.data
-  if (!data) return <Spinner />
+  if (!data) return <YearSkeleton />
   const stale = query.status === 'loading'
 
   if (!hasActivity(data)) {
     return (
-      <Empty>
-        Sin datos para {year}. Registra sueldo o gastos en el <Link to={{ page: 'resumen' }}>Resumen del mes</Link>.
-      </Empty>
+      <EmptyState
+        icon={ChartColumn}
+        title={`Sin datos para ${year}`}
+        action={
+          <Button variant="secondary" onClick={() => navigate({ page: 'resumen' })}>
+            Ir al Resumen del mes
+          </Button>
+        }
+      >
+        Registra tu sueldo o tus gastos en el Resumen y aquí verás el año completo.
+      </EmptyState>
     )
   }
 
@@ -53,8 +66,8 @@ export function YearView() {
   const hasSavings = !isZero(data.totalAhorro)
 
   return (
-    <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+    <div className={`space-y-6 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
+      <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label={`Ingresos ${year}`} value={formatCLP(data.totalIngresos)} tone="primary" />
         <StatCard label={`Gastos ${year}`} value={formatCLP(data.totalGastos)} />
         <StatCard
@@ -65,61 +78,64 @@ export function YearView() {
       </div>
 
       <Section title={`Meses de ${year}`} action={<ExportButton build={() => yearTable(data)} basename={exportBasename('anio', String(year))} />}>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-slate-400">
+        <div className={tbl.wrap}>
+          <table className={tbl.table}>
+            <thead className={tbl.thead}>
               <tr>
-                <th className="pb-2">Mes</th>
-                <th className="pb-2 text-right">Ingresos</th>
-                <th className="pb-2 text-right">Gastos</th>
-                {hasSavings && <th className="pb-2 text-right">Ahorro</th>}
-                <th className="pb-2 text-right">Balance</th>
-                <th className="pb-2 text-right">Saldo acum.</th>
-                <th className="pb-2 text-center">¿Alcanza?</th>
+                <th className={tbl.th}>Mes</th>
+                <th className={`${tbl.th} text-right`}>Ingresos</th>
+                <th className={`${tbl.th} text-right`}>Gastos</th>
+                {hasSavings && <th className={`${tbl.th} text-right`}>Ahorro</th>}
+                <th className={`${tbl.th} text-right`}>Balance</th>
+                <th className={`${tbl.th} text-right`}>Saldo acum.</th>
+                <th className={`${tbl.th} text-center`}>¿Alcanza?</th>
               </tr>
             </thead>
             <tbody>
               {data.months.map((m) => (
-                <tr key={m.period} className="border-t border-slate-800">
-                  <td className="py-2">
-                    <button
-                      type="button"
-                      onClick={() => goToMonth(m.period)}
-                      className="rounded font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-primary"
-                    >
+                <tr key={m.period} className={tbl.row}>
+                  <td className={tbl.td}>
+                    <button type="button" onClick={() => goToMonth(m.period)} className="rounded font-medium text-fg hover:text-accent-fg hover:underline">
                       {monthLabel(m.period)}
                     </button>
                   </td>
-                  <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ingresos)}</td>
-                  <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.gastos)}</td>
-                  {hasSavings && <td className="py-2 text-right tabular-nums text-slate-300">{formatCLP(m.ahorro)}</td>}
-                  <td className={`py-2 text-right tabular-nums ${signTone(m.balance)}`}>{formatCLP(m.balance)}</td>
-                  <td className={`py-2 text-right tabular-nums ${signTone(m.saldo)}`}>
-                    {formatCLP(m.saldo)}
-                    {m.conciliado && (
-                      <span className="ml-1 text-xs text-slate-400" title="Saldo real conciliado con el banco">
-                        ✓<span className="sr-only"> conciliado</span>
-                      </span>
-                    )}
+                  <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.ingresos)}</td>
+                  <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.gastos)}</td>
+                  {hasSavings && <td className={`${tbl.td} ${tbl.num} text-fg-muted`}>{formatCLP(m.ahorro)}</td>}
+                  <td className={`${tbl.td} ${tbl.num} ${signTone(m.balance)}`}>{formatCLP(m.balance)}</td>
+                  <td className={`${tbl.td} ${tbl.num} ${signTone(m.saldo)}`}>
+                    <span className="inline-flex items-center gap-1">
+                      {formatCLP(m.saldo)}
+                      {m.conciliado && (
+                        <span className="text-fg-subtle" title="Saldo real conciliado con el banco">
+                          <CircleCheck aria-hidden="true" className="size-3.5" />
+                          <span className="sr-only"> conciliado</span>
+                        </span>
+                      )}
+                    </span>
                   </td>
-                  <td className="py-2 text-center">
-                    <span aria-label={m.alcanza ? 'Sí alcanza' : 'No alcanza'}>{m.alcanza ? '✓' : '✕'}</span>
+                  <td className={`${tbl.td} text-center`}>
+                    {m.alcanza ? (
+                      <CircleCheck aria-label="Sí alcanza" className="mx-auto size-4 text-positive-fg" />
+                    ) : (
+                      <CircleX aria-label="No alcanza" className="mx-auto size-4 text-negative-fg" />
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="mt-4 grid grid-cols-12 items-end gap-1" style={{ height: 80 }} aria-hidden="true">
+        <div className="mt-5 grid grid-cols-12 items-end gap-1" style={{ height: 88 }} aria-hidden="true">
           {data.months.map((m) => (
             <div key={m.period} className="flex flex-col items-center gap-1" title={`${monthLabel(m.period)}: ${formatCLP(m.gastos)}`}>
               <div className="flex h-16 w-full items-end">
                 <div
-                  className={`w-full rounded-t ${m.alcanza ? 'bg-primary' : 'bg-danger'}`}
+                  className={`w-full rounded-t-md ${m.alcanza ? 'bg-accent' : 'bg-negative-fg'}`}
                   style={{ height: `${Math.round(ratio(m.gastos, barMax) * 100)}%` }}
                 />
               </div>
-              <span className="text-[10px] text-slate-500">{monthLabel(m.period).slice(0, 3)}</span>
+              <span className="text-[10px] text-fg-subtle">{monthLabel(m.period).slice(0, 3)}</span>
             </div>
           ))}
         </div>
@@ -141,7 +157,7 @@ export function YearView() {
 
 // CategoryHeatmap is the category × month spending table: each cell's tint is
 // proportional to the largest cell of the year, so the months where a category
-// spikes stand out at a glance.
+// spikes stand out at a glance. The amount is always written in the cell.
 function CategoryHeatmap({
   year,
   rows,
@@ -160,19 +176,19 @@ function CategoryHeatmap({
   const cellMax = maxAbs(rows.flatMap((r) => r.months))
   return (
     <Section title={`Gasto por categoría y mes ${year}`}>
-      <div className="overflow-x-auto">
+      <div className={tbl.wrap}>
         <table className="w-full border-separate border-spacing-0.5 text-xs">
-          <thead className="text-slate-400">
+          <thead className="text-fg-subtle">
             <tr>
-              <th className="sticky left-0 bg-surface-alt pb-2 text-left">Categoría</th>
+              <th className="sticky left-0 bg-panel pb-2 text-left font-medium">Categoría</th>
               {months.map((p) => (
                 <th key={p} className="pb-2 text-right font-medium">
-                  <button type="button" onClick={() => onMonth(p)} className="rounded hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+                  <button type="button" onClick={() => onMonth(p)} className="rounded hover:text-accent-fg hover:underline">
                     {monthLabel(p).slice(0, 3)}
                   </button>
                 </th>
               ))}
-              <th className="pb-2 text-right">Total</th>
+              <th className="pb-2 text-right font-medium">Total</th>
               <th className="pb-2 pl-2 text-left">
                 <span className="sr-only">Proporción del año</span>
               </th>
@@ -181,27 +197,30 @@ function CategoryHeatmap({
           <tbody>
             {rows.map((r) => (
               <tr key={r.category}>
-                <th scope="row" className="sticky left-0 max-w-40 truncate bg-surface-alt py-1 pr-2 text-left font-normal text-slate-300">
+                <th scope="row" className="sticky left-0 max-w-40 truncate bg-panel py-1 pr-2 text-left font-normal text-fg">
                   {r.category}
                 </th>
                 {r.months.map((v, i) => (
                   <td
                     key={months[i]}
-                    className="rounded px-1.5 py-1 text-right tabular-nums"
-                    style={isZero(v) ? undefined : { backgroundColor: `color-mix(in oklab, var(--color-primary) ${Math.round(15 + ratio(v, cellMax) * 70)}%, transparent)` }}
-                    title={`${r.category} · ${monthLabel(months[i] ?? '')}: ${formatCLP(v)}`}
+                    className="rounded px-1.5 py-1 text-right tabular-nums text-fg"
+                    style={
+                      isZero(v)
+                        ? undefined
+                        : { backgroundColor: `color-mix(in oklab, var(--color-accent) ${Math.round(HEAT_MIN + ratio(v, cellMax) * (HEAT_MAX - HEAT_MIN))}%, transparent)` }
+                    }
                   >
-                    {isZero(v) ? <span className="text-slate-600">·</span> : formatCLP(v)}
+                    {isZero(v) ? <span className="text-fg-subtle">·</span> : formatCLP(v)}
                   </td>
                 ))}
-                <td className="py-1 pl-2 text-right font-medium tabular-nums">{formatCLP(r.total)}</td>
+                <td className="py-1 pl-2 text-right font-medium tabular-nums text-fg">{formatCLP(r.total)}</td>
                 <td className="w-24 py-1 pl-2">
                   <Bar fill={ratio(r.total, total)} />
                 </td>
               </tr>
             ))}
-            <tr className="text-slate-300">
-              <th scope="row" className="sticky left-0 bg-surface-alt pt-2 text-left">
+            <tr className="text-fg">
+              <th scope="row" className="sticky left-0 bg-panel pt-2 text-left">
                 Total
               </th>
               {monthTotals.map((v, i) => (
@@ -216,5 +235,19 @@ function CategoryHeatmap({
         </table>
       </div>
     </Section>
+  )
+}
+
+function YearSkeleton() {
+  return (
+    <div role="status" className="space-y-6">
+      <span className="sr-only">Cargando el año…</span>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-24 w-full rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-96 w-full rounded-xl" />
+    </div>
   )
 }

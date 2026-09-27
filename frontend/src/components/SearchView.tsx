@@ -7,7 +7,8 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
-import { BankCodes, BankDescription, Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
+import { SearchX } from 'lucide-react'
+import { BankCodes, BankDescription, Button, EmptyState, Field, QueryError, Section, Select, SkeletonRows, TagChips, inputCls, tbl } from './ui'
 import { ExportButton } from './ExportButton'
 
 const PAGE = 50
@@ -74,8 +75,8 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
   const stale = results.status === 'loading'
 
   return (
-    <div className="space-y-5">
-      <Section title="Buscar gastos">
+    <div className="space-y-6">
+      <Section title="Filtros">
         <form role="search" onSubmit={(e) => e.preventDefault()} className="grid gap-3 md:grid-cols-2 lg:grid-cols-6">
           <div className="lg:col-span-2">
             <Field label="Texto (descripción, comercio o código del banco)">
@@ -129,9 +130,10 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
           </div>
         </form>
         {hasFilters && (
-          <button
-            type="button"
-            className="mt-3 text-xs text-slate-400 hover:text-slate-200"
+          <Button
+            variant="quiet"
+            size="sm"
+            className="mt-3"
             onClick={() => {
               setText('')
               setCategory('')
@@ -143,32 +145,36 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
             }}
           >
             Limpiar filtros
-          </button>
+          </Button>
         )}
       </Section>
 
       {results.status === 'error' ? (
         <QueryError message={results.error} onRetry={() => invalidate('ledger')} />
       ) : !data ? (
-        <Empty>Buscando…</Empty>
+        <Section title="Resultados">
+          <SkeletonRows rows={5} label="Buscando…" />
+        </Section>
       ) : data.count === 0 ? (
-        <Empty>{hasFilters ? 'Ningún gasto coincide con la búsqueda.' : 'Aún no registras gastos.'}</Empty>
+        <EmptyState icon={SearchX} title={hasFilters ? 'Ningún gasto coincide con la búsqueda' : 'Aún no registras gastos'}>
+          {hasFilters ? 'Prueba con menos filtros u otra palabra.' : 'Cuando agregues o importes gastos, podrás buscarlos aquí.'}
+        </EmptyState>
       ) : (
         <Section
           title={`${data.count} ${data.count === 1 ? 'gasto' : 'gastos'} · total ${formatCLP(data.sum)}`}
           action={<ExportButton build={() => searchTable(data.items)} basename={exportBasename('busqueda', todayISO())} />}
         >
-          <div className={`overflow-x-auto transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale} aria-live="polite">
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase text-slate-400">
+          <div className={`@container ${tbl.wrap} transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale} aria-live="polite">
+            <table className={tbl.table}>
+              <thead className={tbl.thead}>
                 <tr>
-                  <th className="pb-2">Fecha</th>
-                  <th className="pb-2">Descripción</th>
-                  <th className="hidden pb-2 md:table-cell">Categoría</th>
-                  <th className="hidden pb-2 lg:table-cell">Tarjeta</th>
-                  <th className="hidden pb-2 md:table-cell">Cuotas</th>
-                  <th className="pb-2 text-right">Total</th>
-                  <th className="pb-2">
+                  <th className={tbl.th}>Fecha</th>
+                  <th className={tbl.th}>Descripción</th>
+                  <th className={`${tbl.th} hidden @xl:table-cell`}>Categoría</th>
+                  <th className={`${tbl.th} hidden @3xl:table-cell`}>Tarjeta</th>
+                  <th className={`${tbl.th} hidden @xl:table-cell`}>Cuotas</th>
+                  <th className={`${tbl.th} text-right`}>Total</th>
+                  <th className={tbl.th}>
                     <span className="sr-only">Ir al mes</span>
                   </th>
                 </tr>
@@ -178,34 +184,34 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
                   const ex = hit.expense
                   const unico = ex.kind === KIND_UNICO
                   return (
-                    <tr key={ex.id} className="border-t border-slate-800">
-                      <td className="py-2 text-slate-400">{formatDate(ex.date)}</td>
-                      <td className="py-2">
-                        <div className="font-medium">{ex.description}</div>
-                        {ex.merchant && <div className="text-xs text-slate-500">{ex.merchant}</div>}
+                    <tr key={ex.id} className={tbl.row}>
+                      <td className={`${tbl.td} whitespace-nowrap text-fg-muted`}>{formatDate(ex.date)}</td>
+                      <td className={tbl.td}>
+                        <div className="font-medium text-fg">{ex.description}</div>
+                        {ex.merchant && <div className="text-xs text-fg-subtle">{ex.merchant}</div>}
                         <BankDescription text={hit.expense.bankDescription} />
                         <TagChips tags={hit.tags} />
                         <BankCodes codes={hit.references} />
                       </td>
-                      <td className="hidden py-2 text-slate-400 md:table-cell">{ex.category || 'Sin categoría'}</td>
-                      <td className="hidden py-2 text-slate-400 lg:table-cell">{hit.cardName || '—'}</td>
-                      <td className="hidden py-2 text-slate-400 md:table-cell">
+                      <td className={`${tbl.td} hidden text-fg-muted @xl:table-cell`}>{ex.category || 'Sin categoría'}</td>
+                      <td className={`${tbl.td} hidden text-fg-muted @3xl:table-cell`}>{hit.cardName || '—'}</td>
+                      <td className={`${tbl.td} hidden text-fg-muted @xl:table-cell`}>
                         {unico ? 'Único' : `${hit.paidCount}/${ex.installmentsTotal} pagadas`}
                         {!unico && hit.firstPeriod && (
-                          <div className="text-xs text-slate-500">
+                          <div className="text-xs text-fg-subtle">
                             {periodLabel(hit.firstPeriod)} → {periodLabel(hit.lastPeriod)}
                           </div>
                         )}
                       </td>
-                      <td className="py-2 text-right tabular-nums">
+                      <td className={`${tbl.td} ${tbl.num} text-fg`}>
                         {formatCLP(hit.total)}
-                        {!unico && <div className="text-xs text-slate-500">{formatCLP(ex.installmentAmount)} / mes</div>}
+                        {!unico && <div className="text-xs text-fg-subtle">{formatCLP(ex.installmentAmount)} / mes</div>}
                       </td>
-                      <td className="py-2 text-right">
+                      <td className={`${tbl.td} text-right`}>
                         {hit.firstPeriod && (
                           <button
                             type="button"
-                            className="text-xs text-primary hover:underline"
+                            className="whitespace-nowrap text-xs font-medium text-accent-fg underline-offset-2 hover:underline"
                             onClick={() => {
                               setPeriod(hit.firstPeriod)
                               navigate({ page: 'resumen' })
@@ -222,12 +228,12 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
             </table>
           </div>
           {data.items.length < data.count && (
-            <div className="mt-4 flex items-center justify-center gap-3 text-sm text-slate-400">
+            <div className="mt-4 flex items-center justify-center gap-3 text-sm text-fg-muted">
               <span>
                 Mostrando {data.items.length} de {data.count}
               </span>
               {limit < MAX_RESULTS ? (
-                <Button variant="ghost" onClick={() => setLimit((l) => Math.min(MAX_RESULTS, l + PAGE))} disabled={stale}>
+                <Button variant="secondary" size="sm" onClick={() => setLimit((l) => Math.min(MAX_RESULTS, l + PAGE))} loading={stale}>
                   Cargar más
                 </Button>
               ) : (

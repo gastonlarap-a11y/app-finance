@@ -1,5 +1,5 @@
 import { useState, type ReactNode, type SubmitEvent } from 'react'
-import { FileText, Inbox } from 'lucide-react'
+import { CheckCheck, FileText, Inbox, Mail, RefreshCw, TriangleAlert } from 'lucide-react'
 import {
   FinanceService,
   KIND_CUOTAS,
@@ -24,19 +24,34 @@ import { errorText, useQuery } from '@/lib/useQuery'
 import { formatAmount, formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { ExpenseForm } from './ExpenseForm'
 import { StatementImport } from './StatementImport'
-import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, TabPanel, Tabs, inputCls } from './ui'
+import {
+  Badge,
+  Button,
+  Callout,
+  EmptyState,
+  Field,
+  Modal,
+  MoneyInput,
+  QueryError,
+  Section,
+  SegmentedControl,
+  SkeletonRows,
+  TabPanel,
+  Tabs,
+  inputCls,
+} from './ui'
 
-const STATUSES: { id: ImportStatus; label: string }[] = [
-  { id: 'pendiente', label: 'Por revisar' },
-  { id: 'conciliado', label: 'Conciliados' },
-  { id: 'confirmado', label: 'Confirmados' },
-  { id: 'descartado', label: 'Descartados' },
-]
+const STATUSES = [
+  { value: 'pendiente', label: 'Por revisar' },
+  { value: 'conciliado', label: 'Conciliados' },
+  { value: 'confirmado', label: 'Confirmados' },
+  { value: 'descartado', label: 'Descartados' },
+] as const satisfies readonly { value: ImportStatus; label: string }[]
 
 const EMPTY_TEXT: Record<ImportStatus, string> = {
   pendiente: IS_WEB
-    ? 'No hay movimientos por revisar. Aparecen aquí al importar un estado de cuenta en PDF.'
-    : 'No hay movimientos por revisar. Aparecen aquí al importar un estado de cuenta en PDF o al revisar tu correo de alertas (Configuración › Correo del banco).',
+    ? 'Aparecen aquí al importar un estado de cuenta en PDF.'
+    : 'Aparecen aquí al importar un estado de cuenta en PDF o al revisar tu correo de alertas (Configuración › Correo del banco).',
   conciliado: 'Aún no hay movimientos conciliados: son los que el banco informó dos veces (alerta de correo y estado de cuenta).',
   confirmado: 'Aún no confirmas movimientos. Al confirmarlos se convierten en gastos del mes.',
   descartado: 'No hay movimientos descartados.',
@@ -151,9 +166,8 @@ function InboxPanel() {
   }
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
-  if (!query.data) return <Spinner />
-  const { items, cards, categories, merchants, rules } = query.data
-  const readyItems = status === 'pendiente' ? items.filter(ready) : []
+  const data = query.data
+  const readyItems = data && status === 'pendiente' ? data.items.filter(ready) : []
 
   return (
     <div className="space-y-6">
@@ -161,54 +175,47 @@ function InboxPanel() {
         title="Bandeja de importación"
         action={
           readyItems.length > 0 && (
-            <Button onClick={() => confirmReady(readyItems)} disabled={busyId !== null}>
-              {busyId === 'bulk' ? 'Confirmando…' : `Confirmar sugeridos (${readyItems.length})`}
+            <Button icon={CheckCheck} onClick={() => void confirmReady(readyItems)} loading={busyId === 'bulk'} disabled={busyId !== null}>
+              Confirmar sugeridos ({readyItems.length})
             </Button>
           )
         }
       >
-        <div className="mb-4 space-y-3">
+        <div className="mb-5 space-y-3">
           {!IS_WEB && <MailSyncStatus onSynced={() => invalidate('imports', 'mail')} />}
           <StatementImport onImported={reload} />
         </div>
 
-        <div role="tablist" aria-label="Estado de los movimientos" className="mb-4 flex flex-wrap gap-1">
-          {STATUSES.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              role="tab"
-              aria-selected={status === s.id}
-              onClick={() => setStatus(s.id)}
-              className={`rounded px-3 py-1.5 text-sm font-medium ring-1 transition focus-visible:outline-2 focus-visible:outline-primary ${
-                status === s.id ? 'bg-primary text-white ring-primary' : 'text-slate-300 ring-slate-700 hover:text-white'
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
+        <div className="mb-4">
+          <SegmentedControl label="Estado de los movimientos" value={status} options={STATUSES} onChange={setStatus} />
         </div>
 
-        {items.length === 0 ? (
-          <Empty>{EMPTY_TEXT[status]}</Empty>
+        {!data ? (
+          <SkeletonRows rows={4} />
+        ) : data.items.length === 0 ? (
+          status === 'pendiente' ? (
+            <EmptyState icon={CheckCheck} title="Todo al día: nada por revisar">
+              {EMPTY_TEXT[status]}
+            </EmptyState>
+          ) : (
+            <EmptyState icon={Inbox}>{EMPTY_TEXT[status]}</EmptyState>
+          )
         ) : (
-          <ul className={`space-y-2 ${query.status === 'loading' ? 'opacity-60' : ''}`}>
-            {items.map((it) => (
+          <ul className={`space-y-2 transition-opacity ${query.status === 'loading' ? 'opacity-60' : ''}`} aria-busy={query.status === 'loading'}>
+            {data.items.map((it) => (
               <ImportRow
                 key={it.id}
                 item={it}
-                cards={cards}
+                cards={data.cards}
                 busy={busyId !== null}
                 onConfirm={() => (isCredit(it) ? setAsIncome(it) : setConfirming(it))}
-                onDiscard={() => run(it.id, () => FinanceService.DiscardImportItem(it.id))}
-                onRestore={() => run(it.id, () => FinanceService.RestoreImportItem(it.id))}
-                onLink={(expenseId) => run(it.id, () => FinanceService.LinkImportItem(it.id, expenseId))}
-                onLinkFixed={(fixedId, period) =>
-                  run(it.id, () => FinanceService.LinkImportItemToFixed(it.id, fixedId, period))
-                }
+                onDiscard={() => void run(it.id, () => FinanceService.DiscardImportItem(it.id))}
+                onRestore={() => void run(it.id, () => FinanceService.RestoreImportItem(it.id))}
+                onLink={(expenseId) => void run(it.id, () => FinanceService.LinkImportItem(it.id, expenseId))}
+                onLinkFixed={(fixedId, period) => void run(it.id, () => FinanceService.LinkImportItemToFixed(it.id, fixedId, period))}
                 // The credit's own month and amount: a reversal lands when the bank posts it.
                 onRefund={(expenseId) =>
-                  run(it.id, () => FinanceService.ConfirmImportItemAsRefund(it.id, expenseId, it.date.slice(0, 7), it.amount))
+                  void run(it.id, () => FinanceService.ConfirmImportItemAsRefund(it.id, expenseId, it.date.slice(0, 7), it.amount))
                 }
               />
             ))}
@@ -216,18 +223,20 @@ function InboxPanel() {
         )}
       </Section>
 
-      <p className="text-sm text-fg-muted">
-        {rules.length === 0
-          ? 'Al confirmar un movimiento puedes pedir que se recuerde su comercio y categoría. '
-          : `${rules.length} regla${rules.length === 1 ? '' : 's'} aprendida${rules.length === 1 ? '' : 's'} completa${rules.length === 1 ? '' : 'n'} los movimientos que llegan. `}
-        <Link to={{ page: 'config', section: 'reglas' }}>Ver reglas de importación</Link>
-      </p>
+      {data && (
+        <p className="text-sm text-fg-muted">
+          {data.rules.length === 0
+            ? 'Al confirmar un movimiento puedes pedir que se recuerde su comercio y categoría. '
+            : `${data.rules.length} regla${data.rules.length === 1 ? '' : 's'} aprendida${data.rules.length === 1 ? '' : 's'} completa${data.rules.length === 1 ? '' : 'n'} los movimientos que llegan. `}
+          <Link to={{ page: 'config', section: 'reglas' }}>Ver reglas de importación</Link>
+        </p>
+      )}
 
-      {confirming && (
+      {confirming && data && (
         <ExpenseForm
-          cards={cards}
-          categories={categories}
-          merchants={merchants}
+          cards={data.cards}
+          categories={data.categories}
+          merchants={data.merchants}
           target={{ mode: 'confirm', item: confirming }}
           onClose={() => setConfirming(null)}
           onSaved={reload}
@@ -271,8 +280,8 @@ function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; o
   return (
     <Modal title="Registrar como ingreso extra" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4" aria-describedby={error ? 'income-form-error' : undefined}>
-        <p className="rounded bg-surface px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-800">
-          Abono del banco: <span className="font-mono text-slate-100">{item.description}</span> ·{' '}
+        <p className="rounded-lg bg-sunken px-3 py-2 text-sm text-fg-muted ring-1 ring-inset ring-line">
+          Abono del banco: <span className="font-mono text-fg">{item.description}</span> ·{' '}
           <span className="tabular-nums">{formatAmount(item.amount, item.currency)}</span>. Suma a los ingresos del mes, no descuenta gastos.
         </p>
         <Field label="Descripción">
@@ -287,16 +296,18 @@ function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; o
           </Field>
         </div>
         {error && (
-          <p id="income-form-error" role="alert" className="rounded bg-danger/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </p>
+          <div id="income-form-error">
+            <Callout tone="negative" role="alert">
+              {error}
+            </Callout>
+          </div>
         )}
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Registrar ingreso'}
+          <Button type="submit" loading={busy}>
+            Registrar ingreso
           </Button>
         </div>
       </form>
@@ -314,9 +325,10 @@ function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
   if (!st) return null
   if (!st.configured) {
     return (
-      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
+        <Mail aria-hidden="true" className="size-4 text-fg-subtle" />
         <span>Conecta tu correo para traer las alertas de compra automáticamente.</span>
-        <Button variant="ghost" onClick={() => navigate({ page: 'config', section: 'correo' })}>
+        <Button variant="secondary" size="sm" onClick={() => navigate({ page: 'config', section: 'correo' })}>
           Configurar correo
         </Button>
       </div>
@@ -334,20 +346,26 @@ function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
 
   return (
     <div className="flex flex-wrap items-center gap-3 text-sm">
-      <Button variant="ghost" onClick={syncNow} disabled={requested || st.syncing}>
+      <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void syncNow()} loading={requested || st.syncing}>
         {st.syncing ? 'Revisando correo…' : 'Revisar correo ahora'}
       </Button>
-      <span className="text-xs text-slate-500">
+      <span className="text-xs text-fg-subtle">
         {syncStatusText(st)}
-        {st.lastError && <span className="text-red-300"> · Último error: {st.lastError}</span>}
+        {st.lastError && <span className="text-negative-fg"> · Último error: {st.lastError}</span>}
       </span>
     </div>
   )
 }
 
-function Badge({ children, tone = 'default' }: { children: ReactNode; tone?: 'default' | 'warn' }) {
-  const cls = tone === 'warn' ? 'bg-amber-500/15 text-amber-200 ring-amber-500/40' : 'bg-surface text-slate-300 ring-slate-700'
-  return <span className={`rounded px-1.5 py-0.5 text-xs ring-1 ${cls}`}>{children}</span>
+// Suggestion is a yes/no question the inbox asks about an item (merge with an
+// expense typed by hand, pay a fixed expense, refund an expense).
+function Suggestion({ children, action }: { children: ReactNode; action: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-caution-soft px-2.5 py-1.5 text-xs text-fg">
+      <span>{children}</span>
+      {action}
+    </div>
+  )
 }
 
 function ImportRow({
@@ -378,10 +396,10 @@ function ImportRow({
         ? `Tarjeta •••• ${it.cardLastDigits}${cards.length > 0 ? ' (sin asociar)' : ''}`
         : null
   return (
-    <li className="flex flex-wrap items-start justify-between gap-3 rounded-base bg-surface p-3 ring-1 ring-slate-800">
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-          <span>{formatDate(it.date)}</span>
+    <li className="flex flex-wrap items-start justify-between gap-3 rounded-lg bg-sunken p-3 ring-1 ring-inset ring-line">
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+          <span className="mr-1">{formatDate(it.date)}</span>
           <Badge>{SOURCE_LABEL[it.source] ?? it.source}</Badge>
           {cardLabel && <Badge>{cardLabel}</Badge>}
           {it.installmentsTotal > 1 && (
@@ -392,93 +410,94 @@ function ImportRow({
             </Badge>
           )}
           {it.reference !== '' && (
-            <span className="font-mono select-all" title="Código de referencia del banco: sirve para reclamar el cargo">
+            <span className="select-all font-mono" title="Código de referencia del banco: sirve para reclamar el cargo">
               Cód. {it.reference}
             </span>
           )}
-          {it.currency !== 'CLP' && <Badge tone="warn">{it.currency}</Badge>}
-          {isCredit(it) && <Badge>Abono del banco: ingreso o reembolso de un gasto</Badge>}
-          {it.hint === 'card_payment' && <Badge tone="warn">⚠ Pago de tarjeta: sus compras ya se cuentan aparte</Badge>}
+          {it.currency !== 'CLP' && <Badge tone="caution">{it.currency}</Badge>}
+          {isCredit(it) && <Badge tone="info">Abono del banco: ingreso o reembolso de un gasto</Badge>}
+          {it.hint === 'card_payment' && (
+            <Badge tone="caution" icon={TriangleAlert}>
+              Pago de tarjeta: sus compras ya se cuentan aparte
+            </Badge>
+          )}
         </div>
-        <div className="truncate font-mono text-sm text-slate-100" title={it.description}>
-          {it.description}
-        </div>
+        <div className="break-words font-mono text-sm text-fg">{it.description}</div>
         {it.rulePattern !== '' && (
-          <div className="text-xs text-slate-400">
-            Sugerido: <span className="text-slate-200">{it.suggestedMerchant || '—'}</span>
-            {it.suggestedCategory !== '' && <> · {it.suggestedCategory}</>} <span className="text-slate-500">(regla «{it.rulePattern}»)</span>
+          <div className="text-xs text-fg-muted">
+            Sugerido: <span className="text-fg">{it.suggestedMerchant || '—'}</span>
+            {it.suggestedCategory !== '' && <> · {it.suggestedCategory}</>} <span className="text-fg-subtle">(regla «{it.rulePattern}»)</span>
           </div>
         )}
         {it.status === 'conciliado' && it.matchedSource !== '' && (
-          <div className="text-xs text-slate-400">
+          <div className="text-xs text-fg-muted">
             Mismo movimiento que {SOURCE_LABEL[it.matchedSource]?.toLowerCase() ?? it.matchedSource} del {formatDate(it.matchedDate)}
           </div>
         )}
         {it.duplicateExpenseId != null && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
-            <span>
-              ¿Ya lo registraste como «{it.duplicateDescription}»
-              {it.duplicateDate !== '' && it.duplicateDate !== it.date && <> el {formatDate(it.duplicateDate)}</>}?
-            </span>
-            <Button variant="ghost" disabled={busy} onClick={() => onLink(it.duplicateExpenseId!)}>
-              Sí, unir
-            </Button>
-            <span className="text-slate-500">(se usan la fecha y el monto del banco; tu descripción se conserva)</span>
-          </div>
+          <Suggestion
+            action={
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => onLink(it.duplicateExpenseId!)}>
+                Sí, unir
+              </Button>
+            }
+          >
+            ¿Ya lo registraste como «{it.duplicateDescription}»
+            {it.duplicateDate !== '' && it.duplicateDate !== it.date && <> el {formatDate(it.duplicateDate)}</>}?{' '}
+            <span className="text-fg-muted">Se usan la fecha y el monto del banco; tu descripción se conserva.</span>
+          </Suggestion>
         )}
         {it.suggestedFixedId != null && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
-            <span>
-              ¿Es el cobro de tu gasto fijo «{it.suggestedFixedDescription}» de {periodLabel(it.suggestedFixedPeriod)}?
-            </span>
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => onLinkFixed(it.suggestedFixedId!, it.suggestedFixedPeriod)}
-            >
-              Sí, marcarlo pagado
-            </Button>
-          </div>
+          <Suggestion
+            action={
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => onLinkFixed(it.suggestedFixedId!, it.suggestedFixedPeriod)}>
+                Sí, marcarlo pagado
+              </Button>
+            }
+          >
+            ¿Es el cobro de tu gasto fijo «{it.suggestedFixedDescription}» de {periodLabel(it.suggestedFixedPeriod)}?
+          </Suggestion>
         )}
         {it.suggestedRefundExpenseId != null && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
-            <span>¿Es la devolución de «{it.suggestedRefundDescription}»?</span>
-            <Button variant="ghost" disabled={busy} onClick={() => onRefund(it.suggestedRefundExpenseId!)}>
-              Sí, registrar como reembolso
-            </Button>
-          </div>
+          <Suggestion
+            action={
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => onRefund(it.suggestedRefundExpenseId!)}>
+                Sí, registrar como reembolso
+              </Button>
+            }
+          >
+            ¿Es la devolución de «{it.suggestedRefundDescription}»?
+          </Suggestion>
         )}
-        {it.fixedPeriod !== '' && (
-          <div className="text-xs text-slate-400">Pagó el gasto fijo de {periodLabel(it.fixedPeriod)}</div>
-        )}
+        {it.fixedPeriod !== '' && <div className="text-xs text-fg-muted">Pagó el gasto fijo de {periodLabel(it.fixedPeriod)}</div>}
       </div>
       <div className="flex flex-col items-end gap-2">
-        <span className={`font-semibold tabular-nums ${isCredit(it) ? 'text-success' : ''}`}>
+        <span className={`font-semibold tabular-nums ${isCredit(it) ? 'text-positive-fg' : 'text-fg'}`}>
           {isCredit(it) && '+'}
           {formatAmount(it.amount, it.currency)}
         </span>
         {it.currency !== 'CLP' && it.suggestedAmountClp !== '' && (
-          <span className="text-xs tabular-nums text-slate-400">≈ {formatCLP(it.suggestedAmountClp)}</span>
+          <span className="text-xs tabular-nums text-fg-muted">≈ {formatCLP(it.suggestedAmountClp)}</span>
         )}
         {it.status === 'pendiente' && (
           <div className="flex gap-2">
-            <Button variant="ghost" disabled={busy} onClick={onDiscard}>
+            <Button variant="quiet" size="sm" disabled={busy} onClick={onDiscard}>
               Descartar
             </Button>
-            <Button disabled={busy} onClick={onConfirm}>
+            <Button size="sm" disabled={busy} onClick={onConfirm}>
               {isCredit(it) ? 'Registrar como ingreso' : 'Confirmar'}
             </Button>
           </div>
         )}
         {it.status === 'descartado' && (
-          <Button variant="ghost" disabled={busy} onClick={onRestore}>
+          <Button variant="secondary" size="sm" disabled={busy} onClick={onRestore}>
             Restaurar
           </Button>
         )}
         {it.status === 'confirmado' && it.reopenable && (
           <div className="flex flex-col items-end gap-1">
-            <span className="text-xs text-slate-400">Su gasto o ingreso está en la papelera</span>
-            <Button variant="ghost" disabled={busy} onClick={onRestore}>
+            <span className="text-xs text-fg-muted">Su gasto o ingreso está en la papelera</span>
+            <Button variant="secondary" size="sm" disabled={busy} onClick={onRestore}>
               Volver a revisar
             </Button>
           </div>

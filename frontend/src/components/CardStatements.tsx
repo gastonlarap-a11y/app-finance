@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { CircleCheck, Eye, FileText } from 'lucide-react'
 import {
   FinanceService,
   type CardStatementLineView,
@@ -10,7 +11,7 @@ import { failed } from '@/lib/result'
 import { compare, isZero, subtract } from '@/lib/money'
 import { useQuery } from '@/lib/useQuery'
 import { formatAmount, formatCLP, formatDate, periodLabel } from '@/lib/format'
-import { Button, Empty, Modal, QueryError, Section, Spinner } from './ui'
+import { Button, Callout, ConfirmAction, EmptyState, Modal, QueryError, Section, SkeletonRows } from './ui'
 
 const KIND_LABEL: Record<string, string> = { nacional: 'Nacional', internacional: 'Internacional' }
 
@@ -43,18 +44,19 @@ function periodRange(st: CardStatementView): string {
 function ComparisonLine({ st }: { st: CardStatementView }) {
   if (st.appCharges === null) {
     return (
-      <span className="text-slate-500">
+      <span className="text-fg-subtle">
         {st.cardName === ''
           ? `Sin tarjeta: escribe ${st.cardLastDigits} como últimos 4 dígitos de tu tarjeta (en Configuración › Tarjetas) y se asociarán sus estados nacional e internacional.`
           : 'Las compras en dólares se comparan en la bandeja, una por una.'}
       </span>
     )
   }
-  const cmp = compare(st.bankCharges, st.appCharges)
+  const matches = compare(st.bankCharges, st.appCharges) === 0
   return (
-    <span className={cmp === 0 ? 'text-success' : 'text-amber-200'}>
+    <span className={`inline-flex flex-wrap items-center gap-x-1 ${matches ? 'text-positive-fg' : 'text-caution-fg'}`}>
+      {matches && <CircleCheck aria-hidden="true" className="size-3.5" />}
       Banco {formatCLP(st.bankCharges)} en compras y cargos · en la app {formatCLP(st.appCharges)}
-      {cmp === 0 ? ' · cuadra' : ` · diferencia ${formatCLP(subtract(st.bankCharges, st.appCharges))}`}
+      {matches ? ' · cuadra' : ` · diferencia ${formatCLP(subtract(st.bankCharges, st.appCharges))}`}
     </span>
   )
 }
@@ -67,7 +69,6 @@ export function CardStatementsSection() {
   // Deleting a statement unlinks its lines from cuotas and drops its inbox items.
   const reload = () => invalidate('imports', 'ledger')
   const [open, setOpen] = useState<number | null>(null)
-  const [confirmId, setConfirmId] = useState<number | null>(null)
   const query = useQuery(version, async () => {
     const res = await FinanceService.ListCardStatements('')
     if (res.error) throw new Error(res.error.message)
@@ -75,7 +76,6 @@ export function CardStatementsSection() {
   })
 
   async function remove(id: number) {
-    setConfirmId(null)
     if (!failed(await FinanceService.DeleteCardStatement(id))) reload()
   }
 
@@ -84,56 +84,50 @@ export function CardStatementsSection() {
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={reload} />
       ) : !query.data ? (
-        <Spinner />
+        <SkeletonRows rows={3} />
       ) : query.data.length === 0 ? (
-        <Empty>
-          Aún no importas estados de cuenta. Hazlo desde la Bandeja con el PDF de la tarjeta (Itaú, el del correo o el de su web, o
-          Banco de Chile): se guarda completo y sus compras se comparan con tus gastos.
-        </Empty>
+        <EmptyState
+          icon={FileText}
+          title="Aún no importas estados de cuenta"
+          action={
+            <Button variant="secondary" onClick={() => navigate({ page: 'importar', tab: 'bandeja' })}>
+              Ir a la Bandeja
+            </Button>
+          }
+        >
+          Impórtalos desde la Bandeja con el PDF de la tarjeta (Itaú, el del correo o el de su web, o Banco de Chile): se guardan
+          completos y sus compras se comparan con tus gastos.
+        </EmptyState>
       ) : (
         <ul className="space-y-2">
           {query.data.map((st) => (
-            <li key={st.id} className="flex flex-wrap items-start justify-between gap-3 rounded-base bg-surface p-3 ring-1 ring-slate-800">
+            <li key={st.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg bg-sunken p-3 ring-1 ring-inset ring-line">
               <div className="min-w-0 flex-1 space-y-1 text-sm">
-                <div className="font-medium">
+                <div className="font-medium text-fg">
                   {statementTitle(st)} · {periodLabel(st.period)}
                 </div>
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-fg-muted">
                   Período {periodRange(st)} · total a pagar{' '}
-                  <strong className="tabular-nums text-slate-200">{formatAmount(st.totalBilled, st.currency)}</strong>
+                  <strong className="tabular-nums text-fg">{formatAmount(st.totalBilled, st.currency)}</strong>
                   {st.dueDate !== '' && <> hasta el {formatDate(st.dueDate)}</>}
-                  {st.pendingItems > 0 && <> · {st.pendingItems} por revisar en Importar</>}
+                  {st.pendingItems > 0 && <> · {st.pendingItems} por revisar en la Bandeja</>}
                 </div>
                 <div className="text-xs">
                   <ComparisonLine st={st} />
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="ghost" onClick={() => setOpen(st.id)}>
+                <Button variant="secondary" size="sm" icon={Eye} onClick={() => setOpen(st.id)}>
                   Ver detalle
                 </Button>
-                {confirmId === st.id ? (
-                  <>
-                    <span className="text-sm text-danger">¿Eliminar?</span>
-                    <Button variant="danger" onClick={() => remove(st.id)}>
-                      Sí
-                    </Button>
-                    <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                      No
-                    </Button>
-                  </>
-                ) : (
-                  <Button variant="ghost" onClick={() => setConfirmId(st.id)}>
-                    Eliminar
-                  </Button>
-                )}
+                <ConfirmAction label={`Eliminar el estado ${statementTitle(st)} de ${periodLabel(st.period)}`} iconOnly onConfirm={() => remove(st.id)} />
               </div>
             </li>
           ))}
         </ul>
       )}
       {query.data && query.data.length > 0 && (
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-fg-subtle">
           Eliminar un estado de cuenta no borra sus movimientos de la bandeja ni los gastos confirmados; sirve para volver a importarlo.
         </p>
       )}
@@ -145,8 +139,8 @@ export function CardStatementsSection() {
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="tabular-nums text-slate-100">{children}</dd>
+      <dt className="text-xs text-fg-subtle">{label}</dt>
+      <dd className="tabular-nums text-fg">{children}</dd>
     </div>
   )
 }
@@ -162,6 +156,8 @@ function lineOutcome(l: CardStatementLineView): string {
   return l.redeemedPurchase !== '' ? `${status} · canje de «${l.redeemedPurchase}»` : status
 }
 
+const cell = 'py-1.5 pr-3'
+
 function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => void }) {
   const version = useVersion('imports', 'ledger')
   const query = useQuery(`${id}:${version}`, async () => {
@@ -175,14 +171,14 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
   return (
     <Modal title={d ? `${statementTitle(d.statement)} · ${periodLabel(d.statement.period)}` : 'Estado de cuenta'} onClose={onClose} wide>
       {query.status === 'error' ? (
-        <p role="alert" className="text-sm text-red-200">
+        <Callout tone="negative" role="alert">
           No se pudo cargar: {query.error}
-        </p>
+        </Callout>
       ) : !d ? (
-        <Spinner />
+        <SkeletonRows rows={6} />
       ) : (
         <div className="space-y-5 text-sm">
-          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-3 rounded-lg bg-sunken p-4 sm:grid-cols-4">
             <Fact label="Fecha del estado">{formatDate(d.statement.statementDate)}</Fact>
             <Fact label="Período facturado">{periodRange(d.statement)}</Fact>
             <Fact label="Pagar hasta">{d.statement.dueDate !== '' ? formatDate(d.statement.dueDate) : '—'}</Fact>
@@ -217,13 +213,13 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
                 ·{' '}
                 <button
                   type="button"
-                  className="text-primary underline"
+                  className="font-medium text-accent-fg underline-offset-2 hover:underline"
                   onClick={() => {
                     onClose()
                     navigate({ page: 'importar', tab: 'bandeja' })
                   }}
                 >
-                  revisar {d.statement.pendingItems} en Importar
+                  revisar {d.statement.pendingItems} en la Bandeja
                 </button>
               </>
             )}
@@ -234,37 +230,37 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
             .filter(([, lines]) => lines.length > 0)
             .map(([section, lines]) => (
               <div key={section}>
-                <h4 className="mb-1 font-medium text-slate-200">{SECTION_LABEL[section]}</h4>
-                <div className="overflow-x-auto">
+                <h4 className="mb-1 font-semibold text-fg">{SECTION_LABEL[section]}</h4>
+                <div className="relative overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="text-slate-500">
+                    <thead className="text-fg-subtle">
                       <tr>
-                        <th className="py-1 pr-2 font-normal">Fecha</th>
-                        <th className="py-1 pr-2 font-normal">Código</th>
-                        <th className="py-1 pr-2 font-normal">Descripción</th>
-                        <th className="py-1 pr-2 font-normal">Cuota</th>
-                        <th className="py-1 pr-2 text-right font-normal">Cargo del mes</th>
-                        <th className="py-1 font-normal">En la app</th>
+                        <th className={`${cell} font-medium`}>Fecha</th>
+                        <th className={`${cell} font-medium`}>Código</th>
+                        <th className={`${cell} font-medium`}>Descripción</th>
+                        <th className={`${cell} font-medium`}>Cuota</th>
+                        <th className={`${cell} text-right font-medium`}>Cargo del mes</th>
+                        <th className="py-1.5 font-medium">En la app</th>
                       </tr>
                     </thead>
                     <tbody>
                       {lines.map((l) => (
-                        <tr key={l.id} className="border-t border-slate-800">
-                          <td className="py-1 pr-2 whitespace-nowrap">{formatDate(l.operationDate)}</td>
+                        <tr key={l.id} className="border-t border-line">
+                          <td className={`${cell} whitespace-nowrap text-fg-muted`}>{formatDate(l.operationDate)}</td>
                           {/* The bank's code, quoted to dispute a charge: one click selects it whole. */}
-                          <td className="py-1 pr-2 font-mono whitespace-nowrap text-slate-400 select-all">{l.reference}</td>
-                          <td className="py-1 pr-2 font-mono text-slate-100">
+                          <td className={`${cell} select-all whitespace-nowrap font-mono text-fg-muted`}>{l.reference}</td>
+                          <td className={`${cell} font-mono text-fg`}>
                             {l.description}
-                            {(l.city || l.place) && <span className="text-slate-500"> · {l.city || l.place}</span>}
+                            {(l.city || l.place) && <span className="text-fg-subtle"> · {l.city || l.place}</span>}
                             {l.originAmount !== '' && d.statement.currency !== 'CLP' && !isZero(l.originAmount) && l.originAmount !== l.installmentAmount && (
-                              <span className="text-slate-500"> · origen {l.originAmount}</span>
+                              <span className="text-fg-subtle"> · origen {l.originAmount}</span>
                             )}
                           </td>
-                          <td className="py-1 pr-2 whitespace-nowrap">
+                          <td className={`${cell} whitespace-nowrap text-fg-muted`}>
                             {l.installmentsTotal > 1 ? `${l.installmentNumber}/${l.installmentsTotal}` : ''}
                           </td>
-                          <td className="py-1 pr-2 text-right tabular-nums whitespace-nowrap">{money(l.installmentAmount)}</td>
-                          <td className="py-1 text-slate-400">{lineOutcome(l)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right tabular-nums text-fg`}>{money(l.installmentAmount)}</td>
+                          <td className="py-1.5 text-fg-muted">{lineOutcome(l)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -275,11 +271,11 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
 
           {d.schedule.length > 0 && (
             <div>
-              <h4 className="mb-1 font-medium text-slate-200">Próximos vencimientos según el banco</h4>
-              <ul className="flex flex-wrap gap-3 text-xs">
+              <h4 className="mb-1 font-semibold text-fg">Próximos vencimientos según el banco</h4>
+              <ul className="flex flex-wrap gap-2 text-xs">
                 {d.schedule.map((e) => (
-                  <li key={e.id} className="rounded bg-surface px-2 py-1 ring-1 ring-slate-800">
-                    {periodLabel(e.period)}: <span className="tabular-nums text-slate-100">{formatCLP(e.amount)}</span>
+                  <li key={e.id} className="rounded-md bg-sunken px-2 py-1 text-fg-muted ring-1 ring-inset ring-line">
+                    {periodLabel(e.period)}: <span className="tabular-nums text-fg">{formatCLP(e.amount)}</span>
                   </li>
                 ))}
               </ul>
@@ -299,14 +295,17 @@ export function StatementBanner({ period }: { period: string }) {
   const statements = (query.data ?? []).filter((st) => st.currency === 'CLP')
   if (statements.length === 0) return null
   return (
-    <div className="space-y-1 rounded-base bg-surface p-3 text-sm ring-1 ring-slate-800">
+    <div className="space-y-1.5 rounded-xl bg-panel px-4 py-3 text-sm shadow-xs ring-1 ring-line">
       {statements.map((st) => (
-        <p key={st.id}>
-          <span className="font-medium">Estado de cuenta {st.cardName || `••${st.cardLastDigits}`}</span>: total a pagar{' '}
-          <strong className="tabular-nums">{formatCLP(st.totalBilled)}</strong>
-          {st.dueDate !== '' && <> hasta el {formatDate(st.dueDate)}</>}.{' '}
-          <span className="text-xs">
-            <ComparisonLine st={st} />
+        <p key={st.id} className="flex flex-wrap items-start gap-x-2">
+          <FileText aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-fg-subtle" />
+          <span className="min-w-0 flex-1 text-fg">
+            <span className="font-medium">Estado de cuenta {st.cardName || `••${st.cardLastDigits}`}</span>: total a pagar{' '}
+            <strong className="tabular-nums">{formatCLP(st.totalBilled)}</strong>
+            {st.dueDate !== '' && <> hasta el {formatDate(st.dueDate)}</>}.{' '}
+            <span className="text-xs">
+              <ComparisonLine st={st} />
+            </span>
           </span>
         </p>
       ))}

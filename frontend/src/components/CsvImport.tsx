@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { FinanceService, type StageSummary } from '@/services/finance'
 import { buildBatch, guessMapping, type AmountLayout, type CsvMapping } from '@/lib/statements/csv'
 import { formatCLP, formatDate } from '@/lib/format'
-import { Button, Field, Modal, Select, inputCls } from './ui'
+import { Button, Callout, Field, Modal, Select, inputCls } from './ui'
 
 // Remembered between imports (per device): the bank name last typed. A
 // convenience only: storage may be unavailable (private mode) and that is fine.
@@ -99,7 +99,7 @@ export function CsvImportDialog({
   return (
     <Modal title={`Importar ${fileName}`} onClose={onClose} wide>
       <div className="space-y-4">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           Indica qué columna es cada dato. Los movimientos llegan a la bandeja para que los confirmes; reimportar el mismo
           archivo no los duplica.
         </p>
@@ -137,19 +137,19 @@ export function CsvImportDialog({
           )}
         </div>
 
-        <div className="rounded-base bg-surface p-3 text-sm ring-1 ring-slate-800">
-          <p className="mb-2 text-slate-300">
+        <div className="rounded-lg bg-sunken p-3 text-sm ring-1 ring-inset ring-line">
+          <p className="mb-2 text-fg">
             {batch.items.length} movimientos
-            {skipped > 0 && <span className="text-slate-500"> · {skipped} filas omitidas (títulos, totales o saldos)</span>}
+            {skipped > 0 && <span className="text-fg-subtle"> · {skipped} filas omitidas (títulos, totales o saldos)</span>}
           </p>
           {batch.items.length > 0 && (
             <table className="w-full text-xs">
               <tbody>
                 {batch.items.slice(0, 5).map((it, i) => (
-                  <tr key={i} className="border-t border-slate-800">
-                    <td className="py-1 text-slate-400">{formatDate(it.date)}</td>
-                    <td className="py-1">{it.description}</td>
-                    <td className={`py-1 text-right tabular-nums ${it.kind === 'abono' ? 'text-success' : ''}`}>
+                  <tr key={i} className="border-t border-line">
+                    <td className="py-1 pr-3 text-fg-muted">{formatDate(it.date)}</td>
+                    <td className="py-1 text-fg">{it.description}</td>
+                    <td className={`py-1 text-right tabular-nums ${it.kind === 'abono' ? 'text-positive-fg' : 'text-fg'}`}>
                       {it.kind === 'abono' ? '+' : '−'}
                       {formatCLP(it.amount)}
                     </td>
@@ -161,16 +161,16 @@ export function CsvImportDialog({
         </div>
 
         {error && (
-          <p role="alert" className="text-sm text-red-300">
+          <Callout tone="negative" role="alert">
             {error}
-          </p>
+          </Callout>
         )}
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={busy || batch.items.length === 0}>
-            {busy ? 'Importando…' : `Enviar ${batch.items.length} a la bandeja`}
+          <Button onClick={() => void submit()} loading={busy} disabled={batch.items.length === 0}>
+            {`Enviar ${batch.items.length} a la bandeja`}
           </Button>
         </div>
       </div>
