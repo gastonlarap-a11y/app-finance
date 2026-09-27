@@ -408,10 +408,14 @@ function ImportRow({
         )}
         {it.duplicateExpenseId != null && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
-            <span>¿Ya lo registraste como «{it.duplicateDescription}»?</span>
+            <span>
+              ¿Ya lo registraste como «{it.duplicateDescription}»
+              {it.duplicateDate !== '' && it.duplicateDate !== it.date && <> el {formatDate(it.duplicateDate)}</>}?
+            </span>
             <Button variant="ghost" disabled={busy} onClick={() => onLink(it.duplicateExpenseId!)}>
-              Sí, enlazar
+              Sí, unir
             </Button>
+            <span className="text-slate-500">(se usan la fecha y el monto del banco; tu descripción se conserva)</span>
           </div>
         )}
         {it.suggestedFixedId != null && (

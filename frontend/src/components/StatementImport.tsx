@@ -44,6 +44,7 @@ function cardStatementText(label: string, r: CardStatementImport): string {
   if (r.alreadyImported) return `${label}: ya estaba importado.`
   return (
     `${label}: ${stagedText(r, 'otras fuentes')}` +
+    (r.merged > 0 ? `, ${plural(r.merged, 'compra unida', 'compras unidas')} con gastos que ingresaste a mano (fecha y monto del banco)` : '') +
     (r.linkedInstallments > 0 ? `, ${plural(r.linkedInstallments, 'cuota enlazada', 'cuotas enlazadas')} a gastos que ya tenías` : '') +
     (r.paymentsMatched > 0 ? `, ${plural(r.paymentsMatched, 'pago conciliado', 'pagos conciliados')} con la cartola` : '') +
     '.'

@@ -146,10 +146,13 @@ describe('ImportCardStatement', () => {
     expect(existing.error).toBeUndefined()
 
     const got = await importStatement(nationalStatement())
-    expect(got).toMatchObject({ alreadyImported: false, linkedInstallments: 1, added: 5, paymentsMatched: 0 })
+    expect(got).toMatchObject({ alreadyImported: false, merged: 1, linkedInstallments: 0, added: 5, paymentsMatched: 0 })
 
     const pending = await pendingByDescription()
     expect(pending.has('TIENDA UNO')).toBe(false)
+    // Entered by hand, completed with the bank's facts: the user's words stay.
+    const uno = db.query('SELECT description, category, bank_description FROM expenses WHERE id = ?', [existing.data!.id])[0]
+    expect(uno).toEqual({ description: 'Tienda uno', category: 'Hogar', bank_description: 'TIENDA UNO' })
     expect(pending.get('TIENDA DOS')).toMatchObject({
       amount: '60001', installmentsTotal: 6, installmentNumber: 3, installmentAmount: '10000',
       firstPeriod: '2026-06', cardName: 'Itaú',

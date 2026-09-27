@@ -279,6 +279,17 @@ export function TagChips({ tags }: { tags: readonly string[] }) {
   )
 }
 
+// BankDescription shows the bank's descriptor of an expense entered by hand
+// and then merged with its bank movement, under the user's own description.
+export function BankDescription({ text }: { text: string }) {
+  if (text === '') return null
+  return (
+    <span className="block max-w-[260px] truncate font-mono text-[11px] text-slate-500" title={`En el banco: ${text}`}>
+      Banco: {text}
+    </span>
+  )
+}
+
 // BankCodes shows the bank's reference codes of an expense (one per statement
 // that reported it), each selectable whole to quote it in a dispute.
 export function BankCodes({ codes }: { codes: readonly string[] }) {

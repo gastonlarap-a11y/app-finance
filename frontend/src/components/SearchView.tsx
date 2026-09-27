@@ -6,7 +6,7 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
-import { BankCodes, Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
+import { BankCodes, BankDescription, Button, Empty, Field, QueryError, Section, Select, TagChips, inputCls } from './ui'
 import { ExportButton } from './ExportButton'
 
 const PAGE = 50
@@ -181,6 +181,7 @@ export function SearchView() {
                       <td className="py-2">
                         <div className="font-medium">{ex.description}</div>
                         {ex.merchant && <div className="text-xs text-slate-500">{ex.merchant}</div>}
+                        <BankDescription text={hit.expense.bankDescription} />
                         <TagChips tags={hit.tags} />
                         <BankCodes codes={hit.references} />
                       </td>

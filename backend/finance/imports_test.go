@@ -245,7 +245,7 @@ func TestListImportItemsSuggestsManualDuplicateAndLinks(t *testing.T) {
 	mustStage(t, s, pdfBatch(
 		ImportCandidate{Date: "2026-07-17", Description: "CRUZ VERDE L9093 CHILLAN C", Amount: "16182"},
 		ImportCandidate{Date: "2026-07-02", Description: "PARIS.CL", Amount: "600000"},                  // cuota × cuotas
-		ImportCandidate{Date: "2026-07-25", Description: "CRUZ VERDE L9093 CHILLAN C", Amount: "16182"}, // too far
+		ImportCandidate{Date: "2026-07-30", Description: "CRUZ VERDE L9093 CHILLAN C", Amount: "16182"}, // too far (> 10 days)
 	))
 
 	byDate := map[string]ImportItemView{}
@@ -258,12 +258,12 @@ func TestListImportItemsSuggestsManualDuplicateAndLinks(t *testing.T) {
 	if d := byDate["2026-07-02"].DuplicateExpenseID; d == nil || *d != cuotas.Data.ID {
 		t.Fatalf("07-02 duplicate = %v, want the cuotas expense by its total", d)
 	}
-	if d := byDate["2026-07-25"].DuplicateExpenseID; d != nil {
-		t.Fatalf("07-25 duplicate = %v, want none (outside the window)", *d)
+	if d := byDate["2026-07-30"].DuplicateExpenseID; d != nil {
+		t.Fatalf("07-30 duplicate = %v, want none (outside the window)", *d)
 	}
 
 	mustOK(t, "LinkImportItem", s.LinkImportItem(ctx, byDate["2026-07-17"].ID, manual.Data.ID).Error)
-	if r := s.LinkImportItem(ctx, byDate["2026-07-25"].ID, 999); r.Error == nil || r.Error.Code != shared.ErrNotFound {
+	if r := s.LinkImportItem(ctx, byDate["2026-07-30"].ID, 999); r.Error == nil || r.Error.Code != shared.ErrNotFound {
 		t.Fatalf("link to missing expense = %+v, want NOT_FOUND", r.Error)
 	}
 	// A linked expense is no longer offered for another item.

@@ -89,13 +89,21 @@ func TestImportCardStatementStoresEverythingAndFeedsTheInbox(t *testing.T) {
 	mustOK(t, "CreateExpense", existing.Error)
 
 	got := importStatement(t, s, nationalStatement())
-	if got.AlreadyImported || got.LinkedInstallments != 1 || got.Added != 5 || got.PaymentsMatched != 0 {
-		t.Fatalf("import = %+v, want 1 cuota linked and 5 new items", got)
+	if got.AlreadyImported || got.Merged != 1 || got.LinkedInstallments != 0 || got.Added != 5 || got.PaymentsMatched != 0 {
+		t.Fatalf("import = %+v, want the manual purchase merged and 5 new items", got)
 	}
 
 	pending := pendingByDescription(t, s)
 	if _, ok := pending["TIENDA UNO"]; ok {
 		t.Fatal("a cuota continuing an app expense must not be reviewed again")
+	}
+	// Entered by hand, completed with the bank's facts: the user's words stay.
+	var uno Expense
+	if err := s.db.NewSelect().Model(&uno).Where("id = ?", existing.Data.ID).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if uno.Description != "Tienda uno" || uno.Category != "Hogar" || uno.BankDescription != "TIENDA UNO" {
+		t.Fatalf("merged expense = %+v, want the user's words and the bank's descriptor apart", uno)
 	}
 	dos := pending["TIENDA DOS"]
 	if dos.Amount.String() != "60001" || dos.InstallmentsTotal != 6 || dos.InstallmentNumber != 3 ||

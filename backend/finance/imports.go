@@ -23,8 +23,9 @@ const (
 	// day apart (purchase date vs posting date).
 	reconcileWindowDays = 1
 	// duplicateWindowDays: how far a manually entered expense may be from the
-	// detected movement and still be offered as "probably the same purchase".
-	duplicateWindowDays = 2
+	// detected movement and still be offered as "probably the same purchase"
+	// (the merge window: a date typed wrong by days is still found).
+	duplicateWindowDays = mergeWindowDays
 )
 
 // sourceFamily groups sources that describe the same movement independently:
@@ -363,6 +364,7 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		if duplicateReviewable(it) {
 			if dup := dups.find(it, v.CardID); dup != nil {
 				v.DuplicateExpenseID, v.DuplicateDescription = &dup.ID, dup.Description
+				v.DuplicateDate = dup.Date.UTC().Format(dateLayout)
 			}
 		}
 		if refundReviewable(it) {
@@ -638,9 +640,10 @@ func (s *FinanceService) ConfirmImportItem(
 	return ExpenseResult{Data: ex}
 }
 
-// LinkImportItem marks a pending item as the bank's sighting of an expense the
-// user had already entered by hand, instead of creating a duplicate. An
-// expense is one purchase: it takes the sighting of one item only.
+// LinkImportItem merges a pending item into an expense the user had already
+// entered by hand, instead of creating a duplicate: the expense takes the
+// bank's date, amount and billing month and keeps the user's words (see
+// merge.go). An expense is one purchase: it takes the sighting of one item only.
 func (s *FinanceService) LinkImportItem(ctx context.Context, id, expenseID int64) OpResult {
 	uid := s.uid()
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -651,12 +654,13 @@ func (s *FinanceService) LinkImportItem(ctx context.Context, id, expenseID int64
 		if err := requireKind(item, ImportKindExpense); err != nil {
 			return err
 		}
-		ok, err := tx.NewSelect().Model((*Expense)(nil)).Where("id = ? AND user_id = ?", expenseID, uid).Exists(ctx)
+		ex := new(Expense)
+		err = tx.NewSelect().Model(ex).Where("id = ? AND user_id = ?", expenseID, uid).Scan(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			return shared.NewError(shared.ErrNotFound, "gasto no encontrado")
+		}
 		if err != nil {
 			return fmt.Errorf("checking expense: %w", err)
-		}
-		if !ok {
-			return shared.NewError(shared.ErrNotFound, "gasto no encontrado")
 		}
 		taken, err := tx.NewSelect().Model((*ImportItem)(nil)).
 			Where("user_id = ? AND expense_id = ? AND id <> ?", uid, expenseID, id).Exists(ctx)
@@ -666,10 +670,15 @@ func (s *FinanceService) LinkImportItem(ctx context.Context, id, expenseID int64
 		if taken {
 			return shared.NewError(shared.ErrConflict, "ese gasto ya está enlazado a otro movimiento del banco")
 		}
-		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
-			Set("status = ?", ImportConfirmado).Set("expense_id = ?", expenseID).
-			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
-		return err
+		var cutoff cardCutoff
+		if ex.CardID != nil {
+			cuts, err := cutoffsFor(ctx, tx, uid, *ex.CardID)
+			if err != nil {
+				return err
+			}
+			cutoff = cuts[*ex.CardID]
+		}
+		return mergeIntoExpense(ctx, tx, uid, item, ex, cutoff)
 	})
 	if err != nil {
 		return OpResult{Error: appErr(err)}

@@ -66,6 +66,7 @@ export interface Expense {
   description: string
   category: string
   merchant: string
+  bankDescription: string // the bank's descriptor once merged with a bank movement ('' = none)
   cardId: number | null
   kind: string
   installmentAmount: string
@@ -133,6 +134,7 @@ export interface Movimiento {
   fixedId: number | null
   refundId: number | null // set only for refunds (negative amount)
   description: string
+  bankDescription: string // the bank's descriptor of a cuota's expense once merged ('' otherwise)
   category: string
   merchant: string
   cardId: number | null
@@ -428,6 +430,7 @@ export interface ImportItemView extends ImportItem {
   suggestedPattern: string
   duplicateExpenseId: number | null // live expense that looks like the same purchase
   duplicateDescription: string
+  duplicateDate: string // YYYY-MM-DD the user gave that expense (the bank's replaces it on merge)
   matchedSource: string // for conciliado items: the other sighting
   matchedDate: string
   suggestedAmountClp: string // USD items: CLP at the rate of the last USD-debt payment; '' = unknown
@@ -650,6 +653,7 @@ export interface CardStatementImport {
   duplicates: number
   reconciled: number
   linkedInstallments: number // cuotas continuing expenses already in the app
+  merged: number // purchases the user had entered by hand, completed with the bank's facts
   paymentsMatched: number // cartola card payments this statement accounts for
 }
 

@@ -297,6 +297,7 @@ export function rowToExpense(r: SqlRow): Expense {
     description: asString(r.description),
     category: asString(r.category),
     merchant: asString(r.merchant),
+    bankDescription: asString(r.bank_description),
     cardId: asNullableNumber(r.card_id),
     kind: asString(r.kind),
     installmentAmount: asString(r.installment_amount),

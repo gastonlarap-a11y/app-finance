@@ -78,22 +78,25 @@ const (
 // Movimiento is one row of a month's view: either an installment joined with its
 // expense/card (Source="cuota") or a recurring fixed expense (Source="fijo").
 type Movimiento struct {
-	Source        string        `json:"source"`        // "cuota" | "fijo" | "reembolso"
-	InstallmentID int64         `json:"installmentId"` // 0 para fijos
-	ExpenseID     int64         `json:"expenseId"`     // 0 para fijos
-	FixedID       *int64        `json:"fixedId"`       // set sólo para fijos
-	RefundID      *int64        `json:"refundId"`      // set sólo para reembolsos (monto negativo)
-	Description   string        `json:"description"`
-	Category      string        `json:"category"`
-	Merchant      string        `json:"merchant"`
-	CardID        *int64        `json:"cardId"`
-	CardName      string        `json:"cardName"`
-	Kind          string        `json:"kind"`
-	Number        int           `json:"number"`
-	Total         int           `json:"total"`
-	Amount        types.Decimal `json:"amount"`
-	Status        string        `json:"status"`
-	Date          *time.Time    `json:"date"` // nil para gastos fijos
+	Source        string `json:"source"`        // "cuota" | "fijo" | "reembolso"
+	InstallmentID int64  `json:"installmentId"` // 0 para fijos
+	ExpenseID     int64  `json:"expenseId"`     // 0 para fijos
+	FixedID       *int64 `json:"fixedId"`       // set sólo para fijos
+	RefundID      *int64 `json:"refundId"`      // set sólo para reembolsos (monto negativo)
+	Description   string `json:"description"`
+	// BankDescription is the bank's descriptor of a cuota's expense once merged
+	// with a bank movement ("" otherwise).
+	BankDescription string        `json:"bankDescription"`
+	Category        string        `json:"category"`
+	Merchant        string        `json:"merchant"`
+	CardID          *int64        `json:"cardId"`
+	CardName        string        `json:"cardName"`
+	Kind            string        `json:"kind"`
+	Number          int           `json:"number"`
+	Total           int           `json:"total"`
+	Amount          types.Decimal `json:"amount"`
+	Status          string        `json:"status"`
+	Date            *time.Time    `json:"date"` // nil para gastos fijos
 	// UFAmount is the charge in UF when the fixed expense is priced in UF (Amount
 	// is its conversion to pesos); nil otherwise.
 	UFAmount *types.Decimal `json:"ufAmount"`
@@ -394,6 +397,7 @@ type ImportItemView struct {
 	SuggestedPattern     string `json:"suggestedPattern"`
 	DuplicateExpenseID   *int64 `json:"duplicateExpenseId"`
 	DuplicateDescription string `json:"duplicateDescription"`
+	DuplicateDate        string `json:"duplicateDate"` // YYYY-MM-DD the user gave that expense (the bank's replaces it on merge)
 	MatchedSource        string `json:"matchedSource"`
 	MatchedDate          string `json:"matchedDate"`
 	// USD items: the amount in CLP at the rate implied by the last payment of
@@ -429,6 +433,7 @@ type CardStatementImport struct {
 	Reconciled         int   `json:"reconciled"`         // matched an alert email
 	LinkedInstallments int   `json:"linkedInstallments"` // cuotas that continue expenses already in the app
 	PaymentsMatched    int   `json:"paymentsMatched"`    // cartola card payments this statement accounts for
+	Merged             int   `json:"merged"`             // purchases the user had entered by hand, completed with the bank's facts
 }
 
 type CardStatementImportResult struct {

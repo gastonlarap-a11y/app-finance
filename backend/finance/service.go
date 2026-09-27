@@ -1387,6 +1387,7 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 		if ex := inst.Expense; ex != nil {
 			mv.ExpenseID = ex.ID
 			mv.Description = ex.Description
+			mv.BankDescription = ex.BankDescription
 			mv.Category = ex.Category
 			mv.Merchant = ex.Merchant
 			mv.CardID = ex.CardID

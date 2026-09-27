@@ -437,7 +437,9 @@ func (s *FinanceService) feedInbox(
 	lines []CardStatementLine, out *CardStatementImport,
 ) error {
 	var candidates []ImportCandidate
-	var staged []int // index into lines of each candidate
+	var staged []int             // index into lines of each candidate
+	mergeInto := map[int]int64{} // candidate index → the manual expense it completes
+	claimed := map[int64]bool{}  // manual expenses already taken by a line of this statement
 	for i := range lines {
 		l := &lines[i]
 		switch l.Section {
@@ -449,31 +451,16 @@ func (s *FinanceService) feedInbox(
 			out.PaymentsMatched += n
 			continue
 		case LinePurchase, LineVoluntary, LineDeferred:
-			if l.Section != LineDeferred {
-				inst, err := continuedInstallment(ctx, tx, uid, card, l)
-				if err != nil {
-					return err
-				}
-				if inst != nil {
-					l.InstallmentID = &inst.ID
-					if _, err := tx.NewUpdate().Model(l).Column("installment_id").WherePK().Exec(ctx); err != nil {
-						return fmt.Errorf("linking installment: %w", err)
-					}
-					out.LinkedInstallments++
-					continue
-				}
-			}
-			itemID, err := earlierSighting(ctx, tx, uid, st, l)
+			target, done, err := s.placePurchase(ctx, tx, uid, st, card, l, claimed, out)
 			if err != nil {
 				return err
 			}
-			if itemID != nil {
-				l.ImportItemID = itemID
-				if _, err := tx.NewUpdate().Model(l).Column("import_item_id").WherePK().Exec(ctx); err != nil {
-					return fmt.Errorf("linking earlier item: %w", err)
-				}
-				out.Duplicates++
+			if done {
 				continue
+			}
+			if target != 0 {
+				claimed[target] = true
+				mergeInto[len(candidates)] = target
 			}
 		}
 		candidates = append(candidates, lineCandidate(st, l))
@@ -504,7 +491,100 @@ func (s *FinanceService) feedInbox(
 			return fmt.Errorf("linking import item: %w", err)
 		}
 	}
+	for k, expenseID := range mergeInto {
+		merged, err := mergeStaged(ctx, tx, uid, ids[k], expenseID)
+		if err != nil {
+			return err
+		}
+		if merged {
+			out.Added--
+			out.Merged++
+		}
+	}
 	return nil
+}
+
+// placePurchase settles a purchase line that needs no review: done when it
+// continues a plan the app already has from the bank (the line is linked to
+// that cuota) or is a purchase an earlier statement staged. Otherwise target
+// names the expense the user entered by hand that its item will complete
+// (0 = none: the item waits in the inbox).
+func (s *FinanceService) placePurchase(
+	ctx context.Context, tx bun.Tx, uid int64, st *CardStatement, card *Card, l *CardStatementLine,
+	claimed map[int64]bool, out *CardStatementImport,
+) (target int64, done bool, err error) {
+	var inst *Installment
+	if l.Section != LineDeferred {
+		if inst, err = continuedInstallment(ctx, tx, uid, card, l); err != nil {
+			return 0, false, err
+		}
+	}
+	linked := false
+	if inst != nil {
+		// Asked before linking this line, which would make it look linked.
+		if linked, err = bankLinked(ctx, tx, uid, inst.ExpenseID); err != nil {
+			return 0, false, err
+		}
+		if !linked && card == nil {
+			// An expense entered by hand is completed only on its own card:
+			// without the statement's card the user decides in the inbox.
+			inst = nil
+		}
+	}
+	if inst != nil {
+		l.InstallmentID = &inst.ID
+		if _, err := tx.NewUpdate().Model(l).Column("installment_id").WherePK().Exec(ctx); err != nil {
+			return 0, false, fmt.Errorf("linking installment: %w", err)
+		}
+		if linked || claimed[inst.ExpenseID] {
+			out.LinkedInstallments++
+			return 0, true, nil
+		}
+		return inst.ExpenseID, false, nil // a cuota of an expense entered by hand
+	}
+	itemID, err := earlierSighting(ctx, tx, uid, st, l)
+	if err != nil {
+		return 0, false, err
+	}
+	if itemID != nil {
+		l.ImportItemID = itemID
+		if _, err := tx.NewUpdate().Model(l).Column("import_item_id").WherePK().Exec(ctx); err != nil {
+			return 0, false, fmt.Errorf("linking earlier item: %w", err)
+		}
+		out.Duplicates++
+		return 0, true, nil
+	}
+	ex, err := manualMatch(ctx, tx, uid, card, lineCandidate(st, l), claimed)
+	if err != nil || ex == nil {
+		return 0, false, err
+	}
+	return ex.ID, false, nil
+}
+
+// mergeStaged completes a manual expense with the item just staged for it,
+// unless staging reconciled the item with another sighting (then that one is
+// reviewed). Reports whether it merged.
+func mergeStaged(ctx context.Context, tx bun.Tx, uid, itemID, expenseID int64) (bool, error) {
+	item := new(ImportItem)
+	if err := tx.NewSelect().Model(item).Where("id = ? AND user_id = ?", itemID, uid).Scan(ctx); err != nil {
+		return false, fmt.Errorf("loading staged item: %w", err)
+	}
+	if item.Status != ImportPendiente {
+		return false, nil
+	}
+	ex := new(Expense)
+	if err := tx.NewSelect().Model(ex).Where("id = ? AND user_id = ?", expenseID, uid).Scan(ctx); err != nil {
+		return false, fmt.Errorf("loading manual expense: %w", err)
+	}
+	var cutoff cardCutoff
+	if ex.CardID != nil {
+		cuts, err := cutoffsFor(ctx, tx, uid, *ex.CardID)
+		if err != nil {
+			return false, err
+		}
+		cutoff = cuts[*ex.CardID]
+	}
+	return true, mergeIntoExpense(ctx, tx, uid, item, ex, cutoff)
 }
 
 // lineCandidate is the inbox candidate for a staged line. Purchases keep the

@@ -38,6 +38,7 @@ import type {
   ImportCandidate,
   ImportItem,
   ImportItemView,
+  Installment,
   ImportItemsResult,
   Income,
   IncomeResult,
@@ -361,9 +362,22 @@ function validateLastDigits(s: string): { digits: string; error?: ReturnType<typ
 // reconcileWindowDays: an alert email and its statement line may be dated a
 // day apart (purchase date vs posting date).
 const reconcileWindowDays = 1
+// mergeWindowDays mirrors Go: how far the user's date may be from the bank's
+// for a match (YNAB's window: ten days).
+const mergeWindowDays = 10
 // duplicateWindowDays: how far a manually entered expense may be from the
-// detected movement and still be offered as "probably the same purchase".
-const duplicateWindowDays = 2
+// detected movement and still be offered as "probably the same purchase"
+// (the merge window: a date typed wrong by days is still found).
+const duplicateWindowDays = mergeWindowDays
+
+// dayNumber / shiftDay do calendar arithmetic on YYYY-MM-DD strings (UTC days).
+function dayNumber(ymd: string): number {
+  return Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000
+}
+
+function shiftDay(ymd: string, n: number): string {
+  return new Date((dayNumber(ymd) + n) * 86_400_000).toISOString().slice(0, 10)
+}
 
 function validImportStatus(status: string): boolean {
   return [ImportPendiente, ImportConfirmado, ImportDescartado, ImportConciliado].includes(status)
@@ -1113,10 +1127,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   // or total equal to its amount, on its card when known; closest date wins,
   // then the oldest expense.
   function duplicateFinder(items: ImportItem[]): (item: ImportItem, cardId: number | null) => Expense | null {
-    const days = (ymd: string) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000
+    const days = dayNumber
     const reviewable = items.filter(duplicateReviewable).map((it) => it.date)
     if (reviewable.length === 0) return () => null
-    const shift = (ymd: string, n: number) => new Date((days(ymd) + n) * 86_400_000).toISOString().slice(0, 10)
+    const shift = shiftDay
     const from = shift(reviewable.reduce((a, b) => (b < a ? b : a)), -duplicateWindowDays)
     const to = shift(reviewable.reduce((a, b) => (b > a ? b : a)), duplicateWindowDays + 1)
     const cands = db
@@ -1452,28 +1466,181 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return prior.find((p) => operationNumber(p.reference) === op)?.importItemId ?? null
   }
 
+  // ---------- merging a bank movement into a manual expense (mirror of merge.go) ----------
+
+  // bankLinked: the expense already carries a bank movement (an item confirmed
+  // into it, or a statement line billing one of its cuotas).
+  function bankLinked(expenseId: number): boolean {
+    if (db.query('SELECT 1 FROM import_items WHERE user_id = ? AND expense_id = ?', [uid(), expenseId]).length > 0) return true
+    return (
+      db.query(
+        `SELECT 1 FROM card_statement_lines AS l JOIN installments AS i ON i.id = l.installment_id
+         WHERE l.user_id = ? AND i.expense_id = ?`,
+        [uid(), expenseId],
+      ).length > 0
+    )
+  }
+
+  // sameAmount: the expense's total equals the purchase total, or its cuota the bank's cuota.
+  function sameAmount(ex: Expense, total: string, cuota: string): boolean {
+    const q = Money.fromString(ex.installmentAmount)
+    const t = amountOrError(total).amount
+    if (t && (q.mulInt(Math.max(ex.installmentsTotal, 1)).cmp(t) === 0 || q.cmp(t) === 0)) return true
+    const c = cuota !== '' ? amountOrError(cuota).amount : undefined
+    return c !== undefined && q.cmp(c) === 0
+  }
+
+  // manualMatch: the one expense entered by hand for this purchase, on the
+  // statement's card, within mergeWindowDays, same amount; null when there is
+  // none, more than one, or the card is unknown.
+  function manualMatch(card: Card | null, c: ImportCandidate, skip: ReadonlySet<number>): Expense | null {
+    if (!card) return null
+    const cands = db
+      .query(
+        `SELECT * FROM expenses WHERE user_id = ? AND deleted_at IS NULL AND card_id = ? AND date >= ? AND date < ?
+         AND id NOT IN (SELECT expense_id FROM import_items WHERE user_id = ? AND expense_id IS NOT NULL)
+         AND id NOT IN (SELECT i.expense_id FROM card_statement_lines AS l
+           JOIN installments AS i ON i.id = l.installment_id WHERE l.user_id = ?)
+         ORDER BY id ASC`,
+        [uid(), card.id, shiftDay(c.date, -mergeWindowDays), shiftDay(c.date, mergeWindowDays + 1), uid(), uid()],
+      )
+      .map(rowToExpense)
+      .filter((ex) => !skip.has(ex.id) && sameAmount(ex, c.amount, c.installmentAmount ?? ''))
+    return cands.length === 1 ? (cands[0] ?? null) : null
+  }
+
+  // replannable mirrors Go: no paid cuota past the new total, and none moved.
+  function replannable(insts: Installment[], total: number, first: string): boolean {
+    const lastPaid = Math.max(0, ...insts.filter((i) => i.status === StatusPagado).map((i) => i.number))
+    return lastPaid === 0 || (lastPaid <= total && insts[0]?.period === first)
+  }
+
+  // mergeIntoExpense mirrors Go: the bank's date, amount and billing month, the
+  // user's words; paid cuotas never move. Confirms the item into the expense.
+  function mergeIntoExpense(item: ImportItem, ex: Expense, cutoff: CardCutoff): void {
+    const date = parseDate(item.date)
+    if (!date) throw new Error('item date: ' + item.date)
+    let kind = ex.kind
+    let amount = Money.fromString(ex.installmentAmount)
+    let total = ex.installmentsTotal
+    let bankPlan = item.currency === 'CLP' // a USD item's amount is not the expense's pesos
+    if (bankPlan) {
+      const n = Math.max(item.installmentsTotal, 1)
+      const cuota = item.installmentAmount !== '' ? amountOrError(item.installmentAmount).amount : undefined
+      if (cuota) [amount, total] = [cuota, n]
+      else if (n === 1) [amount, total] = [Money.fromString(item.amount), 1]
+      if (cuota || n === 1) kind = total > 1 ? KindCuotas : KindUnico
+    }
+    const insts = db
+      .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [ex.id, uid()])
+      .map(rowToInstallment)
+    let first = item.firstPeriod
+    if (first === '' || total !== item.installmentsTotal) first = cutoffPeriodOf(cutoff, date.parts)
+    if (!replannable(insts, total, first)) {
+      kind = ex.kind
+      amount = Money.fromString(ex.installmentAmount)
+      total = ex.installmentsTotal
+      bankPlan = false
+      first = insts[0]?.period ?? first
+    }
+    db.exec(
+      `UPDATE expenses SET date = ?, bank_description = ?, kind = ?, installment_amount = ?, installments_total = ?
+       WHERE id = ? AND user_id = ?`,
+      [date.iso, item.description, kind, amount.toString(), total, ex.id, uid()],
+    )
+    const merged: ValidatedExpense = {
+      date, description: ex.description, category: ex.category, merchant: ex.merchant, cardId: ex.cardId,
+      kind, installmentAmount: amount, installmentsTotal: total,
+    }
+    const refused = replanInstallments(ex.id, merged, { before: '', after: first })
+    if (refused) throw new TxAbort(refused)
+    // The statement's cuota n means cuotas 1..n-1 were already billed.
+    if (bankPlan && item.firstPeriod !== '' && item.installmentNumber > 1) {
+      db.exec(
+        'UPDATE installments SET status = ?, paid_at = ? WHERE expense_id = ? AND user_id = ? AND number < ? AND status = ?',
+        [StatusPagado, nowIso(), ex.id, uid(), item.installmentNumber, StatusPendiente],
+      )
+    }
+    db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
+      ImportConfirmado,
+      ex.id,
+      item.id,
+      uid(),
+    ])
+  }
+
+  // cutoffOfExpense: the cutoff of the expense's card (trashed included), or none.
+  function cutoffOfExpense(ex: Expense): CardCutoff {
+    return ex.cardId == null ? NO_CUTOFF : (cutoffsFor(ex.cardId).get(ex.cardId) ?? NO_CUTOFF)
+  }
+
+  // placePurchase mirrors Go: done when the line continues a plan the app has
+  // from the bank or an earlier statement staged it; otherwise the manual
+  // expense its item will complete (null = none).
+  function placePurchase(
+    st: CardStatement,
+    card: Card | null,
+    l: CardStatementLine,
+    claimed: ReadonlySet<number>,
+    out: CardStatementImport,
+  ): { done: boolean; target: number | null } {
+    let instId = l.section === LineDeferred ? null : continuedInstallment(card, l)
+    let expenseId: number | null = null
+    let linked = false
+    if (instId != null) {
+      expenseId = asNumber(db.query('SELECT expense_id FROM installments WHERE id = ?', [instId])[0]?.expense_id)
+      // Asked before linking this line, which would make it look linked.
+      linked = bankLinked(expenseId)
+      // An expense entered by hand is completed only on its own card.
+      if (!linked && card == null) instId = null
+    }
+    if (instId != null && expenseId != null) {
+      db.exec('UPDATE card_statement_lines SET installment_id = ? WHERE id = ?', [instId, l.id])
+      if (linked || claimed.has(expenseId)) {
+        out.linkedInstallments++
+        return { done: true, target: null }
+      }
+      return { done: false, target: expenseId } // a cuota of an expense entered by hand
+    }
+    const itemId = earlierSighting(st, l)
+    if (itemId != null) {
+      db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [itemId, l.id])
+      out.duplicates++
+      return { done: true, target: null }
+    }
+    return { done: false, target: manualMatch(card, lineCandidate(st, l), claimed)?.id ?? null }
+  }
+
+  // mergeStaged mirrors Go: completes the manual expense with the item just
+  // staged for it, unless staging reconciled the item with another sighting.
+  function mergeStaged(itemId: number, expenseId: number): boolean {
+    const row = db.query('SELECT * FROM import_items WHERE id = ? AND user_id = ?', [itemId, uid()])[0]
+    if (!row) throw new Error('staged item not found')
+    const item = rowToImportItem(row)
+    if (item.status !== ImportPendiente) return false
+    const exRow = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [expenseId, uid()])[0]
+    if (!exRow) throw new Error('manual expense not found')
+    const ex = rowToExpense(exRow)
+    mergeIntoExpense(item, ex, cutoffOfExpense(ex))
+    return true
+  }
+
   function feedInbox(st: CardStatement, card: Card | null, lines: CardStatementLine[], out: CardStatementImport): void {
     const candidates: ImportCandidate[] = []
     const staged: CardStatementLine[] = []
+    const mergeInto = new Map<number, number>() // candidate index → the manual expense it completes
+    const claimed = new Set<number>() // manual expenses already taken by a line of this statement
     for (const l of lines) {
       if (l.section === LinePayment) {
         out.paymentsMatched += reconcilePaymentLine(st, l)
         continue
       }
-      if (l.section === LinePurchase || l.section === LineVoluntary) {
-        const instId = continuedInstallment(card, l)
-        if (instId != null) {
-          db.exec('UPDATE card_statement_lines SET installment_id = ? WHERE id = ?', [instId, l.id])
-          out.linkedInstallments++
-          continue
-        }
-      }
       if (purchaseSections.includes(l.section)) {
-        const itemId = earlierSighting(st, l)
-        if (itemId != null) {
-          db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [itemId, l.id])
-          out.duplicates++
-          continue
+        const { done, target } = placePurchase(st, card, l, claimed, out)
+        if (done) continue
+        if (target != null) {
+          claimed.add(target)
+          mergeInto.set(candidates.length, target)
         }
       }
       candidates.push(lineCandidate(st, l))
@@ -1491,6 +1658,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     ids.forEach((id, k) => {
       db.exec('UPDATE card_statement_lines SET import_item_id = ? WHERE id = ?', [id, staged[k]?.id ?? null])
     })
+    for (const [k, expenseId] of mergeInto) {
+      const id = ids[k]
+      if (id != null && mergeStaged(id, expenseId)) {
+        out.added--
+        out.merged++
+      }
+    }
   }
 
   // statementView adds the bank-vs-app comparison. bankCharges is what the app
@@ -1782,6 +1956,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         fixedId: fe.id,
         refundId: null,
         description: fe.description,
+        bankDescription: '',
         category: fe.category,
         merchant: '',
         cardId: fe.cardId,
@@ -1990,6 +2165,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       fixedId: null,
       refundId: r.id,
       description: r.description,
+      bankDescription: '',
       category: r.category,
       merchant: r.merchant,
       cardId: r.cardId,
@@ -2939,6 +3115,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           fixedId: null,
           refundId: null,
           description: '',
+          bankDescription: '',
           category: '',
           merchant: '',
           cardId: null,
@@ -2958,6 +3135,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (ex) {
           mv.expenseId = ex.id
           mv.description = ex.description
+          mv.bankDescription = ex.bankDescription
           mv.merchant = ex.merchant
           mv.cardId = ex.cardId
           mv.kind = ex.kind
@@ -3315,10 +3493,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const pattern = `%${escapeLike(text)}%`
         const refs = expenseReferencesSQL('1 = 1', '1 = 1')
         where.push(
-          `(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\'` +
+          `(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\'` +
             ` OR id IN (SELECT expense_id FROM (${refs}) WHERE reference LIKE ? ESCAPE '\\'))`,
         )
-        params.push(pattern, pattern, uid(), uid(), uid(), pattern)
+        params.push(pattern, pattern, pattern, uid(), uid(), uid(), pattern)
       }
       const category = f.category.trim()
       if (category === uncategorized) {
@@ -3690,6 +3868,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           suggestedPattern: suggestPattern(it.description),
           duplicateExpenseId: dup?.id ?? null,
           duplicateDescription: dup?.description ?? '',
+          duplicateDate: dup ? dup.date.slice(0, 10) : '',
           matchedSource: matched?.source ?? '',
           matchedDate: matched?.date ?? '',
           suggestedAmountClp: suggestedClp,
@@ -3759,11 +3938,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
         const wrongKind = requireKind(pending.item, ImportKindExpense)
         if (wrongKind) return { error: wrongKind }
-        const ok = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        const exRow = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
           expenseID,
           uid(),
-        ])
-        if (ok.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+        ])[0]
+        if (!exRow) return { error: newError(ErrNotFound, 'gasto no encontrado') }
         // An expense is one purchase: it takes the sighting of one item only.
         const taken = db.query('SELECT 1 FROM import_items WHERE user_id = ? AND expense_id = ? AND id <> ?', [
           uid(),
@@ -3773,12 +3952,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (taken.length > 0) {
           return { error: newError(ErrConflict, 'ese gasto ya está enlazado a otro movimiento del banco') }
         }
-        db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
-          ImportConfirmado,
-          expenseID,
-          id,
-          uid(),
-        ])
+        // Merged like Go's LinkImportItem: the bank's date, amount and month, the user's words.
+        const ex = rowToExpense(exRow)
+        mergeIntoExpense(pending.item, ex, cutoffOfExpense(ex))
         return {}
       })
     },
@@ -3926,6 +4102,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
             reconciled: 0,
             linkedInstallments: 0,
             paymentsMatched: 0,
+            merged: 0,
           }
           const existing = db.query(
             'SELECT id FROM card_statements WHERE user_id = ? AND card_last_digits = ? AND kind = ? AND statement_date = ?',

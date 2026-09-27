@@ -5,6 +5,7 @@ import { createTestDb } from '@/engine/testing/db'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession } from '@/engine/users/service'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
+import type { SqlDb } from '@/engine/db/types'
 import type {
   FinanceServiceContract,
   ImportBatch,
@@ -15,9 +16,10 @@ import type {
 } from '@/services/contract'
 
 let finance: FinanceServiceContract
+let db: SqlDb
 
 beforeEach(async () => {
-  const db = await createTestDb()
+  db = await createTestDb()
   finance = createFinanceService(db, createSession(db))
 })
 
@@ -204,16 +206,23 @@ describe('revisión de la bandeja', () => {
       pdfBatch(
         { date: '2026-07-17', description: 'CRUZ VERDE L9093 CHILLAN C', amount: '16182' },
         { date: '2026-07-02', description: 'PARIS.CL', amount: '600000' },
-        { date: '2026-07-25', description: 'CRUZ VERDE L9093 CHILLAN C', amount: '16182' },
+        { date: '2026-07-30', description: 'CRUZ VERDE L9093 CHILLAN C', amount: '16182' }, // too far (> 10 days)
       ),
     )
     const byDate = new Map((await list('pendiente')).map((it) => [it.date, it]))
-    expect(byDate.get('2026-07-17')).toMatchObject({ duplicateExpenseId: manual.data!.id, duplicateDescription: 'Remedios' })
+    expect(byDate.get('2026-07-17')).toMatchObject({
+      duplicateExpenseId: manual.data!.id, duplicateDescription: 'Remedios', duplicateDate: '2026-07-16',
+    })
     expect(byDate.get('2026-07-02')?.duplicateExpenseId).toBe(cuotas.data!.id)
-    expect(byDate.get('2026-07-25')?.duplicateExpenseId).toBeNull()
+    expect(byDate.get('2026-07-30')?.duplicateExpenseId).toBeNull()
 
     expect((await finance.LinkImportItem(byDate.get('2026-07-17')!.id, manual.data!.id)).error).toBeUndefined()
-    expect((await finance.LinkImportItem(byDate.get('2026-07-25')!.id, 999)).error?.code).toBe('NOT_FOUND')
+    // Linking merges: the bank's date and descriptor, the user's words.
+    const merged = db.query('SELECT date, description, bank_description FROM expenses WHERE id = ?', [manual.data!.id])[0]
+    expect([String(merged?.date).slice(0, 10), merged?.description, merged?.bank_description]).toEqual([
+      '2026-07-17', 'Remedios', 'CRUZ VERDE L9093 CHILLAN C',
+    ])
+    expect((await finance.LinkImportItem(byDate.get('2026-07-30')!.id, 999)).error?.code).toBe('NOT_FOUND')
 
     await stage(pdfBatch({ date: '2026-07-16', description: 'OTRA', amount: '16182' }))
     const other = (await list('pendiente')).find((it) => it.date === '2026-07-16')

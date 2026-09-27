@@ -74,8 +74,8 @@ func expenseFilter(uid int64, f ExpenseFilter) func(*bun.SelectQuery) *bun.Selec
 		if text := strings.TrimSpace(f.Text); text != "" {
 			pattern := "%" + escapeLike(text) + "%"
 			refCond, refArgs := referenceMatch(uid, pattern)
-			q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\' OR `+refCond+`)`,
-				append([]any{pattern, pattern}, refArgs...)...)
+			q = q.Where(`(ex.description LIKE ? ESCAPE '\' OR ex.merchant LIKE ? ESCAPE '\' OR ex.bank_description LIKE ? ESCAPE '\' OR `+refCond+`)`,
+				append([]any{pattern, pattern, pattern}, refArgs...)...)
 		}
 		switch cat := strings.TrimSpace(f.Category); cat {
 		case "":
