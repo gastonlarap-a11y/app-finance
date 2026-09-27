@@ -37,6 +37,7 @@ export interface Category {
   id: number
   userId: number
   name: string
+  rollover: boolean // unspent budget carries into the next month
   createdAt: string
   deletedAt?: string | null
 }
@@ -208,8 +209,9 @@ export interface BudgetStatus {
   categoryId: number
   category: string
   budget: string
+  carried: string // unspent budget brought from earlier months (rollover categories)
   spent: string
-  remaining: string // negative when over budget
+  remaining: string // budget + carried − spent; negative when over budget
   over: boolean
   near: boolean // spent 80 % or more of the cap, without exceeding it
 }
@@ -219,6 +221,7 @@ export interface CategoryBudgetView {
   category: string
   amount: string
   effectiveFrom: string // YYYY-MM
+  rollover: boolean // unspent budget carries into the next month
 }
 
 export interface YearMonth {
@@ -796,6 +799,8 @@ export interface FinanceServiceContract {
   DeleteReconciliation(period: string): Promise<OpResult>
 
   SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult>
+  RemoveCategoryBudget(categoryID: number, fromPeriod: string): Promise<OpResult>
+  SetCategoryRollover(categoryID: number, on: boolean): Promise<OpResult>
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>

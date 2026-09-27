@@ -310,10 +310,24 @@ func (s *FinanceService) ListCategories(ctx context.Context) ([]Category, error)
 	return cats, err
 }
 
-func (s *FinanceService) CreateCategory(ctx context.Context, name string) CategoryResult {
+// validCategoryName trims a category name and refuses an empty one or the
+// name of the bucket that groups expenses without a category: a real category
+// called that would be summed together with them.
+func validCategoryName(name string) (string, *shared.AppError) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return CategoryResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+		return "", shared.NewError(shared.ErrValidation, "el nombre es obligatorio")
+	}
+	if strings.EqualFold(name, uncategorized) {
+		return "", shared.NewError(shared.ErrValidation, "«"+uncategorized+"» está reservado para los gastos sin categoría")
+	}
+	return name, nil
+}
+
+func (s *FinanceService) CreateCategory(ctx context.Context, name string) CategoryResult {
+	name, aerr := validCategoryName(name)
+	if aerr != nil {
+		return CategoryResult{Error: aerr}
 	}
 	cat := &Category{UserID: s.uid(), Name: name}
 	if _, err := s.db.NewInsert().Model(cat).Returning("*").Exec(ctx); err != nil {
@@ -328,9 +342,9 @@ func (s *FinanceService) CreateCategory(ctx context.Context, name string) Catego
 // UpdateCategory renames a category and cascades the new name to every expense
 // and fixed expense that used the old name (both store the category as text).
 func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name string) CategoryResult {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return CategoryResult{Error: shared.NewError(shared.ErrValidation, "el nombre es obligatorio")}
+	name, aerr := validCategoryName(name)
+	if aerr != nil {
+		return CategoryResult{Error: aerr}
 	}
 	uid := s.uid()
 	cat := new(Category)

@@ -173,6 +173,17 @@ function compareStrings(a: string, b: string): number {
 // uncategorized is the bucket for expenses without a category.
 const uncategorized = 'Sin categoría'
 
+// validCategoryName mirrors Go: trimmed, not empty, and not the name of the
+// bucket that groups expenses without a category.
+function validCategoryName(name: string): { name: string; error?: ReturnType<typeof newError> } {
+  const n = name.trim()
+  if (n === '') return { name: '', error: newError(ErrValidation, 'el nombre es obligatorio') }
+  if (n.toLowerCase() === uncategorized.toLowerCase()) {
+    return { name: '', error: newError(ErrValidation, `«${uncategorized}» está reservado para los gastos sin categoría`) }
+  }
+  return { name: n }
+}
+
 // escapeLike escapes LIKE's wildcards so user text matches literally (used with
 // ESCAPE '\').
 function escapeLike(s: string): string {
@@ -2409,51 +2420,137 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   interface CategoryBudgetRow extends EffectiveDated {
     categoryId: number
+    capped: boolean // false = no cap from this month on; a capped $0 is a real cap
   }
 
-  // budgetsInEffect: the cap in effect at `period` for every active category
-  // that has one (amount > 0), ordered by category name.
-  function budgetsInEffect(period: string): CategoryBudgetView[] {
-    const cats = db
-      .query('SELECT * FROM categories WHERE user_id = ? AND deleted_at IS NULL', [uid()])
-      .map(rowToCategory)
+  function budgetRows(where: string, params: SqlValue[]): Map<number, CategoryBudgetRow[]> {
     const byCat = new Map<number, CategoryBudgetRow[]>()
-    for (const r of db.query('SELECT * FROM category_budgets WHERE user_id = ? AND effective_from <= ?', [
-      uid(),
-      period,
-    ])) {
+    for (const r of db.query(`SELECT * FROM category_budgets WHERE user_id = ? AND ${where}`, [uid(), ...params])) {
       const row: CategoryBudgetRow = {
         categoryId: asNumber(r.category_id),
         effectiveFrom: asString(r.effective_from),
         amount: asString(r.amount),
+        capped: asNumber(r.capped) === 1,
       }
-      const list = byCat.get(row.categoryId)
-      if (list) list.push(row)
-      else byCat.set(row.categoryId, [row])
+      byCat.set(row.categoryId, [...(byCat.get(row.categoryId) ?? []), row])
     }
+    return byCat
+  }
+
+  // budgetsInEffect: the cap in effect at `period` for every active category
+  // that has one ($0 included), ordered by category name.
+  function budgetsInEffect(period: string): CategoryBudgetView[] {
+    const cats = db
+      .query('SELECT * FROM categories WHERE user_id = ? AND deleted_at IS NULL', [uid()])
+      .map(rowToCategory)
+    const byCat = budgetRows('effective_from <= ?', [period])
     const out: CategoryBudgetView[] = []
     for (const c of cats) {
       const b = latestAsOf(byCat.get(c.id) ?? [], period)
-      if (!b || Money.fromString(b.amount).isZero()) continue
-      out.push({ categoryId: c.id, category: c.name, amount: b.amount, effectiveFrom: b.effectiveFrom })
+      if (!b || !b.capped) continue
+      out.push({ categoryId: c.id, category: c.name, amount: b.amount, effectiveFrom: b.effectiveFrom, rollover: c.rollover })
     }
     return out.sort((a, b) => compareStrings(a.category, b.category))
   }
 
+  // categorySpentByMonth mirrors Go: what each category was charged each month
+  // from `from` to `to` (inclusive) — cuotas, fixed charges and refunds.
+  function categorySpentByMonth(from: string, to: string): Map<string, Map<string, Money>> {
+    const out = new Map<string, Map<string, Money>>()
+    const add = (cat: string, period: string, amt: Money) => {
+      const byPeriod = out.get(cat) ?? new Map<string, Money>()
+      byPeriod.set(period, (byPeriod.get(period) ?? Money.zero()).add(amt))
+      out.set(cat, byPeriod)
+    }
+    if (from > to) return out
+    const insts = db
+      .query(
+        `SELECT * FROM installments WHERE user_id = ? AND period >= ? AND period <= ?
+         AND expense_id IN (SELECT id FROM expenses WHERE deleted_at IS NULL)`,
+        [uid(), from, to],
+      )
+      .map(rowToInstallment)
+    const exById = expenseMapActive(insts.map((i) => i.expenseId))
+    for (const inst of insts) {
+      const ex = exById.get(inst.expenseId)
+      if (ex) add(ex.category, inst.period, Money.fromString(inst.amount))
+    }
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    for (let m = from; m <= to; m = addMonths(m, 1)) {
+      for (const fe of fixed) {
+        if (billsIn(fe, m)) add(fe.category, m, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
+      }
+    }
+    for (const r of refundsIn(from, to)) add(r.category, r.period, Money.zero().sub(r.amount))
+    return out
+  }
+
+  // rolloverCarries mirrors Go: what each rollover category brings into
+  // `period` — unspent budget only (never a debt); a month without a cap
+  // starts over.
+  function rolloverCarries(period: string, views: CategoryBudgetView[]): Map<number, Money> {
+    const out = new Map<number, Money>()
+    const ids = views.filter((v) => v.rollover).map((v) => v.categoryId)
+    if (ids.length === 0) return out
+    const byCat = budgetRows(`category_id IN (${ids.map(() => '?').join(', ')}) AND effective_from < ?`, [...ids, period])
+    const starts = [...byCat.values()].flat().map((r) => r.effectiveFrom)
+    if (starts.length === 0) return out
+    const start = starts.reduce((a, b) => (b < a ? b : a))
+    const spent = categorySpentByMonth(start, addMonths(period, -1))
+    for (const v of views) {
+      if (!v.rollover) continue
+      let carry = Money.zero()
+      for (let m = start; m < period; m = addMonths(m, 1)) {
+        const b = latestAsOf(byCat.get(v.categoryId) ?? [], m)
+        if (!b || !b.capped) {
+          carry = Money.zero()
+          continue
+        }
+        carry = Money.fromString(b.amount).add(carry).sub(spent.get(v.category)?.get(m) ?? Money.zero())
+        if (carry.isNegative()) carry = Money.zero()
+      }
+      out.set(v.categoryId, carry)
+    }
+    return out
+  }
+
+  // putCategoryBudget mirrors Go: a cap (or its absence) from `fromPeriod` on.
+  function putCategoryBudget(categoryID: number, fromPeriod: string, amount: string, capped: boolean): OpResult {
+    if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+    return db.transaction((): OpResult => {
+      const owned = db.query('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        categoryID,
+        uid(),
+      ])
+      if (owned.length === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+      db.exec(
+        `INSERT INTO category_budgets (user_id, category_id, effective_from, amount, capped) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (category_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount, capped = EXCLUDED.capped`,
+        [uid(), categoryID, fromPeriod, amount, capped ? 1 : 0],
+      )
+      return {}
+    })
+  }
+
   function budgetStatuses(period: string, catTotals: Map<string, Money>): BudgetStatus[] {
-    return budgetsInEffect(period).map((v) => {
+    const views = budgetsInEffect(period)
+    const carried = rolloverCarries(period, views)
+    return views.map((v) => {
       const budget = Money.fromString(v.amount)
+      const carry = carried.get(v.categoryId) ?? Money.zero()
+      const available = budget.add(carry)
       const spent = catTotals.get(v.category) ?? Money.zero()
-      const over = spent.gt(budget)
+      const over = spent.gt(available)
       return {
         categoryId: v.categoryId,
         category: v.category,
         budget: budget.toString(),
+        carried: carry.toString(),
         spent: spent.toString(),
-        remaining: budget.sub(spent).toString(),
+        remaining: available.sub(spent).toString(),
         over,
         // Mirrors Go's nearCap: 80 % of a positive cap, the usual early warning.
-        near: !over && budget.gt(Money.zero()) && spent.mulInt(100).gte(budget.mulInt(budgetAlertPercent)),
+        near: !over && available.gt(Money.zero()) && spent.mulInt(100).gte(available.mulInt(budgetAlertPercent)),
       }
     })
   }
@@ -2581,8 +2678,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async CreateCategory(name: string): Promise<CategoryResult> {
-      const n = name.trim()
-      if (n === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
+      const { name: n, error } = validCategoryName(name)
+      if (error) return { error }
       try {
         const row = db.query(
           'INSERT INTO categories (user_id, name, created_at) VALUES (?, ?, ?) RETURNING *',
@@ -2597,8 +2694,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async UpdateCategory(id: number, name: string): Promise<CategoryResult> {
-      const n = name.trim()
-      if (n === '') return { error: newError(ErrValidation, 'el nombre es obligatorio') }
+      const { name: n, error } = validCategoryName(name)
+      if (error) return { error }
       try {
         return db.transaction((): CategoryResult => {
           const oldRow = db.query('SELECT * FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
@@ -3450,23 +3547,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     // ---------- category budgets (presupuestos) ----------
 
     async SetCategoryBudget(categoryID: number, fromPeriod: string, amount: string): Promise<OpResult> {
-      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
       const parsed = amountOrError(amount)
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
-      const value = parsed.amount.toString()
-      return db.transaction((): OpResult => {
-        const owned = db.query('SELECT 1 FROM categories WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
-          categoryID,
-          uid(),
-        ])
-        if (owned.length === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
-        db.exec(
-          `INSERT INTO category_budgets (user_id, category_id, effective_from, amount) VALUES (?, ?, ?, ?)
-           ON CONFLICT (category_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount`,
-          [uid(), categoryID, fromPeriod, value],
-        )
-        return {}
-      })
+      return putCategoryBudget(categoryID, fromPeriod, parsed.amount.toString(), true)
+    },
+
+    async RemoveCategoryBudget(categoryID: number, fromPeriod: string): Promise<OpResult> {
+      return putCategoryBudget(categoryID, fromPeriod, '0', false)
+    },
+
+    async SetCategoryRollover(categoryID: number, on: boolean): Promise<OpResult> {
+      db.exec('UPDATE categories SET rollover = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        on ? 1 : 0,
+        categoryID,
+        uid(),
+      ])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+      return {}
     },
 
     async ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult> {

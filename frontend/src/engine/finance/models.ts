@@ -228,6 +228,7 @@ export function rowToCategory(r: SqlRow): Category {
     id: asNumber(r.id),
     userId: asNumber(r.user_id),
     name: asString(r.name),
+    rollover: asNumber(r.rollover) === 1,
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

@@ -86,12 +86,12 @@ describe('YearSummary.categoriaMeses', () => {
 })
 
 describe('presupuestos por categoría', () => {
-  it('rigen desde su mes, se exceden, se quitan con 0 y viajan con la categoría', async () => {
+  it('rigen desde su mes, se exceden, se quitan y viajan con la categoría', async () => {
     const cat = ok(await finance.CreateCategory('Comida'))
     const id = cat.data!.id
     ok(await finance.SetCategoryBudget(id, '2030-01', '100000'))
     ok(await finance.SetCategoryBudget(id, '2030-03', '80000'))
-    ok(await finance.SetCategoryBudget(id, '2030-05', '0'))
+    ok(await finance.RemoveCategoryBudget(id, '2030-05'))
     ok(await finance.CreateExpense('2030-03-02', 'Super', 'Comida', '', null, 'unico', '90000', 1))
 
     const at = async (period: string) => ok(await finance.MonthlySummary(period)).data!.presupuestos
@@ -102,7 +102,7 @@ describe('presupuestos por categoría', () => {
 
     ok(await finance.UpdateCategory(id, 'Alimentación'))
     expect(ok(await finance.ListCategoryBudgets('2030-03')).data).toEqual([
-      { categoryId: id, category: 'Alimentación', amount: '80000', effectiveFrom: '2030-03' },
+      { categoryId: id, category: 'Alimentación', amount: '80000', effectiveFrom: '2030-03', rollover: false },
     ])
     ok(await finance.DeleteCategory(id))
     expect(ok(await finance.ListCategoryBudgets('2030-03')).data).toEqual([])
@@ -231,6 +231,8 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetFixedExpenseAmount(fe.data!.id, period, '1'),
       () => finance.SetFixedExpensePaid(fe.data!.id, period, true),
       () => finance.SetCategoryBudget(cat.data!.id, period, '1'),
+      () => finance.RemoveCategoryBudget(cat.data!.id, period),
+      () => finance.SetCategoryRollover(cat.data!.id, true),
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
       () => finance.LinkImportItem(itemID, expense.data!.id),

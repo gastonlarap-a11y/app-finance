@@ -188,12 +188,19 @@ function BudgetForm({
 }) {
   const [amount, setAmount] = useState(current?.amount ?? '')
   const [from, setFrom] = useState(defaultFrom)
+  const [rollover, setRollover] = useState(category.rollover)
   const [busy, setBusy] = useState(false)
 
-  async function save(value: string) {
+  // save sets the cap (null lifts it) and the carry-over option.
+  async function save(value: string | null) {
     setBusy(true)
     try {
-      if (failed(await FinanceService.SetCategoryBudget(category.id, from, value))) return
+      const res =
+        value === null
+          ? await FinanceService.RemoveCategoryBudget(category.id, from)
+          : await FinanceService.SetCategoryBudget(category.id, from, value)
+      if (failed(res)) return
+      if (rollover !== category.rollover && failed(await FinanceService.SetCategoryRollover(category.id, rollover))) return
       onSaved()
       onClose()
     } finally {
@@ -217,11 +224,21 @@ function BudgetForm({
           <input type="month" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} required />
         </Field>
         <p className="text-xs text-slate-500">
-          Rige desde {from ? periodLabel(from) : 'el mes elegido'} en adelante; los meses anteriores mantienen su tope.
+          Rige desde {from ? periodLabel(from) : 'el mes elegido'} en adelante; los meses anteriores mantienen su tope. Un tope de
+          $0 significa «no gastar nada» en esta categoría.
         </p>
+        <label className="flex items-start gap-2 text-sm text-slate-300">
+          <input type="checkbox" className="mt-1" checked={rollover} onChange={(e) => setRollover(e.target.checked)} />
+          <span>
+            Traspasar lo no gastado al mes siguiente
+            <span className="block text-xs text-slate-500">
+              Lo que sobre de un mes se suma al tope del siguiente (si te pasas, el mes siguiente parte de cero).
+            </span>
+          </span>
+        </label>
         <div className="flex flex-wrap justify-end gap-2 pt-2">
           {current && (
-            <Button variant="danger" onClick={() => save('0')} disabled={busy}>
+            <Button variant="danger" onClick={() => save(null)} disabled={busy}>
               Quitar tope
             </Button>
           )}

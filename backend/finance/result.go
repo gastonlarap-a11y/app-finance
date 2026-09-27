@@ -172,8 +172,9 @@ type BudgetStatus struct {
 	CategoryID int64         `json:"categoryId"`
 	Category   string        `json:"category"`
 	Budget     types.Decimal `json:"budget"`
+	Carried    types.Decimal `json:"carried"` // saldo no gastado traído de meses anteriores (categorías con traspaso)
 	Spent      types.Decimal `json:"spent"`
-	Remaining  types.Decimal `json:"remaining"` // negativo cuando se excede
+	Remaining  types.Decimal `json:"remaining"` // tope + traspaso − gastado; negativo cuando se excede
 	Over       bool          `json:"over"`
 	Near       bool          `json:"near"` // ya gastó el 80 % o más del tope, sin excederlo
 }
@@ -184,6 +185,7 @@ type CategoryBudgetView struct {
 	Category      string        `json:"category"`
 	Amount        types.Decimal `json:"amount"`
 	EffectiveFrom string        `json:"effectiveFrom"` // YYYY-MM desde el que rige
+	Rollover      bool          `json:"rollover"`      // lo no gastado pasa al mes siguiente
 }
 
 type CategoryBudgetsResult struct {

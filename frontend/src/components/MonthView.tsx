@@ -16,7 +16,7 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { greaterThan, isNegative, isZero, ratio, subtract } from '@/lib/money'
+import { greaterThan, isNegative, isZero, ratio, subtract, sum } from '@/lib/money'
 import { currentPeriod, formatCLP, formatDate, formatUF, periodLabel } from '@/lib/format'
 import { BankCodes, BankDescription, Bar, Button, Empty, IconButton, QueryError, Section, Spinner, StatCard, TagChips } from './ui'
 import { ExpenseForm } from './ExpenseForm'
@@ -176,7 +176,7 @@ export function MonthView() {
           {overBudget.map((b, i) => (
             <span key={b.categoryId}>
               {i > 0 && ', '}
-              <strong>{b.category}</strong> ({formatCLP(b.spent)} de {formatCLP(b.budget)})
+              <strong>{b.category}</strong> ({formatCLP(b.spent)} de {formatCLP(sum([b.budget, b.carried]))})
             </span>
           ))}
           .
@@ -188,7 +188,7 @@ export function MonthView() {
           {nearBudget.map((b, i) => (
             <span key={b.categoryId}>
               {i > 0 && ', '}
-              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(b.budget)})
+              <strong>{b.category}</strong> (quedan {formatCLP(b.remaining)} de {formatCLP(sum([b.budget, b.carried]))})
             </span>
           ))}
           .
@@ -466,7 +466,7 @@ export function MonthView() {
                           <div className="flex-1">
                             {budget ? (
                               <Bar
-                                fill={ratio(budget.spent, budget.budget)}
+                                fill={ratio(budget.spent, sum([budget.budget, budget.carried]))}
                                 tone={budget.over ? 'danger' : budget.near ? 'warning' : 'success'}
                               />
                             ) : (
@@ -480,8 +480,9 @@ export function MonthView() {
                             className={`mt-0.5 text-right text-xs ${budget.over ? 'text-danger' : budget.near ? 'text-warning' : 'text-slate-500'}`}
                           >
                             {budget.over
-                              ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(budget.budget)}`
-                              : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(budget.budget)}`}
+                              ? `Excedido por ${formatCLP(budget.remaining.replace('-', ''))} · tope ${formatCLP(sum([budget.budget, budget.carried]))}`
+                              : `Quedan ${formatCLP(budget.remaining)} de ${formatCLP(sum([budget.budget, budget.carried]))}`}
+                            {!isZero(budget.carried) && ` (incluye ${formatCLP(budget.carried)} traspasado)`}
                           </div>
                         )}
                       </li>
