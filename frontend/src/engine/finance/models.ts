@@ -382,6 +382,7 @@ export function rowToFixedExpense(r: SqlRow): FixedExpense {
     endPeriod: asString(r.end_period),
     intervalMonths: asNumber(r.interval_months),
     currency: asString(r.currency),
+    dueDay: asNullableNumber(r.due_day),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

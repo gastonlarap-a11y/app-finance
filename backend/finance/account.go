@@ -3,6 +3,7 @@ package finance
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,7 +65,7 @@ func validAccount(name, kind, opening, openingPeriod string) (string, types.Deci
 	if name == "" {
 		return "", types.Zero(), shared.NewError(shared.ErrValidation, "el nombre es obligatorio")
 	}
-	if !validAccountKind(kind) {
+	if !slices.Contains(accountKinds, kind) {
 		return "", types.Zero(), shared.NewError(shared.ErrValidation, "tipo de cuenta inválido: "+kind)
 	}
 	if !validPeriod(openingPeriod) {
@@ -75,15 +76,6 @@ func validAccount(name, kind, opening, openingPeriod string) (string, types.Deci
 		return "", types.Zero(), shared.NewError(shared.ErrValidation, "saldo inicial inválido: "+opening)
 	}
 	return name, bal, nil
-}
-
-func validAccountKind(kind string) bool {
-	for _, k := range accountKinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
 }
 
 // CreateAccount adds an account with its balance at the start of openingPeriod

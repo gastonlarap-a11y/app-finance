@@ -29,6 +29,8 @@ import type {
   ExpenseResult,
   ExpenseSearchResult,
   FinanceServiceContract,
+  Due,
+  DuesResult,
   FixedExpense,
   FixedExpenseResult,
   FixedExpenseView,
@@ -109,6 +111,15 @@ import {
 } from '@/engine/finance/fixedexpense'
 import { normalizeDescriptor, ruleFor, suggestPattern } from '@/engine/finance/descriptor'
 import { amountGap, namesMatch } from '@/engine/finance/fixedmatch'
+import {
+  dayOfMonth,
+  DUE_LOOKBACK_DAYS,
+  DueCard,
+  DueFixed,
+  MAX_DUE_DAYS,
+  monthsSpanned,
+  shiftDays,
+} from '@/engine/finance/dues'
 import { cleanTagName, normalizeTags, tagKey } from '@/engine/finance/tags'
 import {
   buildCutoffs,
@@ -2049,6 +2060,111 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
   }
 
+  // paidFixedMonths is `${fixedId}|${period}` for every paid month of the
+  // given fixed expenses.
+  function paidFixedMonths(fixed: readonly FixedExpense[]): Set<string> {
+    const paid = new Set<string>()
+    if (fixed.length === 0) return paid
+    const placeholders = fixed.map(() => '?').join(', ')
+    for (const r of db.query(
+      `SELECT fixed_expense_id, period FROM fixed_expense_payments WHERE fixed_expense_id IN (${placeholders})`,
+      fixed.map((fe) => fe.id),
+    )) {
+      paid.add(`${asNumber(r.fixed_expense_id)}|${asString(r.period)}`)
+    }
+    return paid
+  }
+
+  // upcomingDues mirrors Go: unpaid card statements and fixed expenses with a
+  // due day whose due date falls in [from, to], soonest first.
+  function upcomingDues(today: string, from: string, to: string): Due[] {
+    const cardDue = new Map<string, { card: number; period: string; date: string }>()
+    for (const r of db.query(
+      `SELECT card_id, period, due_date FROM card_statements
+        WHERE user_id = ? AND card_id IS NOT NULL AND due_date BETWEEN ? AND ?`,
+      [uid(), from, to],
+    )) {
+      const card = asNumber(r.card_id)
+      const period = asString(r.period)
+      const date = asString(r.due_date)
+      const key = `${card}|${period}`
+      const seen = cardDue.get(key)
+      // A card's national and international statements are paid together.
+      if (!seen || date < seen.date) cardDue.set(key, { card, period, date })
+    }
+
+    const periods = monthsSpanned(from, to)
+    for (const { period } of cardDue.values()) if (!periods.includes(period)) periods.push(period)
+    const { fixed, amountsByID, uf } = loadFixed(false)
+    const paid = paidFixedMonths(fixed)
+
+    const pendingByCard = new Map<string, Money>()
+    const addPending = (key: string, amount: Money) =>
+      pendingByCard.set(key, (pendingByCard.get(key) ?? Money.zero()).add(amount))
+    if (cardDue.size > 0) {
+      const placeholders = periods.map(() => '?').join(', ')
+      for (const r of db.query(
+        `SELECT e.card_id AS card_id, i.period AS period, i.amount AS amount
+           FROM installments i JOIN expenses e ON e.id = i.expense_id
+          WHERE i.user_id = ? AND i.status = ? AND e.deleted_at IS NULL AND e.card_id IS NOT NULL
+            AND i.period IN (${placeholders})`,
+        [uid(), StatusPendiente, ...periods],
+      )) {
+        addPending(`${asNumber(r.card_id)}|${asString(r.period)}`, Money.fromString(asString(r.amount)))
+      }
+    }
+
+    const dues: Due[] = []
+    for (const fe of fixed) {
+      for (const p of periods) {
+        if (!billsIn(fe, p) || paid.has(`${fe.id}|${p}`)) continue
+        const clp = fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, p).clp
+        if (fe.cardId != null) {
+          const key = `${fe.cardId}|${p}`
+          if (cardDue.has(key)) addPending(key, clp)
+          continue
+        }
+        if (fe.dueDay == null) continue
+        const date = dayOfMonth(p, fe.dueDay)
+        if (date < from || date > to) continue
+        dues.push({
+          kind: DueFixed,
+          refId: fe.id,
+          label: fe.description,
+          period: p,
+          dueDate: date,
+          amount: clp.toString(),
+          overdue: date < today,
+        })
+      }
+    }
+
+    if (cardDue.size > 0) {
+      const cards = cardMapAll()
+      for (const [key, { card, period, date }] of cardDue) {
+        const owed = pendingByCard.get(key)
+        const c = cards.get(card)
+        if (!c || !owed || !owed.gt(Money.zero())) continue // paid (or nothing recorded)
+        dues.push({
+          kind: DueCard,
+          refId: card,
+          label: c.name,
+          period,
+          dueDate: date,
+          amount: owed.toString(),
+          overdue: date < today,
+        })
+      }
+    }
+
+    return dues.sort(
+      (a, b) =>
+        (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0) ||
+        (a.label < b.label ? -1 : a.label > b.label ? 1 : 0) ||
+        a.refId - b.refId,
+    )
+  }
+
   // reopenableIds mirrors Go's reopenableItems: confirmed items whose every
   // target (expense, income, fixed expense) is in the trash or gone.
   function reopenableIds(): Set<number> {
@@ -3454,6 +3570,26 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         uid(),
       ])
       return {}
+    },
+
+    async SetFixedExpenseDueDay(id: number, day: number | null): Promise<OpResult> {
+      if (day !== null && (!Number.isInteger(day) || day < 1 || day > 31)) {
+        return { error: newError(ErrValidation, 'el día de vencimiento debe estar entre 1 y 31') }
+      }
+      db.exec('UPDATE fixed_expenses SET due_day = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [day, id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'gasto fijo no encontrado') }
+      return {}
+    },
+
+    async UpcomingDues(today: string, days: number): Promise<DuesResult> {
+      const parsed = /^\d{4}-\d{2}-\d{2}$/.test(today) ? parseDate(today) : null
+      if (!parsed || !inYearRange(parsed.parts.year)) {
+        return { error: newError(ErrValidation, 'fecha inválida (AAAA-MM-DD)') }
+      }
+      if (!Number.isInteger(days) || days < 0 || days > MAX_DUE_DAYS) {
+        return { error: newError(ErrValidation, `los días deben estar entre 0 y ${MAX_DUE_DAYS}`) }
+      }
+      return { data: upcomingDues(today, shiftDays(today, -DUE_LOOKBACK_DAYS), shiftDays(today, days)) }
     },
 
     async DeleteFixedExpense(id: number): Promise<OpResult> {

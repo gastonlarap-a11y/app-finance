@@ -182,6 +182,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if err != nil || len(tags) != 1 {
 		t.Fatalf("ListTags = %+v (err %v), want 1", tags, err)
 	}
+	dueDay := 10
+	if r := fin.SetFixedExpenseDueDay(ctx, fe.Data.ID, &dueDay); r.Error != nil {
+		t.Fatalf("SetFixedExpenseDueDay: %v", r.Error)
+	}
+	if r := fin.UpcomingDues(ctx, period+"-05", 10); r.Error != nil || len(r.Data) != 1 {
+		t.Fatalf("Gastón UpcomingDues = %+v, want his fixed expense", r)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -209,6 +216,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetInstallmentAmount", func() finance.OpResult {
 			return fin.SetInstallmentAmount(ctx, firstCuotaOf(t, bdb, expense.Data.ID), "1")
 		}},
+		{"SetFixedExpenseDueDay", func() finance.OpResult { return fin.SetFixedExpenseDueDay(ctx, fe.Data.ID, nil) }},
 		{"DeleteFixedExpense", func() finance.OpResult { return fin.DeleteFixedExpense(ctx, fe.Data.ID) }},
 		{"ConfirmImportItem", func() finance.OpResult {
 			return finance.OpResult{Error: fin.ConfirmImportItem(ctx, itemID, period+"-05", "x", "", "", nil, finance.KindUnico, "1", 1, "").Error}
@@ -333,6 +341,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.ListAccounts(ctx, period); r.Error != nil || len(r.Data.Accounts) != 0 {
 		t.Fatalf("Camila ListAccounts = %+v, want none", r)
+	}
+	if r := fin.UpcomingDues(ctx, period+"-05", 10); r.Error != nil || len(r.Data) != 0 {
+		t.Fatalf("Camila UpcomingDues = %+v, want none", r)
 	}
 
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.

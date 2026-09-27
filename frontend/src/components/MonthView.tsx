@@ -28,6 +28,7 @@ import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
 import { RefundDialog } from './RefundDialog'
 import { CuotaDialog } from './CuotaDialog'
 import { ReceivableDialog, ReceivablesPanel } from './Receivables'
+import { DuesBanner } from './DuesBanner'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -174,6 +175,7 @@ export function MonthView() {
 
   return (
     <div className={`space-y-5 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
+      <DuesBanner />
       {overBudget.length > 0 && (
         <div role="status" className="rounded-base bg-danger/10 px-4 py-3 text-sm text-red-200 ring-1 ring-danger/30">
           Presupuesto excedido en{' '}

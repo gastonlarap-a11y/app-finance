@@ -153,8 +153,26 @@ export interface FixedExpense {
   endPeriod: string
   intervalMonths: number // bills every N months from startPeriod (1, 2, 3, 4, 6, 12)
   currency: string // 'CLP' | 'UF': currency of its amounts
+  dueDay: number | null // day of the month it falls due (1–31; null = no reminder)
   createdAt: string
   deletedAt?: string | null
+}
+
+// A payment coming up (or just missed) that is still unpaid: a card's
+// statement ("pagar hasta") or a fixed expense with a due day.
+export interface Due {
+  kind: string // 'tarjeta' | 'fijo'
+  refId: number // card id | fixed expense id
+  label: string
+  period: string // YYYY-MM billed
+  dueDate: string // YYYY-MM-DD
+  amount: string // still pending, in pesos
+  overdue: boolean
+}
+
+export interface DuesResult {
+  data?: Due[] | null
+  error?: AppError | null
 }
 
 export interface FixedExpenseView extends FixedExpense {
@@ -885,6 +903,8 @@ export interface FinanceServiceContract {
   ): Promise<FixedExpenseResult>
   SetFixedExpenseAmount(id: number, fromPeriod: string, amount: string): Promise<OpResult>
   EndFixedExpense(id: number, fromPeriod: string): Promise<OpResult>
+  SetFixedExpenseDueDay(id: number, day: number | null): Promise<OpResult>
+  UpcomingDues(today: string, days: number): Promise<DuesResult>
   DeleteFixedExpense(id: number): Promise<OpResult>
   RestoreFixedExpense(id: number): Promise<OpResult>
   SetFixedExpensePaid(id: number, period: string, paid: boolean): Promise<OpResult>

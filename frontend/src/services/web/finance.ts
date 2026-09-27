@@ -32,6 +32,8 @@ export type {
   CategoryResult,
   CategoryTotal,
   CategoryYearRow,
+  Due,
+  DuesResult,
   Expense,
   ExpenseFilter,
   ExpenseHit,

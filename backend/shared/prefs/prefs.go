@@ -33,6 +33,9 @@ type Prefs struct {
 	// (db.MarkShared). It lives here, not in the database: the database file
 	// travels between devices.
 	DeviceID string `json:"deviceId"`
+	// LastDueReminder is the day (YYYY-MM-DD) the due-date notification last
+	// went out: at most one a day, however often the app opens.
+	LastDueReminder string `json:"lastDueReminder"`
 }
 
 // DeviceID returns this computer's sync id, creating it on first use.

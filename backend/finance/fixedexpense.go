@@ -39,6 +39,7 @@ type FixedExpense struct {
 	EndPeriod      string     `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
 	IntervalMonths int        `bun:"interval_months,notnull,default:1" json:"intervalMonths"`
 	Currency       string     `bun:"currency,notnull,default:'CLP'" json:"currency"` // CLP | UF
+	DueDay         *int       `bun:"due_day" json:"dueDay"`                          // día del mes en que vence; nil = sin recordatorio
 	CreatedAt      time.Time  `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
 	DeletedAt      *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
 }

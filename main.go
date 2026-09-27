@@ -19,6 +19,7 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/diagnostics"
 	"github.com/gastonlarap-a11y/app-finance/backend/finance"
 	"github.com/gastonlarap-a11y/app-finance/backend/mailsync"
+	"github.com/gastonlarap-a11y/app-finance/backend/reminders"
 	"github.com/gastonlarap-a11y/app-finance/backend/reports"
 	"github.com/gastonlarap-a11y/app-finance/backend/settings"
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/backup"
@@ -177,6 +178,8 @@ func main() {
 		application.NewService(settingsSvc),
 		application.NewService(mailSvc),
 		application.NewService(updatesSvc),
+		// Native due-date notifications; disables itself where they cannot work.
+		application.NewService(reminders.NewService(financeSvc, appName)),
 		application.NewService(diagnostics.NewDiagnosticsService()),
 		application.NewService(reports.NewReportsService()),
 		// add new services here as you create new domains

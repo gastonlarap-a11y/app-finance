@@ -230,6 +230,8 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const cuotaID = ok(await finance.MonthlySummary(period)).data!.movimientos.find(
       (m) => m.expenseId === expense.data!.id,
     )!.installmentId
+    ok(await finance.SetFixedExpenseDueDay(fe.data!.id, 10))
+    expect(ok(await finance.UpcomingDues(`${period}-05`, 10)).data).toHaveLength(1)
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -242,6 +244,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.PrepayExpense(expense.data!.id, period),
       () => finance.SetExpenseCurrency(expense.data!.id, 'USD', '1', '1'),
       () => finance.SetInstallmentAmount(cuotaID, '1'),
+      () => finance.SetFixedExpenseDueDay(fe.data!.id, null),
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
       () => finance.LinkImportItem(itemID, expense.data!.id),
@@ -279,6 +282,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(ok(await finance.SearchExpenses(filter({ text: '77777777' }))).data?.count).toBe(0) // Gastón's bank code
     expect(ok(await finance.ListReceivables()).data).toEqual([])
     expect(ok(await finance.ListAccounts(period)).data?.accounts).toEqual([])
+    expect(ok(await finance.UpcomingDues(`${period}-05`, 10)).data).toEqual([])
     expect(ok(await finance.ListCategoryBudgets(period)).data).toEqual([])
     for (const m of ok(await finance.CommitmentsForecast(period, 3)).data!) expect(m.comprometido).toBe('0')
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])
