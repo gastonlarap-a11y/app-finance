@@ -624,6 +624,11 @@ func (s *FinanceService) ConfirmImportItem(
 		if err := generateInstallmentsFrom(ctx, tx, ex, cutoff, first, paid); err != nil {
 			return fmt.Errorf("generating installments: %w", err)
 		}
+		if bankRounded(item, ex) {
+			if err := settleLastCuota(ctx, tx, uid, ex.ID, item.Amount); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportConfirmado).Set("expense_id = ?", ex.ID).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx); err != nil {

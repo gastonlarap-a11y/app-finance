@@ -11,6 +11,16 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/users"
 )
 
+// firstCuotaOf is the id of an expense's cuota 1.
+func firstCuotaOf(t *testing.T, bdb *bun.DB, expenseID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := bdb.NewRaw("SELECT id FROM installments WHERE expense_id = ? AND number = 1", expenseID).Scan(t.Context(), &id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func rowsOf(t *testing.T, bdb *bun.DB, table string, userID int64) int {
 	t.Helper()
 	var n int

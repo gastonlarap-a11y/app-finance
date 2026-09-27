@@ -1578,6 +1578,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
     const refused = replanInstallments(ex.id, merged, { before: '', after: first })
     if (refused) throw new TxAbort(refused)
+    if (bankPlan && bankRounded(item, total, amount)) settleLastCuota(ex.id, Money.fromString(item.amount))
     // The statement's cuota n means cuotas 1..n-1 were already billed.
     if (bankPlan && item.firstPeriod !== '' && item.installmentNumber > 1) {
       db.exec(
@@ -1591,6 +1592,44 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       item.id,
       uid(),
     ])
+  }
+
+  // bankRounded mirrors Go: the expense follows a CLP bank item's own plan
+  // (same cuota count and cuota), so the item's amount is the plan's total.
+  function bankRounded(item: ImportItem, total: number, cuota: Money): boolean {
+    if (item.currency !== 'CLP' || item.installmentAmount === '' || total < 2 || total !== item.installmentsTotal) {
+      return false
+    }
+    const bank = amountOrError(item.installmentAmount).amount
+    return bank !== undefined && bank.cmp(cuota) === 0
+  }
+
+  // settleLastCuota mirrors Go: the pending last cuota takes the bank's
+  // rounding so the plan adds up to its purchase total.
+  function settleLastCuota(expenseId: number, total: Money): void {
+    const insts = db
+      .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [expenseId, uid()])
+      .map(rowToInstallment)
+    const last = insts.at(-1)
+    if (insts.length < 2 || !last) return
+    const others = insts.slice(0, -1).reduce((acc, i) => acc.add(Money.fromString(i.amount)), Money.zero())
+    const want = total.sub(others)
+    if (last.status === StatusPagado || !want.gt(Money.zero()) || want.cmp(Money.fromString(last.amount)) === 0) return
+    db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [want.toString(), last.id, uid()])
+  }
+
+  // pendingCuotaOf mirrors Go: a pending cuota of a live expense of the profile.
+  function pendingCuotaOf(id: number): { error?: ReturnType<typeof newError> } {
+    const row = db.query(
+      `SELECT * FROM installments WHERE id = ? AND user_id = ?
+       AND expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)`,
+      [id, uid(), uid()],
+    )[0]
+    if (!row) return { error: newError(ErrNotFound, 'cuota no encontrada') }
+    if (rowToInstallment(row).status === StatusPagado) {
+      return { error: newError(ErrValidation, 'la cuota ya está pagada: desmárcala para cambiarla') }
+    }
+    return {}
   }
 
   // cutoffOfExpense: the cutoff of the expense's card (trashed included), or none.
@@ -2955,6 +2994,30 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // Cuotas of an expense in the trash are frozen with it (mirrors Go).
+    async SetInstallmentAmount(id: number, amount: string): Promise<OpResult> {
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el monto debe ser mayor a 0') }
+      const pending = pendingCuotaOf(id)
+      if (pending.error) return { error: pending.error }
+      db.exec('UPDATE installments SET amount = ? WHERE id = ? AND user_id = ?', [parsed.amount.toString(), id, uid()])
+      return {}
+    },
+
+    async PrepayExpense(expenseID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const live = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])
+      if (live.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      db.exec('UPDATE installments SET period = ? WHERE expense_id = ? AND user_id = ? AND status = ?', [
+        period,
+        expenseID,
+        uid(),
+        StatusPendiente,
+      ])
+      if (db.changes() === 0) return { error: newError(ErrValidation, 'el gasto no tiene cuotas pendientes') }
+      return {}
+    },
+
     async SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult> {
       const user = uid()
       const liveParent = 'expense_id IN (SELECT id FROM expenses WHERE user_id = ? AND deleted_at IS NULL)'
@@ -4025,6 +4088,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         const created = placed
           ? insertExpense(ex, billing.cutoff, item.firstPeriod, item.installmentNumber - 1)
           : insertExpense(ex, billing.cutoff)
+        if (bankRounded(item, ex.installmentsTotal, ex.installmentAmount)) {
+          settleLastCuota(created.id, Money.fromString(item.amount))
+        }
         db.exec('UPDATE import_items SET status = ?, expense_id = ? WHERE id = ? AND user_id = ?', [
           ImportConfirmado,
           created.id,

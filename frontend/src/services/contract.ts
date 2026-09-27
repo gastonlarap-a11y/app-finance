@@ -772,6 +772,8 @@ export interface FinanceServiceContract {
   DeleteExpense(id: number): Promise<OpResult>
   RestoreExpense(id: number): Promise<OpResult>
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
+  SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
+  PrepayExpense(expenseID: number, period: string): Promise<OpResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   DeleteRefund(id: number): Promise<OpResult>
 

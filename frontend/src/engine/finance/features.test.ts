@@ -225,6 +225,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await finance.CreateFixedExpense('Arriendo', '', null, reconciled, '10', 12, 'UF'))
     expect((await finance.UFMonthsNeeded())[0]).toBe(reconciled)
     const refund = ok(await finance.CreateRefund(expense.data!.id, period, '1000', '')).data!
+    const cuotaID = ok(await finance.MonthlySummary(period)).data!.movimientos.find(
+      (m) => m.expenseId === expense.data!.id,
+    )!.installmentId
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -233,6 +236,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetCategoryBudget(cat.data!.id, period, '1'),
       () => finance.RemoveCategoryBudget(cat.data!.id, period),
       () => finance.SetCategoryRollover(cat.data!.id, true),
+      () => finance.PurgeTrashItem('expense', expense.data!.id),
+      () => finance.PrepayExpense(expense.data!.id, period),
+      () => finance.SetInstallmentAmount(cuotaID, '1'),
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
       () => finance.LinkImportItem(itemID, expense.data!.id),

@@ -26,6 +26,7 @@ import { TrendPanel } from './TrendPanel'
 import { StatementBanner } from './CardStatements'
 import { ReconcileDialog, type ReconcileMode } from './ReconcileDialog'
 import { RefundDialog } from './RefundDialog'
+import { CuotaDialog } from './CuotaDialog'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -65,6 +66,7 @@ export function MonthView() {
   const [filterCardId, setFilterCardId] = useState<number | ''>('')
   const [reconcile, setReconcile] = useState<ReconcileMode | null>(null)
   const [refundFor, setRefundFor] = useState<Movimiento | null>(null)
+  const [cuotaFor, setCuotaFor] = useState<Movimiento | null>(null)
   const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
 
   function openNewExpense() {
@@ -432,6 +434,17 @@ export function MonthView() {
                                     >
                                       ↩
                                     </IconButton>{' '}
+                                    {m.total > 1 && m.status !== 'pagado' && (
+                                      <>
+                                        <IconButton
+                                          label={`Cuotas de ${m.description}: monto o prepago`}
+                                          onClick={() => setCuotaFor(m)}
+                                          className="text-slate-400 hover:text-primary"
+                                        >
+                                          ⋯
+                                        </IconButton>{' '}
+                                      </>
+                                    )}
                                     <IconButton
                                       label={`Eliminar ${m.description}`}
                                       onClick={() => setConfirmExpId(m.expenseId)}
@@ -557,6 +570,17 @@ export function MonthView() {
           }
           onClose={() => setShowForm(false)}
           onSaved={reload}
+        />
+      )}
+      {cuotaFor && (
+        <CuotaDialog
+          cuota={cuotaFor}
+          defaultPeriod={summary.period}
+          onClose={() => setCuotaFor(null)}
+          onSaved={() => {
+            setCuotaFor(null)
+            reload()
+          }}
         />
       )}
       {refundFor && (

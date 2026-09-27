@@ -127,6 +127,11 @@ func mergeIntoExpense(ctx context.Context, tx bun.Tx, uid int64, item *ImportIte
 	if err := replanInstallments(ctx, tx, &merged, placementChange{after: first}); err != nil {
 		return err
 	}
+	if bankPlan && bankRounded(item, &merged) {
+		if err := settleLastCuota(ctx, tx, uid, ex.ID, item.Amount); err != nil {
+			return err
+		}
+	}
 	// The statement's cuota n means cuotas 1..n-1 were already billed.
 	if bankPlan && item.FirstPeriod != "" && item.InstallmentNumber > 1 {
 		if _, err := tx.NewUpdate().Model((*Installment)(nil)).
