@@ -3,12 +3,10 @@
 // down — rawclasses.test.ts fails on a new raw class, and asks to lower the
 // number here when a file improves. The migration is done when this is empty.
 export const RAW_CLASS_BASELINE: Readonly<Record<string, number>> = {
-  '../App.tsx': 17,
   '../components/Accounts.tsx': 7,
-  '../components/BackupControl.tsx': 5,
   '../components/CardStatements.tsx': 27,
   '../components/CardsView.tsx': 6,
-  '../components/CategoriesView.tsx': 8,
+  '../components/CategoriesView.tsx': 7,
   '../components/CsvImport.tsx': 9,
   '../components/CuotaDialog.tsx': 4,
   '../components/DuesBanner.tsx': 8,
@@ -16,7 +14,7 @@ export const RAW_CLASS_BASELINE: Readonly<Record<string, number>> = {
   '../components/ExpenseForm.tsx': 17,
   '../components/FixedExpensesView.tsx': 12,
   '../components/ForecastView.tsx': 28,
-  '../components/ImportInboxView.tsx': 45,
+  '../components/ImportInboxView.tsx': 38,
   '../components/IncomePanel.tsx': 11,
   '../components/MailSettings.tsx': 11,
   '../components/MerchantsView.tsx': 5,
@@ -35,8 +33,7 @@ export const RAW_CLASS_BASELINE: Readonly<Record<string, number>> = {
   '../components/TrashView.tsx': 12,
   '../components/TrendPanel.tsx': 11,
   '../components/UpdateNotice.tsx': 13,
-  '../components/UserSwitcher.tsx': 26,
-  '../components/WebBackup.tsx': 17,
+  '../components/WebBackup.tsx': 16,
   '../components/WebUpdateBanner.tsx': 2,
   '../components/YearView.tsx': 22,
   '../main.tsx': 5,

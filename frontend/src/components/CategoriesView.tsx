@@ -1,17 +1,17 @@
 import { useState, type SubmitEvent } from 'react'
-import { useAtomValue } from 'jotai'
 import { FinanceService, type Category, type CategoryBudgetView } from '@/services/finance'
-import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { formatCLP, periodLabel } from '@/lib/format'
+import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
-import { TagsSection } from './TagsSection'
 
+// CategoriesView is Configuración › Categorías y presupuestos. Budgets are
+// effective-dated, so it shows the ones in force in a month of its own
+// (today by default), independent of the month the Resumen is on.
 export function CategoriesView() {
   const version = useVersion('ledger')
-  const period = useAtomValue(periodAtom)
+  const [period, setPeriod] = useState(currentPeriod)
   const invalidate = useInvalidate()
   const reload = () => invalidate('ledger')
   const [editing, setEditing] = useState<Category | null>(null)
@@ -56,7 +56,15 @@ export function CategoriesView() {
         <Empty>Aún no tienes categorías. Crea una para clasificar tus gastos.</Empty>
       ) : (
         <>
-          <p className="mb-3 text-xs text-slate-500">Presupuestos vigentes en {periodLabel(period)}.</p>
+          <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+            Presupuestos vigentes en
+            <input
+              type="month"
+              className="h-8 rounded-md bg-panel px-2 text-fg outline-none ring-1 ring-inset ring-line-input focus:ring-2 focus:ring-focus"
+              value={period}
+              onChange={(e) => e.target.value && setPeriod(e.target.value)}
+            />
+          </label>
           <ul className="space-y-2">
             {categories.map((c) => {
               const budget = budgetById.get(c.id)
@@ -120,7 +128,6 @@ export function CategoriesView() {
         />
       )}
     </Section>
-    <TagsSection />
     </div>
   )
 }

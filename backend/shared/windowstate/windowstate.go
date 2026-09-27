@@ -14,7 +14,22 @@ type State struct {
 	Maximized  bool
 }
 
+// MinWidth and MinHeight are the smallest window the layout is designed for
+// (sidebar rail plus content); main.go gives them to Wails as the window minimum.
+const (
+	MinWidth  = 960
+	MinHeight = 640
+)
+
 func defaultState() State { return State{X: 100, Y: 100, W: 1200, H: 800} }
+
+// Clamped raises the size to the window minimum, so a geometry saved before
+// the minimum existed never opens the window below it.
+func (s State) Clamped() State {
+	s.W = max(s.W, MinWidth)
+	s.H = max(s.H, MinHeight)
+	return s
+}
 
 // appSetting is a tiny key/value row in the shared app_settings table.
 type appSetting struct {

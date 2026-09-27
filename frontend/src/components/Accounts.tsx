@@ -6,7 +6,8 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative } from '@/lib/money'
-import { formatCLP, periodLabel } from '@/lib/format'
+import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
+import { Link } from './Link'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
 
 const KIND_LABEL: Record<string, string> = {
@@ -55,10 +56,45 @@ export function AccountSelect({
   )
 }
 
-// AccountsSection shows every account at the close of the month on screen: a
-// lens on the same ledger (the app's total balance does not change).
-export function AccountsSection() {
-  const period = useAtomValue(periodAtom)
+// AccountsSettings is Configuración › Cuentas: the accounts, with their
+// balance at the close of the current month (month by month they show in the
+// Resumen panel, AccountBalancesPanel).
+export function AccountsSettings() {
+  return <AccountsSection period={currentPeriod()} />
+}
+
+// AccountBalancesPanel shows, in the Resumen, each account at the close of the
+// month on screen. Nothing while the profile has no accounts.
+export function AccountBalancesPanel({ period }: { period: string }) {
+  const version = useVersion('ledger')
+  const invalidate = useInvalidate()
+  const query = useQuery(`account-balances:${period}:${version}`, async () => {
+    const res = await FinanceService.ListAccounts(period)
+    if (res.error || !res.data) throw new Error(res.error?.message ?? 'cuentas no disponibles')
+    return res.data.accounts
+  })
+  if (query.status !== 'error' && (query.data?.length ?? 0) === 0) return null
+  return (
+    <Section title="Cuentas" action={<Link to={{ page: 'config', section: 'cuentas' }}>Administrar</Link>}>
+      {query.status === 'error' ? (
+        <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
+      ) : (
+        <ul className="space-y-2 text-sm">
+          {(query.data ?? []).map((a) => (
+            <li key={a.id} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate text-fg-muted">{a.name}</span>
+              <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  )
+}
+
+// AccountsSection shows every account at the close of `period`: a lens on the
+// same ledger (the app's total balance does not change).
+function AccountsSection({ period }: { period: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
   const [editing, setEditing] = useState<Account | null | undefined>(undefined)
@@ -75,7 +111,7 @@ export function AccountsSection() {
   }
 
   return (
-    <Section title={`Cuentas · ${periodLabel(period)}`} action={<Button onClick={() => setEditing(null)}>+ Nueva cuenta</Button>}>
+    <Section title={`Cuentas · saldo a ${periodLabel(period)}`} action={<Button onClick={() => setEditing(null)}>+ Nueva cuenta</Button>}>
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
       ) : !query.data ? (

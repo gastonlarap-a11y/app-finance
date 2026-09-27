@@ -1,6 +1,8 @@
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom } from 'jotai'
 import { FinanceService, type CategoryYearRow, type YearSummary } from '@/services/finance'
-import { periodAtom, tabAtom } from '@/atoms/finance'
+import { periodAtom } from '@/atoms/finance'
+import { navigate } from '@/lib/useRoute'
+import { Link } from './Link'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
@@ -21,7 +23,6 @@ export function YearView() {
   const [period, setPeriod] = useAtom(periodAtom)
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
-  const setTab = useSetAtom(tabAtom)
   const year = yearOf(period)
 
   const query = useQuery(`${year}:${version}`, async () => {
@@ -32,7 +33,7 @@ export function YearView() {
 
   function goToMonth(p: string) {
     setPeriod(p)
-    setTab('mes')
+    navigate({ page: 'resumen' })
   }
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
@@ -41,7 +42,11 @@ export function YearView() {
   const stale = query.status === 'loading'
 
   if (!hasActivity(data)) {
-    return <Empty>Sin datos para {year}. Registra sueldo o gastos en la pestaña Mes.</Empty>
+    return (
+      <Empty>
+        Sin datos para {year}. Registra sueldo o gastos en el <Link to={{ page: 'resumen' }}>Resumen del mes</Link>.
+      </Empty>
+    )
   }
 
   const barMax = maxAbs(data.months.flatMap((m) => [m.gastos, m.ingresos]))

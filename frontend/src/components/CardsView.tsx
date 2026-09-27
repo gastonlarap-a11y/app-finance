@@ -4,14 +4,16 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
+import { Link } from './Link'
 import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
-import { CardStatementsSection } from './CardStatements'
-import { AccountSelect, AccountsSection, useAccounts } from './Accounts'
+import { AccountSelect, useAccounts } from './Accounts'
 
+// CardsView is Configuración › Tarjetas. Their statements live in Importar ›
+// Estados de cuenta; this month's use of each card, in the Resumen.
 export function CardsView() {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
-  // Card names and billing days also show in the statements section below.
+  // Card names and billing days also show in the imported statements.
   const reload = () => invalidate('ledger', 'imports')
   const [editing, setEditing] = useState<Card | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -84,6 +86,13 @@ export function CardsView() {
           </ul>
         )}
 
+        {cards.length > 0 && (
+          <p className="mt-3 text-sm text-fg-muted">
+            Sus estados de cuenta importados están en{' '}
+            <Link to={{ page: 'importar', tab: 'estados' }}>Importar › Estados de cuenta</Link>.
+          </p>
+        )}
+
         {showForm && (
           <CardForm
             card={editing}
@@ -92,8 +101,6 @@ export function CardsView() {
           />
         )}
       </Section>
-      <AccountsSection />
-      <CardStatementsSection />
     </div>
   )
 }

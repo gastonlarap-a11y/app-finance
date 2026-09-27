@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useAtomValue } from 'jotai'
+import { useState } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import {
   FinanceService,
   SOURCE_FIJO,
@@ -11,7 +11,7 @@ import {
   type Movimiento,
   type OpResult,
 } from '@/services/finance'
-import { periodAtom } from '@/atoms/finance'
+import { periodAtom, quickAddAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
@@ -29,6 +29,8 @@ import { RefundDialog } from './RefundDialog'
 import { CuotaDialog } from './CuotaDialog'
 import { ReceivableDialog, ReceivablesPanel } from './Receivables'
 import { DuesBanner } from './DuesBanner'
+import { AccountBalancesPanel } from './Accounts'
+import { Link } from './Link'
 import { exportBasename, monthTable } from '@/lib/exportTables'
 
 const filterCls = 'rounded bg-surface px-2 py-1.5 text-sm ring-1 ring-slate-700 focus:ring-2 focus:ring-primary'
@@ -60,7 +62,6 @@ export function MonthView() {
     }
   })
 
-  const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
   const [confirmExpId, setConfirmExpId] = useState<number | null>(null)
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
@@ -71,24 +72,8 @@ export function MonthView() {
   const [cuotaFor, setCuotaFor] = useState<Movimiento | null>(null)
   const [owedFor, setOwedFor] = useState<Movimiento | null>(null)
   const [confirmRefundId, setConfirmRefundId] = useState<number | null>(null)
-
-  function openNewExpense() {
-    setEditing(null)
-    setShowForm(true)
-  }
-
-  // "n" opens the new-expense form (ignored while typing or inside a dialog).
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== 'n' || e.altKey || e.ctrlKey || e.metaKey) return
-      const t = e.target
-      if (t instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.closest('dialog'))) return
-      e.preventDefault()
-      openNewExpense()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // New expenses go through the app-wide dialog (QuickAddHost, also on the N key).
+  const openNewExpense = useSetAtom(quickAddAtom)
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
   if (!query.data) return <Spinner />
@@ -143,10 +128,7 @@ export function MonthView() {
 
   function editExpense(expenseId: number) {
     const exp = expenses.find((e) => e.id === expenseId)
-    if (exp) {
-      setEditing(exp)
-      setShowForm(true)
-    }
+    if (exp) setEditing(exp)
   }
 
   const balanceTone = summary.alcanza ? 'success' : 'danger'
@@ -241,7 +223,7 @@ export function MonthView() {
                 {summary.movimientos.length > 0 && (
                   <ExportButton build={() => monthTable(summary)} basename={exportBasename('mes', summary.period)} />
                 )}
-                <Button onClick={openNewExpense}>
+                <Button onClick={() => openNewExpense(true)}>
                   + Agregar gasto <kbd className="ml-1 hidden rounded bg-white/15 px-1 text-xs md:inline">N</kbd>
                 </Button>
               </div>
@@ -384,9 +366,9 @@ export function MonthView() {
                               </td>
                               <td className="whitespace-nowrap py-2 text-right">
                                 {isFijo ? (
-                                  <span className="text-xs text-slate-500" title="Se administra en la pestaña Fijos">
-                                    Fijo ⚙
-                                  </span>
+                                  <Link to={{ page: 'fijos' }} className="text-xs text-slate-500 hover:underline">
+                                    Fijo ⚙<span className="sr-only">: se administra en Gastos fijos</span>
+                                  </Link>
                                 ) : isRefund && m.refundId !== null ? (
                                   confirmRefundId === m.refundId ? (
                                     <>
@@ -536,7 +518,9 @@ export function MonthView() {
 
           <Section title="Tarjetas (cupo)">
             {summary.porTarjeta.length === 0 ? (
-              <Empty>Sin tarjetas. Créalas en la pestaña Tarjetas.</Empty>
+              <Empty>
+                Sin tarjetas. <Link to={{ page: 'config', section: 'tarjetas' }}>Créalas en Configuración › Tarjetas</Link>.
+              </Empty>
             ) : (
               <ul className="space-y-4">
                 {summary.porTarjeta.map((t) => {
@@ -575,20 +559,18 @@ export function MonthView() {
               </ul>
             )}
           </Section>
+
+          <AccountBalancesPanel period={period} />
         </div>
       </div>
 
-      {showForm && (
+      {editing && (
         <ExpenseForm
           cards={summary.porTarjeta.map((t) => t.card)}
           categories={categories}
           merchants={merchants}
-          target={
-            editing
-              ? { mode: 'edit', expense: editing, tags: summary.movimientos.find((m) => m.expenseId === editing.id)?.tags ?? [] }
-              : { mode: 'create' }
-          }
-          onClose={() => setShowForm(false)}
+          target={{ mode: 'edit', expense: editing, tags: summary.movimientos.find((m) => m.expenseId === editing.id)?.tags ?? [] }}
+          onClose={() => setEditing(null)}
           onSaved={reload}
         />
       )}

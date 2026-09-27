@@ -4,6 +4,11 @@
    Theme switching itself happens through the tokens below. */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
+/* Desktop window chrome (main.go: hidden-inset title bar on macOS). data-os is
+   set by public/theme-init.js in the desktop build only; `mac:` leaves room
+   for the traffic lights drawn over the sidebar. */
+@custom-variant mac (&:where([data-os='mac'], [data-os='mac'] *));
+
 /* Semantic design tokens. Light values live here; the dark theme re-declares
    them on :root[data-theme='dark'] (set on <html> by public/theme-init.js and
    lib/theme.ts). Components use only these names — never a raw palette color —

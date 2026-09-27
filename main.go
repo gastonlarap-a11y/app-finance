@@ -187,7 +187,7 @@ func main() {
 		app.RegisterService(svc)
 	}
 
-	st := windowstate.Load(context.Background(), bdb)
+	st := windowstate.Load(context.Background(), bdb).Clamped()
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:           cfg.DisplayName,
 		Width:           st.W,
@@ -195,6 +195,17 @@ func main() {
 		X:               st.X,
 		Y:               st.Y,
 		InitialPosition: application.WindowXY,
+		MinWidth:        windowstate.MinWidth,
+		MinHeight:       windowstate.MinHeight,
+		// The dark canvas token (#0b0f18): what shows before the page paints.
+		// No translucent backdrop: with BackgroundTypeTranslucent, Wails beta.25 on
+		// macOS left the web content invisible.
+		BackgroundColour: application.NewRGB(11, 15, 24),
+		Mac: application.MacWindow{
+			// No title bar: the traffic lights sit over the sidebar, whose top band
+			// and the screen header drag the window (CSS --wails-draggable).
+			TitleBar: application.MacTitleBarHiddenInset,
+		},
 	})
 
 	saveWindowState := func() {

@@ -25,9 +25,9 @@ Stack:
 - **`users`** (`backend/users/`) — multi-user profiles with no login (see §14). Owns the profile CRUD,
   the in-memory active-user `Session`, and soft-delete/restore of profiles.
 - **`settings`** (`backend/settings/`) — DB-folder selection, Google Drive connect/disconnect, OAuth
-  client config, backup-on-close, and `BackupNow`. Drives the "Ajustes" tab.
+  client config, backup-on-close, and `BackupNow`. Drives Configuración › Respaldo y Google Drive.
 - **`mailsync`** (`backend/mailsync/`, desktop only) — reads the bank's purchase-alert emails over
-  IMAP and stages them in the finance import inbox (see §18). Drives "Ajustes → Correo de alertas".
+  IMAP and stages them in the finance import inbox (see §18). Drives Configuración › Correo del banco.
 - **`updates`** (`backend/updates/`, desktop only) — in-app updates from GitHub Releases (see §19).
 - **`reminders`** (`backend/reminders/`, desktop only, no bound methods) — native due-date
   notifications (see "Due dates and reminders" in §4).
@@ -286,7 +286,7 @@ folder that went missing, e.g. an unsynced cloud folder), the runner refuses to 
 backups exist (`backup.ErrFreshDatabase`), so an empty DB never replaces them. `ApplyDBFolder` requires
 an absolute path, compares with `os.SameFile`, and refuses a folder that already holds a DB.
 
-**Restore (desktop, `backup/restore.go`, Ajustes → Respaldo → «Restaurar un respaldo»).** Sources: the
+**Restore (desktop, `backup/restore.go`, Configuración › Respaldo › «Restaurar un respaldo»).** Sources: the
 backups `List` finds (rotating snapshots, `pre-migrate/`, `pre-restore/`, the older single file), a
 file picked with the native dialog, or the Drive backup (`drive.Manager.Download`, the cached file id
 or the newest file of that name the app can see). A backup is never trusted as is: it is copied to a
@@ -304,7 +304,7 @@ Drive calls treat only a real 404, or an item in Drive's trash (emptied after 30
 (`isGone`); any other failure aborts the upload, where it used to create a duplicate folder or file
 on every network hiccup. A refresh token Google no longer honors (`invalid_grant`: revoked, or
 expired after 7 days while the OAuth app is in "Testing") drops the token and returns
-`drive.ErrReconnect`, so Ajustes shows Drive disconnected. The token is a 0600 file written atomically
+`drive.ErrReconnect`, so Configuración shows Drive disconnected. The token is a 0600 file written atomically
 (temp + rename), not a keychain item: Windows caps credential blobs at 2560 bytes, too close to a
 token's size, and go-keyring's macOS items are readable by any process of the same user anyway.
 
@@ -440,7 +440,7 @@ finance row carries a `user_id`; the currently active id lives in an in-memory `
 
 `FinanceService` reads the active id via `s.uid()` (= `session.Active()`) and scopes **every** query
 by it (`WHERE user_id = ?`). Switching profiles only mutates the in-memory id + triggers a frontend
-refetch (`UserSwitcher.tsx`) — the DB connection is never reopened, so the switch is instant. The
+refetch (`components/shell/profiles.ts`) — the DB connection is never reopened, so the switch is instant. The
 per-user isolation guarantee is covered by `backend/users/isolation_test.go`; add a similar test
 whenever a new bound method reads user-owned data.
 
@@ -491,7 +491,7 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   its `bun_migrations` bookkeeping (name = numeric filename prefix). This makes an exported
   `.db` file **interchangeable between desktop and web** (the desktop-only `windowstate` and
   `mailsync` sets and the web's `web_prefs` table are each ignored by the other side).
-- **Backup**: web has no Drive; Ajustes offers export/import of the SQLite file
+- **Backup**: web has no Drive; Configuración › Respaldo offers export/import of the SQLite file
   (`services/web/settings.ts` + Share-Sheet-aware `lib/exportFile.ts`). Import validates the file's
   bytes first (`engine/db/dbfile.ts`), then **proves the file in memory before OPFS is touched**
   (`engine/db/importCheck.ts`: `sqlite3_deserialize` into `:memory:`, `PRAGMA integrity_check`, the
@@ -501,7 +501,7 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   (`ImportSummary`) shows before the mandatory page reload. Export hands the file to the Share Sheet;
   when Safari refuses it because the tap was spent while the worker exported (`share()` needs a live
   user activation), the button turns into «Compartir respaldo» and its own tap shares the ready file.
-  Ajustes shows whether the browser granted persistent storage (`navigator.storage.persist()`, asked
+  Configuración › Respaldo shows whether the browser granted persistent storage (`navigator.storage.persist()`, asked
   at startup; WebKit grants it on its own heuristics, installing to the home screen being the
   documented signal) and when a backup last left this device. **No `window.confirm`/`alert` anywhere in this
   flow** and **no `accept` on the file input**: Safari suppresses native dialogs without a live user
@@ -711,4 +711,33 @@ silently.
 - **Tests**: interactive primitives run in a real headless Chromium through vitest's browser
   project (`*.dom.test.tsx`, `vitest-browser-react`): jsdom has no `<dialog>.showModal` and
   happy-dom no Escape/Popover. CI installs only Chromium, in the `web` job, which runs in parallel
-  with the slower `desktop` job, so the gate does not get longer.
+  with the slower `desktop` job, so the gate does not get longer. The browser project resolves
+  `@/services/*` to the web adapters (CI's web job has no wails3 bindings); tests mock their data.
+
+## 22. Shell, navigation and window
+
+- **Routes live in the URL hash** (`lib/route.ts`: a typed `Route` union, `parseHash`/`formatHash`,
+  pure and tested). `lib/useRoute.ts` reads it with `useSyncExternalStore` over `hashchange` and
+  changes it with `navigate()` or `<Link>`; there is no route atom, so nothing needs syncing. A start
+  without hash (PWA `start_url`, the desktop window) reopens the last screen (`startRouteMemory`).
+  Unknown hashes land on the Resumen; desktop-only Configuración sections on the web build land on
+  its list.
+- **Information architecture**: month-dependent data lives in the month views (Resumen shows card
+  quotas and account balances of the selected month); what is configured once lives in
+  Configuración (`components/config/sections.tsx`, a `Record<ConfigSection, …>` so a route section
+  cannot ship without its screen). Categories show the budgets in force in a month of their own,
+  independent of the Resumen's month. Card statements live in Importar › Estados de cuenta.
+- **Shell** (`components/shell/`): `AppShell` renders the sidebar (expanded ≥1024px and not
+  collapsed; icon rail with visible labels at 768–1023px or when collapsed; `NavDrawer` in a
+  `<dialog>` below 768px), the screen's `PageHeader` with `PeriodNav` on month/year screens and the
+  global «Gasto» button (`QuickAddHost` + `quickAddAtom`: new expenses from any screen; editing stays
+  in the Resumen table). Focus moves to the new screen's `h1` after each navigation.
+- **Shortcuts** (`lib/shortcuts.ts`, a pure resolver with tests; one listener in `AppShell`): ⌘/Ctrl
+  1…7 sections, ⌘/Ctrl+, Configuración, N new expense, ←/→ period. None fires inside an open dialog
+  (it would drop a half-filled form); plain keys never fire while typing.
+- **Desktop window** (`main.go`): minimum 960×640 (`windowstate.MinWidth/MinHeight`; a smaller saved
+  geometry is clamped), background = the dark canvas token, and on macOS a hidden-inset title bar:
+  the traffic lights sit over the sidebar, whose top band and the screen header drag the window
+  (CSS `--wails-draggable`; `theme-init.js` sets `data-os` in the desktop build and index.css's
+  `mac:` variant leaves room for the lights). No translucent backdrop: with
+  `BackgroundTypeTranslucent`, Wails beta.25 on macOS left the web content invisible.

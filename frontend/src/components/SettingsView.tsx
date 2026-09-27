@@ -5,14 +5,12 @@ import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { Button, Field, QueryError, Section, Spinner, inputCls } from './ui'
-import { MailSettings } from './MailSettings'
 import { RestoreBackup } from './RestoreBackup'
-import { UpdatesSettings } from './UpdateNotice'
 
 // On the web build the whole desktop surface (DB folder, Google Drive) is
-// native-only; settings become the export/import backup view instead. Loaded
-// lazily behind the compile-time IS_WEB flag so the desktop bundle never pulls
-// in the web engine (worker + sqlite-wasm).
+// native-only; the backup section becomes the export/import view instead.
+// Loaded lazily behind the compile-time IS_WEB flag so the desktop bundle never
+// pulls in the web engine (worker + sqlite-wasm).
 // import.meta.env.VITE_TARGET is inlined by `define` at transform time, so the
 // bundler sees a literal condition and drops the import() on desktop.
 const WebSettingsView =
@@ -20,7 +18,8 @@ const WebSettingsView =
     ? lazy(() => import('./WebBackup').then((m) => ({ default: m.WebSettingsView })))
     : null
 
-export function SettingsView() {
+// BackupSettings is Configuración › Respaldo (y Google Drive on desktop).
+export function BackupSettings() {
   if (WebSettingsView) {
     return (
       <Suspense fallback={<Spinner />}>
@@ -28,10 +27,10 @@ export function SettingsView() {
       </Suspense>
     )
   }
-  return <DesktopSettingsView />
+  return <DesktopBackupSettings />
 }
 
-function DesktopSettingsView() {
+function DesktopBackupSettings() {
   const [folderDraft, setFolderDraft] = useState<string | null>(null)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -131,7 +130,7 @@ function DesktopSettingsView() {
     : 'nunca'
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="space-y-5">
       <Section title="Base de datos">
         <p className="mb-2 text-sm text-slate-400">Carpeta donde se guarda tu base de datos:</p>
         <div className="flex items-center gap-3">
@@ -246,10 +245,6 @@ function DesktopSettingsView() {
           <RestoreBackup driveConnected={state.driveConnected} />
         </div>
       </Section>
-
-      <MailSettings />
-
-      <UpdatesSettings />
     </div>
   )
 }
