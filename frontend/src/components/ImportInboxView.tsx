@@ -378,8 +378,15 @@ function ImportRow({
           {cardLabel && <Badge>{cardLabel}</Badge>}
           {it.installmentsTotal > 1 && (
             <Badge>
-              {it.installmentNumber > 1 ? `Cuota ${it.installmentNumber} de ${it.installmentsTotal}` : `${it.installmentsTotal} cuotas`}
+              {it.installmentNumber > 1
+                ? `Cuota ${it.installmentNumber} de ${it.installmentsTotal}`
+                : `${it.installmentsTotal} cuotas${it.firstPeriod !== '' ? ` desde ${periodLabel(it.firstPeriod)}` : ''}`}
             </Badge>
+          )}
+          {it.reference !== '' && (
+            <span className="font-mono select-all" title="Código de referencia del banco: sirve para reclamar el cargo">
+              Cód. {it.reference}
+            </span>
           )}
           {it.currency !== 'CLP' && <Badge tone="warn">{it.currency}</Badge>}
           {isCredit(it) && <Badge>Abono del banco: ingreso o reembolso de un gasto</Badge>}
@@ -401,10 +408,14 @@ function ImportRow({
         )}
         {it.duplicateExpenseId != null && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
-            <span>¿Ya lo registraste como «{it.duplicateDescription}»?</span>
+            <span>
+              ¿Ya lo registraste como «{it.duplicateDescription}»
+              {it.duplicateDate !== '' && it.duplicateDate !== it.date && <> el {formatDate(it.duplicateDate)}</>}?
+            </span>
             <Button variant="ghost" disabled={busy} onClick={() => onLink(it.duplicateExpenseId!)}>
-              Sí, enlazar
+              Sí, unir
             </Button>
+            <span className="text-slate-500">(se usan la fecha y el monto del banco; tu descripción se conserva)</span>
           </div>
         )}
         {it.suggestedFixedId != null && (

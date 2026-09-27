@@ -26,6 +26,7 @@ type Expense struct {
 	Description       string        `bun:"description,notnull" json:"description"`
 	Category          string        `bun:"category,notnull" json:"category"`
 	Merchant          string        `bun:"merchant,notnull" json:"merchant"`
+	BankDescription   string        `bun:"bank_description,notnull" json:"bankDescription"` // the bank's descriptor once merged with a bank movement ("" = none)
 	CardID            *int64        `bun:"card_id" json:"cardId"`
 	Kind              string        `bun:"kind,notnull" json:"kind"`
 	InstallmentAmount types.Decimal `bun:"installment_amount,notnull" json:"installmentAmount"`

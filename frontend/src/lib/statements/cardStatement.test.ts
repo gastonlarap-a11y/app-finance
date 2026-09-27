@@ -110,8 +110,8 @@ describe('estado de cuenta tarjeta Itaú', () => {
     const [national, international] = statements(fixture).list
     const r = await finance.ImportCardStatement(national!)
     expect(r.error).toBeUndefined()
-    // 10 lines: 1 payment (nothing to reconcile), 1 cuota linked, 8 staged.
-    expect(r.data).toMatchObject({ linkedInstallments: 1, added: 8, paymentsMatched: 0 })
+    // 10 lines: 1 payment (nothing to reconcile), 1 cuota merged into the expense entered by hand, 8 staged.
+    expect(r.data).toMatchObject({ merged: 1, linkedInstallments: 0, added: 8, paymentsMatched: 0 })
     const usd = await finance.ImportCardStatement(international!)
     expect(usd.error).toBeUndefined()
     expect(usd.data).toMatchObject({ added: 2 })

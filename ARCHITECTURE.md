@@ -225,7 +225,7 @@ The `settings` service exposes connect/disconnect, OAuth client config, the Driv
 backup-on-close; `main.go` runs a backup in `OnShutdown` when that flag is on. `backend/shared/prefs`
 persists these user choices and overrides `config` at startup (DB folder, OAuth creds, backup-on-close).
 
-Local snapshots are timestamped (`<name>-YYYYMMDD-HHMMSS.db`, last 5 kept) and each is written with
+Local snapshots are timestamped (`<name>-YYYYMMDD-HHMMSS.db`, last 3 kept) and each is written with
 `VACUUM INTO` to a `.tmp` file renamed into place, so a failed backup never destroys the previous one;
 Drive still holds one file, overwritten by each upload. When the DB file did not exist at startup (a DB
 folder that went missing, e.g. an unsynced cloud folder), the runner refuses to back up while earlier
@@ -478,8 +478,8 @@ expense until the user confirms it:
   column of card charges, or separate cargos/abonos). The reader detects the delimiter (`;` `,` tab)
   and the encoding (UTF-8, else Windows-1252), reads es-CL dates and amounts, skips title/total rows,
   and stages the rows with source `csv` (statement family: it reconciles with alert emails and
-  re-importing adds nothing). Bank-specific PDF/email parsers still need an anonymized real sample
-  of that bank's document.
+  re-importing adds nothing). A new bank-specific PDF or email parser still needs a real sample of
+  that bank's document, turned into an anonymized fixture.
 
 - **Inbox** (`backend/finance/importitem.go` + `imports.go`, mirrored in the TS engine):
   `import_items` rows move `pendiente → confirmado` (new expense via `ConfirmImportItem`, or an
@@ -491,7 +491,7 @@ expense until the user confirms it:
   amount/currency, compatible last digits, ±1 day) is stored `conciliado` so a purchase is never
   reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
   `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`), a live
-  expense that looks like the same purchase (±2 days, cuota or total), and a fixed expense whose
+  expense that looks like the same purchase (±10 days, cuota or total), and a fixed expense whose
   unpaid month the charge looks like the bill of (`fixedmatch.go`, Actual Budget's schedule model:
   a significant word of the name must match, the amount only within ±7.5 %, because a fixed
   amount is an estimate). `LinkImportItemToFixed` marks that month paid and, for a CLP charge,
@@ -527,6 +527,25 @@ expense until the user confirms it:
   `ConfirmImportItemAsIncome`. The
   parser cross-checks the bank's totals (sections, A+B+C+D, credit used, USD debt) into warnings;
   its fixture (`itau/testdata/cardStatementRuns.ts`) is synthetic text on the real geometry.
+- **Card statement formats**: Chilean issuers print the CMF's standard statement.
+  - `cmfCardStatement.ts` reads it for each issuer, taking the issuer as options (Template Method). Itaú's emailed PDF is the fallback; Banco de Chile is recognized by «DÓLARES-PREMIO» or its purchase totals split into one cuota and cuotas.
+  - Banco de Chile packs several cells in one text run («12.345 $»). `cellRuns` splits those cells and joins each «$» or «%» to its number.
+  - Itaú's statement downloaded from its web has its own parser, `itau/webCardStatement.ts`. It prints no section totals, so its lines are checked against the grand total.
+  - Shared label readers and checks live in `cardFields.ts`. Each format has a synthetic fixture under `testdata/`.
+  - Section `diferida` holds cuotas 00/N (bought this period, first cuota next period). They stage with `first_period` set to the next month.
+- **Bank reference codes**: each line's code is kept as printed, in `card_statement_lines.reference` and `import_items.reference`. It is what the user quotes to dispute a charge.
+  - An expense lists the codes of every statement that reported it (`reference.go`, `Movimiento.references` / `ExpenseHit.references`), and search matches them.
+  - The prefix of a code moves: in Itaú's email PDF it is the posting date, which changes every month a cuota is billed; the web PDF uses the operation date.
+  - So a purchase seen again is recognized by its **operation number**, the last 8 digits (`operationNumber`), together with its card, currency, date and cuota count (`earlierSighting`). A cuota the user discarded never comes back.
+- **Merging a purchase entered by hand** (`merge.go`, mirrored in the engine). This is the "matching" of YNAB and Actual Budget.
+  - A statement purchase merges on its own into the one expense entered by hand that matches it. The expense must have no bank movement yet (`bankLinked`), be on the statement's card, be dated within ±10 days (`mergeWindowDays`, YNAB's window) and have the same total or cuota.
+  - With two candidates, or an unknown card, the item waits in the inbox with the suggestion, and «Sí, unir» (`LinkImportItem`) does the same merge.
+  - The bank decides the date, the amount/cuotas and the billing month. The user's description, category, merchant and tags stay.
+  - The bank's descriptor goes to `expenses.bank_description`, and its code comes with the link.
+  - A paid cuota never moves: when the bank's plan would move or drop one, only the date and the descriptor are taken.
+- **Real cutoffs** (`cutoff.go`, `engine/finance/cutoff.ts`): banks move the cutoff with weekends and holidays.
+  - A card expense entered by hand is placed by the windows its card's statements printed: first each statement's billed period, then the next period it announced. The card's billing day covers only the dates no statement reached.
+  - Statements link to the one live card holding their last digits. Saving a card's digits relinks them (`relinkStatements`), so the national and international statements land on the same card.
 - **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,
   `BODY.PEEK[]` so nothing is marked read), MIME/charsets via `go-message`, HTML reduced to text.
   Incremental by **UIDVALIDITY + last UID** per account; the server filters by sender (`FROM`), and

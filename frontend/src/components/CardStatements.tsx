@@ -21,6 +21,7 @@ const SECTION_LABEL: Record<string, string> = {
   voluntario: 'Productos o servicios voluntarios',
   cargo: 'Cargos, comisiones e impuestos',
   abono: 'Abonos del banco',
+  diferida: 'Compras en cuotas que comienzan el próximo período',
 }
 
 const ITEM_STATUS_LABEL: Record<string, string> = {
@@ -44,8 +45,8 @@ function ComparisonLine({ st }: { st: CardStatementView }) {
   if (st.appCharges === null) {
     return (
       <span className="text-slate-500">
-        {st.currency === 'CLP'
-          ? 'Asocia los últimos 4 dígitos a una tarjeta para compararlo con tus gastos.'
+        {st.cardName === ''
+          ? `Sin tarjeta: escribe ${st.cardLastDigits} como últimos 4 dígitos de tu tarjeta (en Tarjetas) y se asociarán sus estados nacional e internacional.`
           : 'Las compras en dólares se comparan en la bandeja, una por una.'}
       </span>
     )
@@ -87,8 +88,8 @@ export function CardStatementsSection() {
         <Spinner />
       ) : query.data.length === 0 ? (
         <Empty>
-          Aún no importas estados de cuenta. Hazlo desde Importar con el PDF que envía el banco: se guarda completo y sus compras se
-          comparan con tus gastos.
+          Aún no importas estados de cuenta. Hazlo desde Importar con el PDF de la tarjeta (Itaú, el del correo o el de su web, o
+          Banco de Chile): se guarda completo y sus compras se comparan con tus gastos.
         </Empty>
       ) : (
         <ul className="space-y-2">
@@ -241,6 +242,7 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
                     <thead className="text-slate-500">
                       <tr>
                         <th className="py-1 pr-2 font-normal">Fecha</th>
+                        <th className="py-1 pr-2 font-normal">Código</th>
                         <th className="py-1 pr-2 font-normal">Descripción</th>
                         <th className="py-1 pr-2 font-normal">Cuota</th>
                         <th className="py-1 pr-2 text-right font-normal">Cargo del mes</th>
@@ -251,6 +253,8 @@ function CardStatementDetailModal({ id, onClose }: { id: number; onClose: () => 
                       {lines.map((l) => (
                         <tr key={l.id} className="border-t border-slate-800">
                           <td className="py-1 pr-2 whitespace-nowrap">{formatDate(l.operationDate)}</td>
+                          {/* The bank's code, quoted to dispute a charge: one click selects it whole. */}
+                          <td className="py-1 pr-2 font-mono whitespace-nowrap text-slate-400 select-all">{l.reference}</td>
                           <td className="py-1 pr-2 font-mono text-slate-100">
                             {l.description}
                             {(l.city || l.place) && <span className="text-slate-500"> · {l.city || l.place}</span>}

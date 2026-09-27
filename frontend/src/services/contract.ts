@@ -66,6 +66,7 @@ export interface Expense {
   description: string
   category: string
   merchant: string
+  bankDescription: string // the bank's descriptor once merged with a bank movement ('' = none)
   cardId: number | null
   kind: string
   installmentAmount: string
@@ -133,6 +134,7 @@ export interface Movimiento {
   fixedId: number | null
   refundId: number | null // set only for refunds (negative amount)
   description: string
+  bankDescription: string // the bank's descriptor of a cuota's expense once merged ('' otherwise)
   category: string
   merchant: string
   cardId: number | null
@@ -146,6 +148,7 @@ export interface Movimiento {
   ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
   estimado: boolean // amount rests on an estimated UF value
   tags: string[] // tags of the expense behind a cuota
+  references: string[] // the bank's codes for that expense, one per statement that reported it
 }
 
 export interface CategoryTotal {
@@ -360,6 +363,7 @@ export interface ExpenseHit {
   total: string
   paidCount: number
   tags: string[]
+  references: string[] // the bank's codes for it, one per statement
 }
 
 export interface ExpenseSearch {
@@ -400,6 +404,7 @@ export interface ImportItem {
   installmentsTotal: number
   hint: string // ImportHint
   status: string // ImportStatus
+  reference: string // the bank's operation code as printed ('' = none): proof for a dispute
   expenseId: number | null
   matchedItemId: number | null
   createdAt: string
@@ -425,6 +430,7 @@ export interface ImportItemView extends ImportItem {
   suggestedPattern: string
   duplicateExpenseId: number | null // live expense that looks like the same purchase
   duplicateDescription: string
+  duplicateDate: string // YYYY-MM-DD the user gave that expense (the bank's replaces it on merge)
   matchedSource: string // for conciliado items: the other sighting
   matchedDate: string
   suggestedAmountClp: string // USD items: CLP at the rate of the last USD-debt payment; '' = unknown
@@ -547,7 +553,7 @@ export interface CardStatementLine {
   userId: number
   statementId: number
   position: number
-  section: string // 'pago' | 'compra' | 'voluntario' | 'cargo' | 'abono'
+  section: string // 'pago' | 'compra' | 'voluntario' | 'cargo' | 'abono' | 'diferida' (cuotas 00/N, billed from next period)
   place: string
   city: string
   country: string
@@ -647,6 +653,7 @@ export interface CardStatementImport {
   duplicates: number
   reconciled: number
   linkedInstallments: number // cuotas continuing expenses already in the app
+  merged: number // purchases the user had entered by hand, completed with the bank's facts
   paymentsMatched: number // cartola card payments this statement accounts for
 }
 

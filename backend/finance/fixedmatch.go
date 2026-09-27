@@ -66,8 +66,8 @@ func (s *FinanceService) loadFixedIndex(ctx context.Context, uid int64) (fixedIn
 }
 
 // billingPeriodOf is the month an item is billed in: the one its card
-// statement states, else its date rolled by its card's cutoff (0 = no card).
-func billingPeriodOf(it ImportItem, billingDay int) string {
+// statement states, else its date placed by its card's cutoff (zero = no card).
+func billingPeriodOf(it ImportItem, cutoff cardCutoff) string {
 	if it.FirstPeriod != "" {
 		return it.FirstPeriod
 	}
@@ -75,7 +75,7 @@ func billingPeriodOf(it ImportItem, billingDay int) string {
 	if err != nil {
 		return ""
 	}
-	return periodOf(date, billingDay)
+	return cutoff.periodOf(date)
 }
 
 // suggest returns the fixed expense whose still-unpaid month `period` the item

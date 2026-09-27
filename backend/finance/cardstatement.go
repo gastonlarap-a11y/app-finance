@@ -27,6 +27,7 @@ const (
 	LineVoluntary = "voluntario" // voluntarily contracted products or services
 	LineCharge    = "cargo"      // commissions, interest, taxes
 	LineCredit    = "abono"      // cashback, points redemptions: staged as income
+	LineDeferred  = "diferida"   // purchases in cuotas made this period, first cuota billed next period (00/N)
 )
 
 // paymentWindowDays: a card payment may be posted a few days apart in the
@@ -239,11 +240,15 @@ func (f *statementFields) date(name, s string, required bool) string {
 
 func validSection(s string) bool {
 	switch s {
-	case LinePayment, LinePurchase, LineVoluntary, LineCharge, LineCredit:
+	case LinePayment, LinePurchase, LineVoluntary, LineCharge, LineCredit, LineDeferred:
 		return true
 	}
 	return false
 }
+
+// purchaseSections are the sections whose lines are purchases (a plan of
+// cuotas may show up in several statements).
+var purchaseSections = []string{LinePurchase, LineVoluntary, LineDeferred}
 
 // validateStatement turns the parser's input into rows ready to insert.
 func validateStatement(uid int64, in CardStatementInput) (*CardStatement, []CardStatementLine, []CardStatementScheduleEntry, *shared.AppError) {
@@ -324,6 +329,9 @@ func validateStatement(uid int64, in CardStatementInput) (*CardStatement, []Card
 		}
 		total := max(l.InstallmentsTotal, 1)
 		number := max(l.InstallmentNumber, 1)
+		if l.Section == LineDeferred {
+			number = 0 // no cuota billed yet
+		}
 		if number > total {
 			return nil, nil, nil, shared.NewError(shared.ErrValidation, fmt.Sprintf("%s: cuota %d de %d inválida", name, number, total))
 		}
@@ -429,7 +437,9 @@ func (s *FinanceService) feedInbox(
 	lines []CardStatementLine, out *CardStatementImport,
 ) error {
 	var candidates []ImportCandidate
-	var staged []int // index into lines of each candidate
+	var staged []int             // index into lines of each candidate
+	mergeInto := map[int]int64{} // candidate index → the manual expense it completes
+	claimed := map[int64]bool{}  // manual expenses already taken by a line of this statement
 	for i := range lines {
 		l := &lines[i]
 		switch l.Section {
@@ -440,18 +450,17 @@ func (s *FinanceService) feedInbox(
 			}
 			out.PaymentsMatched += n
 			continue
-		case LinePurchase, LineVoluntary:
-			inst, err := continuedInstallment(ctx, tx, uid, card, l)
+		case LinePurchase, LineVoluntary, LineDeferred:
+			target, done, err := s.placePurchase(ctx, tx, uid, st, card, l, claimed, out)
 			if err != nil {
 				return err
 			}
-			if inst != nil {
-				l.InstallmentID = &inst.ID
-				if _, err := tx.NewUpdate().Model(l).Column("installment_id").WherePK().Exec(ctx); err != nil {
-					return fmt.Errorf("linking installment: %w", err)
-				}
-				out.LinkedInstallments++
+			if done {
 				continue
+			}
+			if target != 0 {
+				claimed[target] = true
+				mergeInto[len(candidates)] = target
 			}
 		}
 		candidates = append(candidates, lineCandidate(st, l))
@@ -472,14 +481,110 @@ func (s *FinanceService) feedInbox(
 	if err != nil {
 		return err
 	}
-	out.Added, out.Duplicates, out.Reconciled = sum.Added, sum.Duplicates, sum.Reconciled
+	// += keeps the purchases already recognized from earlier statements.
+	out.Added += sum.Added
+	out.Duplicates += sum.Duplicates
+	out.Reconciled += sum.Reconciled
 	for k, id := range ids {
 		if _, err := tx.NewUpdate().Model((*CardStatementLine)(nil)).
 			Set("import_item_id = ?", id).Where("id = ?", lines[staged[k]].ID).Exec(ctx); err != nil {
 			return fmt.Errorf("linking import item: %w", err)
 		}
 	}
+	for k, expenseID := range mergeInto {
+		merged, err := mergeStaged(ctx, tx, uid, ids[k], expenseID)
+		if err != nil {
+			return err
+		}
+		if merged {
+			out.Added--
+			out.Merged++
+		}
+	}
 	return nil
+}
+
+// placePurchase settles a purchase line that needs no review: done when it
+// continues a plan the app already has from the bank (the line is linked to
+// that cuota) or is a purchase an earlier statement staged. Otherwise target
+// names the expense the user entered by hand that its item will complete
+// (0 = none: the item waits in the inbox).
+func (s *FinanceService) placePurchase(
+	ctx context.Context, tx bun.Tx, uid int64, st *CardStatement, card *Card, l *CardStatementLine,
+	claimed map[int64]bool, out *CardStatementImport,
+) (target int64, done bool, err error) {
+	var inst *Installment
+	if l.Section != LineDeferred {
+		if inst, err = continuedInstallment(ctx, tx, uid, card, l); err != nil {
+			return 0, false, err
+		}
+	}
+	linked := false
+	if inst != nil {
+		// Asked before linking this line, which would make it look linked.
+		if linked, err = bankLinked(ctx, tx, uid, inst.ExpenseID); err != nil {
+			return 0, false, err
+		}
+		if !linked && card == nil {
+			// An expense entered by hand is completed only on its own card:
+			// without the statement's card the user decides in the inbox.
+			inst = nil
+		}
+	}
+	if inst != nil {
+		l.InstallmentID = &inst.ID
+		if _, err := tx.NewUpdate().Model(l).Column("installment_id").WherePK().Exec(ctx); err != nil {
+			return 0, false, fmt.Errorf("linking installment: %w", err)
+		}
+		if linked || claimed[inst.ExpenseID] {
+			out.LinkedInstallments++
+			return 0, true, nil
+		}
+		return inst.ExpenseID, false, nil // a cuota of an expense entered by hand
+	}
+	itemID, err := earlierSighting(ctx, tx, uid, st, l)
+	if err != nil {
+		return 0, false, err
+	}
+	if itemID != nil {
+		l.ImportItemID = itemID
+		if _, err := tx.NewUpdate().Model(l).Column("import_item_id").WherePK().Exec(ctx); err != nil {
+			return 0, false, fmt.Errorf("linking earlier item: %w", err)
+		}
+		out.Duplicates++
+		return 0, true, nil
+	}
+	ex, err := manualMatch(ctx, tx, uid, card, lineCandidate(st, l), claimed)
+	if err != nil || ex == nil {
+		return 0, false, err
+	}
+	return ex.ID, false, nil
+}
+
+// mergeStaged completes a manual expense with the item just staged for it,
+// unless staging reconciled the item with another sighting (then that one is
+// reviewed). Reports whether it merged.
+func mergeStaged(ctx context.Context, tx bun.Tx, uid, itemID, expenseID int64) (bool, error) {
+	item := new(ImportItem)
+	if err := tx.NewSelect().Model(item).Where("id = ? AND user_id = ?", itemID, uid).Scan(ctx); err != nil {
+		return false, fmt.Errorf("loading staged item: %w", err)
+	}
+	if item.Status != ImportPendiente {
+		return false, nil
+	}
+	ex := new(Expense)
+	if err := tx.NewSelect().Model(ex).Where("id = ? AND user_id = ?", expenseID, uid).Scan(ctx); err != nil {
+		return false, fmt.Errorf("loading manual expense: %w", err)
+	}
+	var cutoff cardCutoff
+	if ex.CardID != nil {
+		cuts, err := cutoffsFor(ctx, tx, uid, *ex.CardID)
+		if err != nil {
+			return false, err
+		}
+		cutoff = cuts[*ex.CardID]
+	}
+	return true, mergeIntoExpense(ctx, tx, uid, item, ex, cutoff)
 }
 
 // lineCandidate is the inbox candidate for a staged line. Purchases keep the
@@ -512,6 +617,17 @@ func lineCandidate(st *CardStatement, l *CardStatementLine) ImportCandidate {
 		if charged.IsZero() {
 			c.Amount = l.OperationAmount.Abs().String()
 		}
+	case l.Section == LineDeferred:
+		// Bought this period, billed from the next one: nothing is paid yet.
+		c.Amount = l.OperationAmount.Abs().String()
+		if l.OperationAmount.IsZero() {
+			c.Amount = charged.String()
+		}
+		if l.InstallmentsTotal > 1 {
+			c.InstallmentAmount = charged.String()
+		}
+		c.InstallmentNumber = 1
+		c.FirstPeriod = addMonths(st.Period, 1)
 	case l.Section == LinePurchase || l.Section == LineVoluntary:
 		total := l.OperationAmount.Abs()
 		if st.Kind == StatementInternational || total.IsZero() {
@@ -539,6 +655,46 @@ func cardByDigits(ctx context.Context, db bun.IDB, uid int64, digits string) (*C
 		return nil, nil
 	}
 	return &cards[0], nil
+}
+
+// relinkStatements points uid's statements at the one live card holding their
+// last digits. A card's digits are often filled in after its first statement
+// was imported (which then stayed without a card) or corrected later; the
+// national and international statements of a card print the same digits, so
+// both land on that card. A statement whose digits no live card holds keeps a
+// trashed card it already had (history) and loses a live one whose digits
+// changed. Trashing or restoring a card needs no relink: links survive both.
+func relinkStatements(ctx context.Context, db bun.IDB, uid int64) error {
+	var cards []Card
+	if err := db.NewSelect().Model(&cards).Where("user_id = ?", uid).Scan(ctx); err != nil {
+		return fmt.Errorf("loading cards: %w", err)
+	}
+	byDigits := cardsByLastDigits(cards)
+	live := make(map[int64]bool, len(cards))
+	for _, c := range cards {
+		live[c.ID] = true
+	}
+	var sts []CardStatement
+	if err := db.NewSelect().Model(&sts).Column("id", "card_id", "card_last_digits").
+		Where("user_id = ?", uid).Scan(ctx); err != nil {
+		return fmt.Errorf("loading statements: %w", err)
+	}
+	for _, st := range sts {
+		var want *int64
+		if c, ok := byDigits[st.CardLastDigits]; ok {
+			want = &c.ID
+		} else if st.CardID != nil && !live[*st.CardID] {
+			continue
+		}
+		if sameCard(st.CardID, want) {
+			continue
+		}
+		if _, err := db.NewUpdate().Model((*CardStatement)(nil)).Set("card_id = ?", want).
+			Where("id = ? AND user_id = ?", st.ID, uid).Exec(ctx); err != nil {
+			return fmt.Errorf("relinking statement %d: %w", st.ID, err)
+		}
+	}
+	return nil
 }
 
 // continuedInstallment finds the app installment a statement cuota bills: the
@@ -569,6 +725,57 @@ func continuedInstallment(ctx context.Context, db bun.IDB, uid int64, card *Card
 			return nil, fmt.Errorf("finding installment: %w", err)
 		}
 		return inst, nil
+	}
+	return nil, nil
+}
+
+// operationNumber is the stable part of a statement reference: the issuer's
+// operation number, its last eight digits. Chilean statements prefix it with
+// a date that moves: Itaú's emailed PDF prints "2508 12345678" (DDMM of the
+// posting, which is each statement's date while cuotas are billed), its web
+// PDF "2026061612345678" (the operation date), Banco de Chile "060787654321".
+// "" when the reference carries no number (payments and fees print zeros).
+func operationNumber(ref string) string {
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, ref)
+	if len(digits) < 8 {
+		return ""
+	}
+	n := digits[len(digits)-8:]
+	if strings.Trim(n, "0") == "" {
+		return ""
+	}
+	return n
+}
+
+// earlierSighting finds the inbox item an earlier statement of the same card
+// and currency staged for this purchase: same operation date, cuota count and
+// operation number. A plan of cuotas shows up in every statement until its
+// last cuota under a reference whose prefix changes (and, in the web PDF, with
+// other wording), so neither the item's key nor its description tells it is
+// the same purchase; without this, a cuota the user discarded comes back.
+func earlierSighting(ctx context.Context, tx bun.Tx, uid int64, st *CardStatement, l *CardStatementLine) (*int64, error) {
+	op := operationNumber(l.Reference)
+	if op == "" {
+		return nil, nil
+	}
+	var prior []CardStatementLine
+	if err := tx.NewSelect().Model(&prior).
+		Where("user_id = ? AND operation_date = ? AND installments_total = ?", uid, l.OperationDate, l.InstallmentsTotal).
+		Where("import_item_id IS NOT NULL AND section IN (?)", bun.List(purchaseSections)).
+		Where("statement_id IN (SELECT id FROM card_statements WHERE user_id = ? AND card_last_digits = ? AND kind = ? AND id <> ?)",
+			uid, st.CardLastDigits, st.Kind, st.ID).
+		Order("id DESC").Scan(ctx); err != nil {
+		return nil, fmt.Errorf("finding earlier sighting: %w", err)
+	}
+	for _, p := range prior {
+		if operationNumber(p.Reference) == op {
+			return p.ImportItemID, nil
+		}
 	}
 	return nil, nil
 }
