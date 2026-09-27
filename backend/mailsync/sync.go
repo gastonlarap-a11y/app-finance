@@ -211,7 +211,7 @@ func (s *Service) syncAccount(ctx context.Context, acc *MailAccount) (SyncSummar
 		if err != nil {
 			return sum, fmt.Errorf("fetching messages: %w", err)
 		}
-		batches := s.readMessages(msgs, &sum)
+		batches := s.readMessages(msgs, sess.folder.UIDValidity, &sum)
 		if err := s.commitChunk(ctx, acc, sess.folder.UIDValidity, chunk[len(chunk)-1], batches, &sum); err != nil {
 			return sum, err
 		}
@@ -241,7 +241,7 @@ func newUIDs(all []imap.UID, after imap.UID) []imap.UID {
 }
 
 // readMessages parses each fetched email into the batch its parser reads.
-func (s *Service) readMessages(msgs []*imapclient.FetchMessageBuffer, sum *SyncSummary) []finance.ImportBatch {
+func (s *Service) readMessages(msgs []*imapclient.FetchMessageBuffer, uidValidity uint32, sum *SyncSummary) []finance.ImportBatch {
 	var batches []finance.ImportBatch
 	for _, m := range msgs {
 		sum.Messages++
@@ -260,15 +260,28 @@ func (s *Service) readMessages(msgs []*imapclient.FetchMessageBuffer, sum *SyncS
 			sum.Unreadable++
 			continue
 		}
+		ref := messageRef(msg.MessageID, uidValidity, m.UID)
 		for i := range items {
 			if items[i].Reference == "" {
-				items[i].Reference = msg.MessageID
+				items[i].Reference = ref
 			}
 		}
 		sum.Recognized++
 		batches = append(batches, finance.ImportBatch{Source: finance.ImportSourceEmail, Issuer: p.Issuer(), Items: items})
 	}
 	return batches
+}
+
+// messageRef identifies an email for deduplication: its Message-ID, or, when
+// the sender omits that optional header, its IMAP UID within the mailbox's
+// UIDVALIDITY (RFC 9051 §2.3.1.1: unique and never reused while it holds).
+// Without it, two identical purchases alerted by two emails would collapse
+// into one inbox item.
+func messageRef(messageID string, uidValidity uint32, uid imap.UID) string {
+	if messageID != "" {
+		return messageID
+	}
+	return fmt.Sprintf("imap:%d:%d", uidValidity, uid)
 }
 
 // commitChunk stages the chunk's batches and moves the watermark to its last
