@@ -1,8 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App'
+import '@fontsource-variable/inter/wght.css'
 import '@/index.css'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { startThemeSync } from '@/lib/theme'
 
 // Fatal replaces the app with a message. It always offers a reload: an
 // installed PWA has no browser chrome, so without the button a stuck screen
@@ -34,37 +36,6 @@ function AlreadyOpen() {
   )
 }
 
-// startWebPlatform wires what only the PWA needs. Loaded dynamically so the
-// desktop bundle never pulls the PWA's virtual module.
-async function startWebPlatform(): Promise<void> {
-  const [{ registerSW }, { announceUpdate }] = await Promise.all([
-    import('virtual:pwa-register'),
-    import('@/lib/pwaUpdate'),
-  ])
-  const updateSW = registerSW({ onNeedRefresh: () => announceUpdate(() => updateSW(true)) })
-
-  // Ask the browser to keep OPFS through storage pressure. WebKit decides on
-  // its own heuristics (installing to the home screen is the documented
-  // signal), so the answer is only shown in Ajustes, never required.
-  if (typeof navigator.storage?.persist === 'function') {
-    void navigator.storage.persist().catch(() => false) // best effort
-  }
-
-  // A lazy chunk that failed to load (e.g. after a deploy) cannot recover in
-  // place: reload once, and not in a loop if the chunk is truly gone.
-  window.addEventListener('vite:preloadError', (e) => {
-    const key = 'app-finance:preload-reload'
-    try {
-      if (sessionStorage.getItem(key)) return
-      sessionStorage.setItem(key, '1')
-    } catch {
-      return // no storage: rather show the error than risk a reload loop
-    }
-    e.preventDefault()
-    window.location.reload()
-  })
-}
-
 function UnsupportedStorage() {
   return (
     <Fatal title="Almacenamiento no disponible">
@@ -93,6 +64,7 @@ function reportEngineFailures(root: ReactDOM.Root) {
 }
 
 async function start() {
+  startThemeSync()
   const root = ReactDOM.createRoot(document.getElementById('root')!)
   // Literal (via define) so the bundler drops the web-only import on desktop.
   if (import.meta.env.VITE_TARGET === 'web') {
@@ -116,7 +88,9 @@ async function start() {
       )
       return
     }
-    await startWebPlatform()
+    // Loaded dynamically so the desktop bundle and dev server never see the PWA's virtual module.
+    const { startWebPlatform } = await import('@/lib/webPlatform')
+    startWebPlatform()
     reportEngineFailures(root)
   }
   root.render(

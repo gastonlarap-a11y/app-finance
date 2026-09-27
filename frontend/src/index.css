@@ -1,32 +1,168 @@
 @import "tailwindcss";
 
+/* Opt-in `dark:` variant for the rare case a token cannot express a difference.
+   Theme switching itself happens through the tokens below. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Semantic design tokens. Light values live here; the dark theme re-declares
+   them on :root[data-theme='dark'] (set on <html> by public/theme-init.js and
+   lib/theme.ts). Components use only these names — never a raw palette color —
+   so both themes stay consistent. Contrast pairs are asserted by
+   src/styles/tokens.test.ts (WCAG 2.2 AA: 4.5:1 text, 3:1 UI graphics). */
 @theme {
-  --color-primary: #6366f1;
-  --color-primary-dark: #4f46e5;
-  --color-surface: #0f172a;
-  --color-surface-alt: #1e293b;
-  --color-success: #22c55e;
-  --color-danger: #ef4444;
-  --color-warning: #f59e0b;
-  --font-sans: 'Inter', system-ui, sans-serif;
+  /* Surfaces: page, cards/sections, floating layers, wells (inputs, table heads). */
+  --color-canvas: oklch(0.985 0.004 265);
+  --color-panel: oklch(1 0 0);
+  --color-raised: oklch(1 0 0);
+  --color-sunken: oklch(0.967 0.006 265);
+  --color-sidebar: oklch(0.97 0.006 265);
+
+  /* Borders: dividers, stronger separators, and form-control outlines (3:1). */
+  --color-line: oklch(0.91 0.008 265);
+  --color-line-strong: oklch(0.84 0.012 265);
+  --color-line-input: oklch(0.62 0.02 265);
+
+  /* Text. */
+  --color-fg: oklch(0.21 0.03 265);
+  --color-fg-muted: oklch(0.44 0.03 265);
+  --color-fg-subtle: oklch(0.52 0.025 265);
+
+  /* Brand accent: fills (with on-accent text), text/links (accent-fg), tints. */
+  --color-accent: oklch(0.51 0.23 277);
+  --color-accent-hover: oklch(0.46 0.22 277);
+  --color-accent-fg: oklch(0.5 0.22 277);
+  --color-accent-soft: oklch(0.955 0.03 277);
+  --color-on-accent: oklch(1 0 0);
+  --color-focus: oklch(0.55 0.22 277);
+
+  /* States: *-fg for text/icons on panels, *-soft for tinted backgrounds,
+     negative as the destructive-button fill. */
+  --color-positive-fg: oklch(0.5 0.13 150);
+  --color-positive-soft: oklch(0.96 0.035 150);
+  --color-negative: oklch(0.53 0.2 25);
+  --color-negative-fg: oklch(0.51 0.19 25);
+  --color-negative-soft: oklch(0.96 0.025 25);
+  --color-caution-fg: oklch(0.5 0.11 60);
+  --color-caution-soft: oklch(0.965 0.04 85);
+  --color-info-fg: oklch(0.5 0.13 245);
+  --color-info-soft: oklch(0.96 0.025 245);
+
+  /* Dims the page behind modal dialogs. */
+  --color-scrim: oklch(0.15 0.02 265 / 0.45);
+
+  /* Legacy names, bridged to the semantic tokens while views migrate
+     (removed once src/styles/rawclasses.test.ts reaches zero). */
+  --color-surface: var(--color-canvas);
+  --color-surface-alt: var(--color-panel);
+  --color-primary: var(--color-accent);
+  --color-primary-dark: var(--color-accent-hover);
+  --color-success: var(--color-positive-fg);
+  --color-danger: var(--color-negative-fg);
+  --color-warning: var(--color-caution-fg);
+
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
   --radius-base: 0.5rem;
 }
 
+/* Unlayered, so it beats the theme layer where the light values live. Must sit
+   on the root element: the legacy aliases above resolve var() there. */
+:root[data-theme='dark'] {
+  --color-canvas: oklch(0.17 0.02 265);
+  --color-panel: oklch(0.215 0.024 265);
+  --color-raised: oklch(0.25 0.024 265);
+  --color-sunken: oklch(0.19 0.02 265);
+  --color-sidebar: oklch(0.19 0.02 265);
+
+  --color-line: oklch(0.3 0.022 265);
+  --color-line-strong: oklch(0.38 0.025 265);
+  --color-line-input: oklch(0.55 0.025 265);
+
+  --color-fg: oklch(0.96 0.006 265);
+  --color-fg-muted: oklch(0.77 0.02 265);
+  --color-fg-subtle: oklch(0.68 0.02 265);
+
+  --color-accent: oklch(0.52 0.22 277);
+  --color-accent-hover: oklch(0.47 0.21 277);
+  --color-accent-fg: oklch(0.77 0.12 277);
+  --color-accent-soft: oklch(0.3 0.07 277);
+  --color-on-accent: oklch(1 0 0);
+  --color-focus: oklch(0.77 0.12 277);
+
+  --color-positive-fg: oklch(0.79 0.15 150);
+  --color-positive-soft: oklch(0.29 0.05 150);
+  --color-negative: oklch(0.54 0.2 25);
+  --color-negative-fg: oklch(0.75 0.15 25);
+  --color-negative-soft: oklch(0.29 0.06 25);
+  --color-caution-fg: oklch(0.83 0.13 80);
+  --color-caution-soft: oklch(0.3 0.05 80);
+  --color-info-fg: oklch(0.78 0.1 240);
+  --color-info-soft: oklch(0.29 0.05 240);
+
+  --color-scrim: oklch(0.05 0.01 265 / 0.6);
+
+  color-scheme: dark;
+}
+
+:root {
+  /* Native controls (month/date pickers, checkboxes, scrollbars) follow the theme. */
+  color-scheme: light;
+}
+
 body {
-  background-color: var(--color-surface);
+  background-color: var(--color-canvas);
+  color: var(--color-fg);
   font-family: var(--font-sans);
 }
 
-/* Touch devices (iPad PWA): 16px inputs stop iOS Safari's focus auto-zoom and
-   44px is Apple's minimum touch-target height. No effect with mouse/trackpad. */
+@layer base {
+  /* One visible focus ring for every keyboard-focused control (WCAG 2.4.7/2.4.11). */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+
+  /* Touch devices (iPad PWA): 44px is Apple's minimum touch-target height. In
+     the base layer so a primitive can shape its own target (e.g. Switch). */
+  @media (pointer: coarse) {
+    button,
+    select {
+      min-height: 44px;
+    }
+  }
+}
+
+/* Safe areas: the iPad PWA runs edge to edge (viewport-fit=cover). */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Motion only explains; users who ask for less get none. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Touch devices (iPad PWA): 16px inputs stop iOS Safari's focus auto-zoom.
+   Unlayered on purpose: it must beat any text-size utility on a field. */
 @media (pointer: coarse) {
   input,
   select,
   textarea {
     font-size: 16px;
-  }
-  button,
-  select {
-    min-height: 44px;
   }
 }

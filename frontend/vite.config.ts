@@ -14,8 +14,9 @@ import path from 'path'
 //   the app is served under the GitHub Pages base path.
 export default defineConfig(({ mode }) => {
   const isWeb = mode === 'web'
+  const base = isWeb ? '/app-finance/' : '/'
   return {
-    base: isWeb ? '/app-finance/' : '/',
+    base,
     server: {
       host: '127.0.0.1',
       port: Number(process.env.WAILS_VITE_PORT) || 9245,
@@ -30,6 +31,15 @@ export default defineConfig(({ mode }) => {
       // Babel, so the compiler runs through rolldown's Babel plugin, after react().
       babel({ presets: [reactCompilerPreset()] }),
       tailwindcss(),
+      // Applies the saved light/dark theme before the first paint (public/theme-init.js).
+      // A blocking same-origin script, not inline: the web CSP allows only 'self'.
+      // injectTo 'head' lands after the CSP meta, which is head-prepended.
+      {
+        name: 'theme-init',
+        transformIndexHtml() {
+          return [{ tag: 'script', attrs: { src: `${base}theme-init.js` }, injectTo: 'head' as const }]
+        },
+      } satisfies PluginOption,
       ...(isWeb
         ? [
             // Content-Security-Policy for the PWA build. GitHub Pages cannot send
@@ -74,7 +84,8 @@ export default defineConfig(({ mode }) => {
                   { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: 'App Finance' }, injectTo: 'head' as const },
-                  { tag: 'meta', attrs: { name: 'theme-color', content: '#0f172a' }, injectTo: 'head' as const },
+                  // Dark canvas token in sRGB; lib/theme.ts rewrites it when the theme changes.
+                  { tag: 'meta', attrs: { name: 'theme-color', content: '#0b0f18' }, injectTo: 'head' as const },
                 ]
               },
             } satisfies PluginOption,
@@ -92,8 +103,8 @@ export default defineConfig(({ mode }) => {
                 start_url: '/app-finance/',
                 scope: '/app-finance/',
                 display: 'standalone',
-                background_color: '#0f172a',
-                theme_color: '#0f172a',
+                background_color: '#0b0f18',
+                theme_color: '#0b0f18',
                 icons: [
                   { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
                   { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -103,6 +114,9 @@ export default defineConfig(({ mode }) => {
               workbox: {
                 // mjs: pdf.js ships its worker as .mjs (statement import must work offline).
                 globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,wasm,woff2}'],
+                // Inter's non-latin subsets load only for text that needs them
+                // (unicode-range); offline they fall back to the system font.
+                globIgnores: ['**/inter-cyrillic*', '**/inter-greek*', '**/inter-vietnamese*'],
                 // sqlite3.wasm outgrows workbox's default 2 MB precache limit.
                 maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
               },

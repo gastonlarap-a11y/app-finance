@@ -28,13 +28,16 @@ go test -race ./...            # backend tests (finance + users); single: go tes
 cd frontend && npm run build   # frontend typecheck (tsc --noEmit) + production bundle
 
 # Quality gates (= CI) — run `task check` before declaring work done
+# (no standalone `task` binary? `wails3 task <name>` runs the same Taskfile)
 task check                     # go vet + golangci-lint + ESLint + typecheck (desktop+web) + tests + build:web
 task lint | task test | task typecheck | task vuln   # individual gates (.golangci.yml, frontend/eslint.config.js)
 
 # Web/PWA target (iPad) — same frontend, local TS engine (no Go backend)
 cd frontend && npm run dev:web    # dev server for the web target (open /app-finance/ in a browser)
 cd frontend && npm run build:web  # typecheck (tsconfig.web.json) + PWA bundle → dist/
-cd frontend && npm test           # vitest: TS engine against sqlite-wasm in Node
+cd frontend && npm test           # vitest: `unit` (engine/lib, Node) + `browser` (UI, headless Chromium)
+cd frontend && npx vitest run --project unit|browser [file]   # one project / one file while iterating
+cd frontend && npx playwright install chromium                # once per machine (browser project)
 
 # Packaging/distribution (macOS .app/.dmg, Windows NSIS installer) → `release` skill (user-invoked)
 # Official releases: bump info.version in build/config.yml + `wails3 task common:update:build-assets`,
@@ -49,7 +52,8 @@ Sandboxed-session quirks: prefix Go commands with `GOCACHE=$TMPDIR/gocache` (the
 cache is not sandbox-writable); `go build .`'s dsymutil step also fails — use
 `go build -ldflags=-w -o /dev/null .` as the compile+link check. Prefer `./node_modules/.bin/tsc`
 over `npx tsc` and pass `--cache $TMPDIR/npm-cache` to npm (the npm cache is not sandbox-writable);
-`npm install` (lockfile) and dev servers (port bind) need to run outside the sandbox.
+`npm install` (lockfile), dev servers and the vitest `browser` project (port bind) need to run
+outside the sandbox.
 
 ## Versions (beta — keep aligned)
 
@@ -203,6 +207,11 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   UI state only — never server data.
 - **Dialogs**: `Modal` is a native `<dialog>` (focus trap, Escape); icon-only buttons use
   `IconButton` (mandatory accessible label). React Compiler is on: no manual `useCallback`/`useMemo`.
+- **UI look (invariant)**: screens are built from the primitives in `frontend/src/components/ui/`
+  and the semantic color tokens of `frontend/src/index.css` — never raw palette colors
+  (`slate-400`, `amber-200`…), which `src/styles/rawclasses.test.ts` ratchets down to zero; token
+  contrast is asserted by `src/styles/tokens.test.ts`. Icons are `lucide-react` static imports.
+  Details: `.claude/rules/frontend-ui.md` and `ARCHITECTURE.md` §21.
 - **Go⇄TS parity (invariant)**: adding or changing a bound method in `finance`/`users` requires the
   same change in `frontend/src/services/contract.ts` and in the web engine
   (`frontend/src/engine/…/service.ts`), with a mirror test in vitest. Migrations need no engine

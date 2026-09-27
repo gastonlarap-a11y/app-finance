@@ -65,6 +65,9 @@ build/docker/
 # Artefactos de verificación con Playwright MCP (snapshots, capturas)
 .playwright-mcp/
 
+# Vitest browser mode: capturas de los tests que fallan
+frontend/.vitest/
+
 # Binarios auto-generados durante el build
 build/darwin/Assets.car
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
