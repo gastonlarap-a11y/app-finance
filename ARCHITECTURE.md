@@ -680,3 +680,35 @@ silently.
   Drive file. The web build has no OAuth client, and `drive.file` only shows a file to the OAuth
   client that created it, so the iPad cannot read the desktop's backup without a Google Cloud setup
   per user. The zero-cost constraint rules out a server.
+
+## 21. UI foundations (tokens, themes, primitives)
+
+- **Semantic color tokens** live in `frontend/src/index.css`, as OKLCH values: surfaces (`canvas`,
+  `panel`, `raised`, `sunken`, `sidebar`), borders (`line`, `line-strong`, `line-input`), text
+  (`fg`, `fg-muted`, `fg-subtle`), the accent and the states (`positive`/`negative`/`caution`/`info`
+  with `-fg` and `-soft`). The light values sit in `@theme`; the dark theme re-declares them on
+  `:root[data-theme='dark']`. Components name only these tokens, so both themes stay consistent.
+  `src/styles/tokens.test.ts` computes the WCAG contrast of every pair the primitives use (4.5:1
+  text, 3:1 form outlines and focus ring) straight from the CSS.
+- **Raw colors are ratcheted out**: `src/styles/rawclasses.test.ts` counts raw palette classes and
+  the legacy token names (`surface`, `primary`, `danger`…, bridged to the new tokens while views
+  migrate) per file against `rawclasses.baseline.ts`. A count may only go down.
+- **Theme preference** is per device (`localStorage['app-finance:theme']`: `system|light|dark`),
+  never in the DB. `public/theme-init.js`, a blocking same-origin script (the web CSP forbids
+  inline scripts) injected by the `theme-init` Vite plugin, sets `data-theme` on `<html>` before
+  the first paint. `lib/theme.ts` keeps it applied (OS appearance changes, other tabs) and feeds
+  `useThemeMode()`. The light theme stays gated (`THEME_LIGHT_ENABLED`) until the ratchet reaches
+  zero: `system` resolves to dark meanwhile.
+- **Primitives** (`frontend/src/components/ui/`, one barrel): `Button`/`IconButton` (sizes, icon,
+  `loading`), `Badge`, `Callout`, `EmptyState`, `Skeleton`, `SegmentedControl` and `Tabs`
+  (roving tabindex), `Menu` and `Toggletip` (native Popover API: top layer, light dismiss, Escape;
+  placed by the pure `position.ts`, since CSS anchor positioning is missing on Safari 17.6),
+  `ConfirmAction` (inline two-step confirm; no `window.confirm`), `Field`/`Input`/`Select`/
+  `MoneyInput`/`Switch` (hint and error wired to `aria-describedby`), `Modal`, `Toaster`, and the
+  `tbl` class recipes for tables.
+- **Font**: Inter Variable, self-hosted (`@fontsource-variable/inter`; the CSP allows only
+  same-origin fonts). The PWA precaches only its latin subsets.
+- **Tests**: interactive primitives run in a real headless Chromium through vitest's browser
+  project (`*.dom.test.tsx`, `vitest-browser-react`): jsdom has no `<dialog>.showModal` and
+  happy-dom no Escape/Popover. CI installs only Chromium, in the `web` job, which runs in parallel
+  with the slower `desktop` job, so the gate does not get longer.
