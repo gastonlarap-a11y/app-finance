@@ -128,5 +128,24 @@ export function createUsersService(db: SqlDb, session: Session): UsersServiceCon
     async ListDeletedUsers(): Promise<User[]> {
       return db.query('SELECT * FROM users WHERE deleted_at IS NOT NULL ORDER BY id ASC').map(rowToUser)
     },
+
+    // PurgeUser mirrors Go: a profile in the trash goes for good, with every
+    // row of every table carrying its user_id (found in the schema). The web
+    // build keeps no mail password, so there is nothing else to forget.
+    async PurgeUser(id: number): Promise<OpResult> {
+      const trashed = db.query('SELECT 1 FROM users WHERE id = ? AND deleted_at IS NOT NULL', [id])
+      if (trashed.length === 0) return { error: newError(ErrNotFound, 'el perfil no está en la papelera') }
+      db.transaction(() => {
+        const tables = db
+          .query(
+            `SELECT m.name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS p
+             WHERE m.type = 'table' AND p.name = 'user_id' AND m.name <> 'users' ORDER BY m.name`,
+          )
+          .map((r) => String(r.name))
+        for (const t of tables) db.exec(`DELETE FROM "${t}" WHERE user_id = ?`, [id])
+        db.exec('DELETE FROM users WHERE id = ?', [id])
+      })
+      return {}
+    },
   }
 }

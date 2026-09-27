@@ -1742,6 +1742,50 @@ func monthOf(period string) int {
 
 // ---------- trash (papelera) ----------
 
+// trashModels maps a TrashItem type to its model. Deleting a row for good
+// takes its children along by ON DELETE CASCADE (an expense's cuotas, a
+// goal's contributions, a fixed expense's amounts and payments, a category's
+// budgets) and unlinks what points at it by ON DELETE SET NULL (an inbox item
+// becomes reopenable, an expense loses a purged card).
+var trashModels = map[string]any{
+	"card":         (*Card)(nil),
+	"category":     (*Category)(nil),
+	"merchant":     (*Merchant)(nil),
+	"income":       (*Income)(nil),
+	"expense":      (*Expense)(nil),
+	"savingsgoal":  (*SavingsGoal)(nil),
+	"fixedexpense": (*FixedExpense)(nil),
+}
+
+// PurgeTrashItem deletes one record of the trash for good (only a record in
+// the trash: the trash is the confirm step).
+func (s *FinanceService) PurgeTrashItem(ctx context.Context, itemType string, id int64) OpResult {
+	model, ok := trashModels[itemType]
+	if !ok {
+		return OpResult{Error: shared.NewError(shared.ErrValidation, "tipo de elemento inválido: "+itemType)}
+	}
+	res, err := s.db.NewDelete().Model(model).WhereDeleted().
+		Where("id = ? AND user_id = ?", id, s.uid()).ForceDelete().Exec(ctx)
+	return OpResult{Error: requireOne(res, err, "el elemento no está en la papelera")}
+}
+
+// EmptyTrash deletes every record in the active profile's trash for good.
+func (s *FinanceService) EmptyTrash(ctx context.Context) OpResult {
+	uid := s.uid()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		for _, model := range trashModels {
+			if _, err := tx.NewDelete().Model(model).WhereDeleted().Where("user_id = ?", uid).ForceDelete().Exec(ctx); err != nil {
+				return fmt.Errorf("emptying trash: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
+}
+
 // ListTrash returns every soft-deleted record for the active user across all
 // entity types, newest deletion first.
 func (s *FinanceService) ListTrash(ctx context.Context) TrashResult {

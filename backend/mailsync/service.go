@@ -420,6 +420,25 @@ func (s *Service) ResyncMailFrom(ctx context.Context, since string) OpResult {
 	return OpResult{}
 }
 
+// ForgetUserSecrets returns the hook that deletes a profile's mail passwords
+// from the OS keychain when the profile is purged (users.PurgeUser); its rows
+// go with the profile's. A package function: a Service method would become a
+// frontend binding.
+func ForgetUserSecrets(s *Service) func(ctx context.Context, tx bun.Tx, userID int64) error {
+	return func(ctx context.Context, tx bun.Tx, userID int64) error {
+		var accs []MailAccount
+		if err := tx.NewSelect().Model(&accs).Where("user_id = ?", userID).Scan(ctx); err != nil {
+			return fmt.Errorf("loading mail accounts: %w", err)
+		}
+		for i := range accs {
+			if err := s.secrets.Delete(accs[i].secretKey()); err != nil {
+				return fmt.Errorf("forgetting mail password: %w", err)
+			}
+		}
+		return nil
+	}
+}
+
 // DisconnectMail removes the active profile's mailbox and its keychain entry.
 // Movements already imported stay in the inbox.
 func (s *Service) DisconnectMail(ctx context.Context) OpResult {

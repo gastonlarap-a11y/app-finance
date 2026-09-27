@@ -145,6 +145,8 @@ func main() {
 	// exists by the time the first one finishes (it starts after ServiceStartup).
 	mailSvc := mailsync.NewService(bdb, session, mailsync.NewKeychain(appName), mailsync.DefaultParsers(),
 		func(name string, data any) { application.Get().Event.Emit(name, data) })
+	// Purging a profile also forgets its mail password in the keychain.
+	users.AddPurgeHook(usersSvc, mailsync.ForgetUserSecrets(mailSvc))
 
 	version, err := updates.VersionFromConfig(buildConfig)
 	if err != nil {

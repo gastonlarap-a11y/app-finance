@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/uptrace/bun"
@@ -17,9 +18,10 @@ import (
 )
 
 type UsersService struct {
-	db      *bun.DB
-	session *Session
-	appName string
+	db         *bun.DB
+	session    *Session
+	appName    string
+	purgeHooks []PurgeHook
 }
 
 func NewService(db *bun.DB, session *Session, appName string) *UsersService {
@@ -159,6 +161,58 @@ func requireOne(res sql.Result, err error, notFoundMsg string) *shared.AppError 
 		return shared.NewError(shared.ErrNotFound, notFoundMsg)
 	}
 	return nil
+}
+
+// PurgeHook forgets what a profile keeps outside the database (the mail
+// password in the OS keychain) before its rows go. Set by main.go, so users
+// needs no dependency on the domains that own those secrets.
+type PurgeHook func(ctx context.Context, tx bun.Tx, userID int64) error
+
+// AddPurgeHook registers a hook PurgeUser runs inside its transaction. A
+// package function, not a method: every exported method of a service becomes
+// a frontend binding.
+func AddPurgeHook(s *UsersService, h PurgeHook) { s.purgeHooks = append(s.purgeHooks, h) }
+
+// PurgeUser deletes a profile in the trash for good: its row and every row of
+// every table that carries its user_id (found in the schema, so a table added
+// later is never forgotten); children without user_id go by ON DELETE
+// CASCADE. Only a trashed profile can be purged — the trash is the confirm step.
+func (s *UsersService) PurgeUser(ctx context.Context, id int64) OpResult {
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		trashed, err := tx.NewSelect().Model((*User)(nil)).WhereDeleted().Where("id = ?", id).Exists(ctx)
+		if err != nil {
+			return err
+		}
+		if !trashed {
+			return shared.NewError(shared.ErrNotFound, "el perfil no está en la papelera")
+		}
+		for _, h := range s.purgeHooks {
+			if err := h(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		var tables []string
+		if err := tx.NewRaw(`SELECT m.name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS p
+			WHERE m.type = 'table' AND p.name = 'user_id' AND m.name <> 'users' ORDER BY m.name`).Scan(ctx, &tables); err != nil {
+			return fmt.Errorf("finding profile tables: %w", err)
+		}
+		for _, t := range tables {
+			if _, err := tx.NewDelete().TableExpr(t).Where("user_id = ?", id).Exec(ctx); err != nil {
+				return fmt.Errorf("purging %s: %w", t, err)
+			}
+		}
+		_, err = tx.NewDelete().Model((*User)(nil)).WhereDeleted().Where("id = ?", id).ForceDelete().Exec(ctx)
+		return err
+	})
+	return OpResult{Error: toAppErrorOrNil(err)}
+}
+
+// toAppErrorOrNil is toAppError that keeps a nil error nil.
+func toAppErrorOrNil(err error) *shared.AppError {
+	if err == nil {
+		return nil
+	}
+	return toAppError(err)
 }
 
 // ListDeletedUsers returns every soft-deleted profile, oldest first.

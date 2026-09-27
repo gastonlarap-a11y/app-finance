@@ -173,6 +173,19 @@ function compareStrings(a: string, b: string): number {
 // uncategorized is the bucket for expenses without a category.
 const uncategorized = 'Sin categoría'
 
+// trashTables mirrors Go's trashModels: a TrashItem type → its table. Deleting
+// for good takes children along by ON DELETE CASCADE and unlinks the rest by
+// ON DELETE SET NULL.
+const trashTables: Readonly<Record<string, string>> = {
+  card: 'cards',
+  category: 'categories',
+  merchant: 'merchants',
+  income: 'incomes',
+  expense: 'expenses',
+  savingsgoal: 'savings_goals',
+  fixedexpense: 'fixed_expenses',
+}
+
 // validCategoryName mirrors Go: trimmed, not empty, and not the name of the
 // bucket that groups expenses without a category.
 function validCategoryName(name: string): { name: string; error?: ReturnType<typeof newError> } {
@@ -4265,6 +4278,23 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     // ---------- trash (papelera) ----------
+
+    async PurgeTrashItem(itemType: string, id: number): Promise<OpResult> {
+      const table = trashTables[itemType]
+      if (!table) return { error: newError(ErrValidation, 'tipo de elemento inválido: ' + itemType) }
+      db.exec(`DELETE FROM ${table} WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL`, [id, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'el elemento no está en la papelera') }
+      return {}
+    },
+
+    async EmptyTrash(): Promise<OpResult> {
+      db.transaction(() => {
+        for (const table of Object.values(trashTables)) {
+          db.exec(`DELETE FROM ${table} WHERE user_id = ? AND deleted_at IS NOT NULL`, [uid()])
+        }
+      })
+      return {}
+    },
 
     async ListTrash(): Promise<TrashResult> {
       const out: TrashItem[] = []

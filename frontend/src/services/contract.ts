@@ -844,6 +844,8 @@ export interface FinanceServiceContract {
   DeleteCardStatement(id: number): Promise<OpResult>
 
   ListTrash(): Promise<TrashResult>
+  PurgeTrashItem(itemType: string, id: number): Promise<OpResult>
+  EmptyTrash(): Promise<OpResult>
 }
 
 // ---------- settings (desktop-native; the web build answers with WEB_ONLY errors) ----------
@@ -1033,4 +1035,5 @@ export interface UsersServiceContract {
   DeleteUser(id: number): Promise<UserResult>
   RestoreUser(id: number): Promise<OpResult>
   ListDeletedUsers(): Promise<User[]>
+  PurgeUser(id: number): Promise<OpResult>
 }
