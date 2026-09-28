@@ -24,6 +24,7 @@ import {
   type MenuAction,
 } from './ui'
 import { RecurringSuggestions } from './RecurringSuggestions'
+import { AccountSelect, useAccounts } from './Accounts'
 
 // Billing frequencies (backend/finance/fixedexpense.go validIntervals).
 const FREQUENCIES: readonly { months: number; label: string }[] = [
@@ -245,6 +246,8 @@ function FixedExpenseForm({
   const [intervalMonths, setIntervalMonths] = useState(fixed?.intervalMonths ?? 1)
   const [currency, setCurrency] = useState(fixed?.currency ?? 'CLP')
   const [dueDay, setDueDay] = useState(fixed?.dueDay != null ? String(fixed.dueDay) : '')
+  const accounts = useAccounts()
+  const [accountId, setAccountId] = useState<number | null>(fixed?.accountId ?? null)
   const [busy, setBusy] = useState(false)
 
   const categoryOptions =
@@ -258,14 +261,17 @@ function FixedExpenseForm({
       const res = fixed
         ? await FinanceService.UpdateFixedExpense(fixed.id, description, category, card)
         : await FinanceService.CreateFixedExpense(description, category, card, startPeriod, amount, intervalMonths, currency)
-      if (failed(res)) return
+      if (failed(res) || !res.data) return
+      const id = res.data.id
       // One on a card is paid with the card: it reminds through its statement.
       const day = card === null && dueDay !== '' ? Number(dueDay) : null
-      if (res.data && day !== (fixed?.dueDay ?? null) && failed(await FinanceService.SetFixedExpenseDueDay(res.data.id, day))) {
-        return
-      }
+      // The fixed expense is saved either way; a failed extra keeps the dialog
+      // open (with its toast) so that choice is not silently lost.
+      const extraFailed =
+        (day !== (fixed?.dueDay ?? null) && failed(await FinanceService.SetFixedExpenseDueDay(id, day))) ||
+        (accountId !== (fixed?.accountId ?? null) && failed(await FinanceService.SetFixedExpenseAccount(id, accountId)))
       onSaved()
-      onClose()
+      if (!extraFailed) onClose()
     } finally {
       setBusy(false)
     }
@@ -344,6 +350,14 @@ function FixedExpenseForm({
             </Select>
           </Field>
         </div>
+
+        <AccountSelect
+          accounts={accounts}
+          value={accountId}
+          onChange={setAccountId}
+          label="Se paga desde la cuenta"
+          noneLabel={cardId === '' ? 'Sin cuenta' : 'La cuenta de la tarjeta'}
+        />
 
         {cardId === '' && (
           <Field label="Vence el día (opcional)">
