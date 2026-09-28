@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { useAtom } from 'jotai'
-import { PanelLeftClose, PanelLeftOpen, Settings, Wallet, type LucideIcon } from 'lucide-react'
-import { sidebarCollapsedAtom } from '@/atoms/finance'
+import { useAtom, useSetAtom } from 'jotai'
+import { Command, PanelLeftClose, PanelLeftOpen, Settings, Wallet, type LucideIcon } from 'lucide-react'
+import { paletteOpenAtom, sidebarCollapsedAtom } from '@/atoms/finance'
 import { useVersion } from '@/atoms/refresh'
 import { FinanceService } from '@/services/finance'
 import { IS_APPLE, IS_WEB } from '@/lib/platform'
@@ -83,6 +83,7 @@ export function Sidebar({ variant, collapsible = false, onNavigate }: { variant:
   const route = useRoute()
   const pending = usePendingImports()
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom)
+  const setPalette = useSetAtom(paletteOpenAtom)
   const rail = variant === 'rail'
   const mod = IS_APPLE ? '⌘' : 'Ctrl+'
 
@@ -139,6 +140,24 @@ export function Sidebar({ variant, collapsible = false, onNavigate }: { variant:
       ))}
 
       <div className="mt-auto space-y-2">
+        <button
+          type="button"
+          onClick={() => {
+            onNavigate?.() // the drawer closes first: one dialog at a time
+            setPalette(true)
+          }}
+          className={`flex w-full items-center rounded-lg font-medium text-fg-muted transition-colors hover:bg-sunken hover:text-fg ${
+            rail ? 'flex-col gap-1 px-1 py-2 text-center text-[11px] leading-tight' : 'gap-3 px-3 py-2 text-sm'
+          }`}
+        >
+          <Command aria-hidden="true" className={rail ? 'size-5' : 'size-4 shrink-0'} />
+          <span className={rail ? '' : 'flex-1 text-left'}>Ir a…</span>
+          {!rail && (
+            <kbd aria-hidden="true" className="rounded bg-sunken px-1.5 py-0.5 font-sans text-[11px] text-fg-subtle ring-1 ring-inset ring-line pointer-coarse:hidden">
+              {mod}K
+            </kbd>
+          )}
+        </button>
         <NavLink
           to={{ page: 'config', section: null }}
           label="Configuración"
