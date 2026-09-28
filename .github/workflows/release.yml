@@ -105,8 +105,12 @@ jobs:
           go vet ./...
           go test -race ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      # Engine and lib tests only: they guard the exact code being packaged. The
+      # UI tests (vitest browser project, headless Chromium) already passed in
+      # the CI run of this commit on main (the tag must be on main); running
+      # them here would need a browser download in this cache-less job.
       - name: Engine tests (vitest)
-        run: npm test
+        run: npx vitest run --project unit
         working-directory: frontend
 
       - name: macOS — universal .app (arm64 + amd64) → .dmg + in-app update zip
