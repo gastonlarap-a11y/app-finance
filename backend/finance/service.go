@@ -369,6 +369,15 @@ func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name stri
 				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}
+			// Merchants' usual category and the import rules name it too.
+			if _, err := tx.NewUpdate().Model((*Merchant)(nil)).
+				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
+				return err
+			}
+			if _, err := tx.NewUpdate().Model((*MerchantRule)(nil)).
+				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
+				return err
+			}
 		}
 		return tx.NewSelect().Model(cat).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
 	})
@@ -417,7 +426,7 @@ func (s *FinanceService) CreateMerchant(ctx context.Context, name string) Mercha
 }
 
 // UpdateMerchant renames a merchant and cascades the new name to every expense
-// that used the old name (expenses store the merchant as plain text).
+// and import rule that used the old name (both store the merchant as plain text).
 func (s *FinanceService) UpdateMerchant(ctx context.Context, id int64, name string) MerchantResult {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -439,6 +448,10 @@ func (s *FinanceService) UpdateMerchant(ctx context.Context, id int64, name stri
 		}
 		if old.Name != name {
 			if _, err := tx.NewUpdate().Model((*Expense)(nil)).
+				Set("merchant = ?", name).Where("merchant = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
+				return err
+			}
+			if _, err := tx.NewUpdate().Model((*MerchantRule)(nil)).
 				Set("merchant = ?", name).Where("merchant = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}
@@ -464,6 +477,30 @@ func (s *FinanceService) DeleteMerchant(ctx context.Context, id int64) OpResult 
 // merchant now uses the same name (the unique index only allows one active row).
 func (s *FinanceService) RestoreMerchant(ctx context.Context, id int64) OpResult {
 	return s.restore(ctx, (*Merchant)(nil), id, "comercio no encontrado", "ya existe un comercio activo con ese nombre")
+}
+
+// SetMerchantCategory sets a live merchant's usual category ("" = none): the
+// expense form proposes it when the merchant is picked, and imports use it
+// when their rule names the merchant but no category. The name must be one of
+// the profile's live categories (matched in any case, stored as written there).
+func (s *FinanceService) SetMerchantCategory(ctx context.Context, merchantID int64, category string) OpResult {
+	uid := s.uid()
+	name := strings.TrimSpace(category)
+	if name != "" {
+		// Compared in Go, not with SQL lower(): SQLite folds only ASCII («Í» ≠ «í»).
+		var cats []Category
+		if err := s.db.NewSelect().Model(&cats).Where("user_id = ?", uid).Scan(ctx); err != nil {
+			return OpResult{Error: internalErr(err)}
+		}
+		i := slices.IndexFunc(cats, func(c Category) bool { return strings.EqualFold(c.Name, name) })
+		if i < 0 {
+			return OpResult{Error: shared.NewError(shared.ErrValidation, "la categoría «"+name+"» no existe")}
+		}
+		name = cats[i].Name
+	}
+	res, err := s.db.NewUpdate().Model((*Merchant)(nil)).Set("category = ?", name).
+		Where("id = ? AND user_id = ?", merchantID, uid).Exec(ctx)
+	return OpResult{Error: requireOne(res, err, "comercio no encontrado")}
 }
 
 // ---------- incomes (extras / bonos) ----------

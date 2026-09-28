@@ -41,7 +41,7 @@ export interface Account {
   id: number
   userId: number
   name: string
-  kind: string // 'corriente' | 'vista' | 'efectivo' | 'ahorro' | 'otra'
+  kind: string // 'corriente' | 'vista' | 'digital' (prepaid wallet: Mercado Pago…) | 'efectivo' | 'ahorro' | 'otra'
   openingBalance: string
   openingPeriod: string // YYYY-MM the balance counts from
   receivesSalary: boolean
@@ -52,7 +52,35 @@ export interface AccountView extends Account {
   balance: string // at the close of the month asked for
   ingresos: string // that month
   gastos: string // that month
+  transferIn: string // that month, from other own accounts (not income)
+  transferOut: string // that month, to other own accounts (not spending)
 }
+
+// Money moved between two own accounts: neither spending nor income, so only
+// the two accounts' balances move. One-off when endPeriod === startPeriod;
+// every month from startPeriod when endPeriod is ''.
+export interface Transfer {
+  id: number
+  userId: number
+  fromAccountId: number
+  toAccountId: number
+  description: string
+  amount: string
+  startPeriod: string // YYYY-MM
+  endPeriod: string // YYYY-MM last month; '' = every month
+  createdAt: string
+}
+
+export type TransferResult = Result<Transfer>
+
+// What applying the suggested catalog added.
+export interface CatalogSummary {
+  categories: number
+  merchants: number
+  rules: number
+}
+
+export type CatalogResult = Result<CatalogSummary>
 
 export interface AccountsSummary {
   accounts: AccountView[]
@@ -85,6 +113,7 @@ export interface Merchant {
   id: number
   userId: number
   name: string
+  category: string // usual category (Apple → Tecnología); '' = none
   createdAt: string
   deletedAt?: string | null
 }
@@ -152,6 +181,7 @@ export interface FixedExpense {
   description: string
   category: string
   cardId: number | null
+  accountId: number | null // paid from this account (wins over its card's); null = its card's, or none
   startPeriod: string
   endPeriod: string
   intervalMonths: number // bills every N months from startPeriod (1, 2, 3, 4, 6, 12)
@@ -854,6 +884,10 @@ export interface FinanceServiceContract {
   UpdateMerchant(id: number, name: string): Promise<MerchantResult>
   DeleteMerchant(id: number): Promise<OpResult>
   RestoreMerchant(id: number): Promise<OpResult>
+  // A merchant's usual category ('' = none), proposed by the expense form and imports.
+  SetMerchantCategory(merchantID: number, category: string): Promise<OpResult>
+  // Adds the suggested Chilean catalog (categories, merchants, import rules) the profile lacks.
+  ApplyCatalog(): Promise<CatalogResult>
 
   ListIncomes(period: string): Promise<Income[]>
   CreateIncome(period: string, description: string, amount: string): Promise<IncomeResult>
@@ -889,6 +923,19 @@ export interface FinanceServiceContract {
   SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult>
   SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult>
   SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult>
+  SetFixedExpenseAccount(fixedExpenseID: number, accountID: number | null): Promise<OpResult>
+  ListTransfers(): Promise<Transfer[]>
+  CreateTransfer(
+    fromAccountID: number,
+    toAccountID: number,
+    description: string,
+    amount: string,
+    startPeriod: string,
+    monthly: boolean,
+  ): Promise<TransferResult>
+  UpdateTransfer(id: number, fromAccountID: number, toAccountID: number, description: string, amount: string): Promise<TransferResult>
+  EndTransfer(id: number, lastPeriod: string): Promise<OpResult>
+  DeleteTransfer(id: number): Promise<OpResult>
   LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>

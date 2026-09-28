@@ -150,9 +150,10 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   Deleting for good happens only from the trash (`PurgeTrashItem`/`EmptyTrash`, `users.PurgeUser`,
   which finds every `user_id` table at run time); children go by `ON DELETE CASCADE`.
 - **Views over the ledger, never a second ledger**: accounts (`account.go`) and due dates
-  (`dues.go`) only attribute or read existing flows. A receivable settles as a refund
-  (`insertRefund`), a foreign-currency purchase keeps its pesos in `installment_amount`. None of them
-  adds a monthly flow to `flowsBetween`.
+  (`dues.go`) only attribute or read existing flows; transfers between own accounts
+  (`transfer.go`) only move account balances. A receivable settles as a refund (`insertRefund`), a
+  foreign-currency purchase keeps its pesos in `installment_amount`. None of them adds a monthly
+  flow to `flowsBetween`.
 - **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —
   `replanInstallments` adapts them by number (stable ids: statement lines link to them), applies a
   new amount to pending cuotas only, keeps the cuota-1 month while the date/card lead to the same

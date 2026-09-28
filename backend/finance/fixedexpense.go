@@ -35,6 +35,7 @@ type FixedExpense struct {
 	Description    string     `bun:"description,notnull" json:"description"`
 	Category       string     `bun:"category,notnull" json:"category"`
 	CardID         *int64     `bun:"card_id" json:"cardId"`
+	AccountID      *int64     `bun:"account_id" json:"accountId"`             // cuenta desde la que se paga; gana sobre la de la tarjeta
 	StartPeriod    string     `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM: primer mes cobrado
 	EndPeriod      string     `bun:"end_period" json:"endPeriod"`             // YYYY-MM último mes cobrado; "" = activo
 	IntervalMonths int        `bun:"interval_months,notnull,default:1" json:"intervalMonths"`

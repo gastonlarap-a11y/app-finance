@@ -244,13 +244,21 @@ pesos for every total (`installment_amount`), and additionally keeps `currency`,
 (`recordItemCurrency`), and `LatestFxRate` suggests the CLP/USD rate implied by the last
 international card payment.
 
-**Accounts, light** (`account.go`, migration `20260927033`). An account (corriente, vista,
-efectivo, ahorro) is a lens on the same ledger, never a second one: `accounts` rows with an opening
-balance and month, plus a nullable `account_id` on expenses, incomes and cards. `ListAccounts`
-attributes each month's flows (`accountFlows`): the salary to the one `receives_salary` account,
-incomes to theirs, cuotas and refunds to the expense's account or its card's, and fixed charges to
+**Accounts, light** (`account.go`, migrations `20260927033`, `20260928036`). An account
+(corriente, vista, digital — a prepaid wallet such as Mercado Pago —, efectivo, ahorro) is a lens on
+the same ledger, never a second one: `accounts` rows with an opening balance and month, plus a
+nullable `account_id` on expenses, incomes, cards and fixed expenses. `ListAccounts` attributes each
+month's flows (`accountFlows`): the salary to the one `receives_salary` account, incomes to theirs,
+cuotas and refunds to the expense's account or its card's, and fixed charges to their own account or
 their card's. `AccountsSummary.Unassigned*` shows what no account claims. The app's
-`Disponible`/`Balance` do not change, and nothing moves money between accounts.
+`Disponible`/`Balance` do not change.
+
+**Transfers** (`transfer.go`) move money between two own accounts (the salary passed from the bank
+it lands in to the everyday one, topping up a digital wallet): one-off (`end_period =
+start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). They are neither spending
+nor income, so they never enter `flowsBetween` or a month's summary; they only move the two
+accounts' balances (`AccountView.TransferIn/Out`). Deleting an account deletes its transfers
+(`ON DELETE CASCADE`).
 
 **Due dates and reminders** (`dues.go`, migration `20260927034`; `backend/reminders`).
 `UpcomingDues(today, days)` lists what is still unpaid and falls due from `today` to `days` later,
@@ -463,8 +471,19 @@ keychain (`mailsync.ForgetUserSecrets`).
 ## 16. Merchants
 
 `backend/finance/merchant.go` is a user-managed list of "comercios". Expenses store the merchant as
-plain text (`expenses.merchant`), not a foreign key — renaming or deleting a merchant does not cascade
-to historical expenses, which keep the text they were saved with. Surfaced in `MerchantsView.tsx`.
+plain text (`expenses.merchant`), not a foreign key: renaming a merchant (`UpdateMerchant`) rewrites
+that text on its expenses and import rules; deleting one leaves the text untouched. A merchant may
+have a usual category (`merchants.category`, `SetMerchantCategory`): the expense form proposes it,
+and an import whose rule names the merchant but no category takes it. Renaming a category
+(`UpdateCategory`) rewrites it on expenses, fixed expenses, merchants and import rules.
+
+**Suggested catalog** (`catalog.go` + `catalog.json`, mirrored by `engine/finance/catalog.ts`):
+~34 categories (with a looks.json icon and color) and ~200 Chilean merchants with their usual
+category and bank-descriptor prefixes (normalized like `normalizeDescriptor`; ambiguous names get
+none). `ApplyCatalog` adds what the profile lacks and never overrides a choice: names compare in
+any case, a name in the trash counts as taken, an existing merchant only gets a category if it had
+none, an existing rule pattern is left alone; applying it again adds nothing.
+Surfaced in `MerchantsView.tsx`.
 
 
 ## 17. Web/PWA target (iPad)

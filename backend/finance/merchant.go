@@ -15,6 +15,7 @@ type Merchant struct {
 	ID        int64      `bun:"id,pk,autoincrement" json:"id"`
 	UserID    int64      `bun:"user_id,notnull" json:"userId"`
 	Name      string     `bun:"name,notnull" json:"name"`
+	Category  string     `bun:"category,notnull" json:"category"` // usual category (Apple → Tecnología); "" = none
 	CreatedAt time.Time  `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	DeletedAt *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
 }
