@@ -251,7 +251,8 @@ jobs:
           Aplicaciones; tus datos no se borran.
 
           Tus datos no se tocan: la base de datos vive fuera de la app y las migraciones nuevas se
-          aplican solas al abrirla. Recomendado: «☁ Respaldar» antes de actualizar.
+          aplican solas al abrirla. Recomendado: «Respaldar ahora» (ícono de nube al pie de la barra
+          lateral) antes de actualizar.
 
           **iPad**: la versión web (PWA) avisa cuando hay una versión nueva: toca **Actualizar** en
           el aviso de arriba.
