@@ -16,6 +16,8 @@ type Category struct {
 	UserID    int64      `bun:"user_id,notnull" json:"userId"`
 	Name      string     `bun:"name,notnull" json:"name"`
 	Rollover  bool       `bun:"rollover,notnull" json:"rollover"` // unspent budget carries into the next month
+	Icon      string     `bun:"icon,notnull" json:"icon"`         // looks.json icon key; "" = automatic
+	Color     string     `bun:"color,notnull" json:"color"`       // looks.json color key; "" = automatic
 	CreatedAt time.Time  `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	DeletedAt *time.Time `bun:",soft_delete" json:"deletedAt,omitempty"`
 }

@@ -232,6 +232,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     )!.installmentId
     ok(await finance.SetFixedExpenseDueDay(fe.data!.id, 10))
     expect(ok(await finance.UpcomingDues(`${period}-05`, 10)).data).toHaveLength(1)
+    // Created after the statement import so it plays no part in its card matching.
+    const card = ok(await finance.CreateCard('Visa', '1000000', 24, '')).data!
+    const goal = ok(await finance.CreateSavingsGoal('Viaje', '500000', '')).data!
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -265,6 +268,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetExpenseAccount(expense.data!.id, acct.id),
       () => finance.SetExpenseAccount(expense.data!.id, null),
       () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
+      () => finance.SetCategoryLook(cat.data!.id, 'tag', 'blue'),
+      () => finance.SetCardColor(card.id, 'blue'),
+      () => finance.SetSavingsGoalIcon(goal.id, 'car'),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {
