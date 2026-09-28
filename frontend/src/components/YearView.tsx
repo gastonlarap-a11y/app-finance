@@ -7,8 +7,9 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { isNegative, isZero, maxAbs, ratio } from '@/lib/money'
 import { formatCLP, monthLabel, yearOf } from '@/lib/format'
-import { Bar, Button, EmptyState, QueryError, Section, Skeleton, StatCard, tbl } from './ui'
+import { Bar, Button, EmptyState, LookIcon, QueryError, Section, Skeleton, StatCard, tbl } from './ui'
 import { ExportButton } from './ExportButton'
+import { useCategoryLooks } from './useCategoryLooks'
 import { exportBasename, yearTable } from '@/lib/exportTables'
 
 function signTone(v: string): string {
@@ -180,6 +181,7 @@ function CategoryHeatmap({
   onMonth: (period: string) => void
 }) {
   const cellMax = maxAbs(rows.flatMap((r) => r.months))
+  const looks = useCategoryLooks()
   return (
     <Section title={`Gasto por categoría y mes ${year}`}>
       <div className={tbl.wrap}>
@@ -203,8 +205,11 @@ function CategoryHeatmap({
           <tbody>
             {rows.map((r) => (
               <tr key={r.category}>
-                <th scope="row" className="sticky left-0 max-w-40 truncate bg-panel py-1 pr-2 text-left font-normal text-fg">
-                  {r.category}
+                <th scope="row" className="sticky left-0 max-w-44 bg-panel py-1 pr-2 text-left font-normal text-fg">
+                  <span className="flex items-center gap-1.5">
+                    <LookIcon look={looks.byName(r.category)} size="sm" />
+                    <span className="truncate">{r.category}</span>
+                  </span>
                 </th>
                 {r.months.map((v, i) => (
                   <td

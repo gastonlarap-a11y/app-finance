@@ -8,7 +8,22 @@ import { useQuery } from '@/lib/useQuery'
 import { formatCLP, formatDate, periodLabel, todayISO } from '@/lib/format'
 import { exportBasename, searchTable } from '@/lib/exportTables'
 import { SearchX } from 'lucide-react'
-import { BankCodes, BankDescription, Button, EmptyState, Field, QueryError, Section, Select, SkeletonRows, TagChips, inputCls, tbl } from './ui'
+import { categoryLooks } from '@/lib/look'
+import {
+  BankCodes,
+  BankDescription,
+  Button,
+  EmptyState,
+  Field,
+  LookIcon,
+  QueryError,
+  Section,
+  Select,
+  SkeletonRows,
+  TagChips,
+  inputCls,
+  tbl,
+} from './ui'
 import { ExportButton } from './ExportButton'
 
 const PAGE = 50
@@ -43,7 +58,7 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
 
   const options = useQuery(`options:${version}`, async () => {
     const [cats, cards, tags] = await Promise.all([FinanceService.ListCategories(), FinanceService.ListCards(), FinanceService.ListTags()])
-    return { categories: cats.map((c) => c.name), cards, tags: tags.map((t) => t.name) }
+    return { categories: cats.map((c) => c.name), looks: categoryLooks(cats), cards, tags: tags.map((t) => t.name) }
   })
 
   const filter: ExpenseFilter = {
@@ -72,6 +87,7 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
 
   const hasFilters = text !== '' || category !== '' || tag !== '' || cardId !== '' || fromPeriod !== '' || toPeriod !== ''
   const data = results.data
+  const looks = options.data?.looks ?? categoryLooks([])
   const stale = results.status === 'loading'
 
   return (
@@ -187,11 +203,16 @@ export function SearchView({ initialText = '' }: { initialText?: string }) {
                     <tr key={ex.id} className={tbl.row}>
                       <td className={`${tbl.td} whitespace-nowrap text-fg-muted`}>{formatDate(ex.date)}</td>
                       <td className={tbl.td}>
-                        <div className="font-medium text-fg">{ex.description}</div>
-                        {ex.merchant && <div className="text-xs text-fg-subtle">{ex.merchant}</div>}
-                        <BankDescription text={hit.expense.bankDescription} />
-                        <TagChips tags={hit.tags} />
-                        <BankCodes codes={hit.references} />
+                        <div className="flex items-start gap-2.5">
+                          <LookIcon look={looks.byName(ex.category)} size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-medium text-fg">{ex.description}</div>
+                            {ex.merchant && <div className="text-xs text-fg-subtle">{ex.merchant}</div>}
+                            <BankDescription text={hit.expense.bankDescription} />
+                            <TagChips tags={hit.tags} />
+                            <BankCodes codes={hit.references} />
+                          </div>
+                        </div>
                       </td>
                       <td className={`${tbl.td} hidden text-fg-muted @xl:table-cell`}>{ex.category || 'Sin categoría'}</td>
                       <td className={`${tbl.td} hidden text-fg-muted @3xl:table-cell`}>{hit.cardName || '—'}</td>

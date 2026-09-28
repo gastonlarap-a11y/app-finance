@@ -55,6 +55,35 @@
   /* Dims the page behind modal dialogs. */
   --color-scrim: oklch(0.15 0.02 265 / 0.45);
 
+  /* Personalization palette (keys of backend/finance/looks.json): look-<key>
+     for icons/text/dots, look-<key>-soft for the chip behind them. Components
+     never name them: an element with data-look="<key>" exposes --look and
+     --look-soft (below), read with text-(--look) / bg-(--look-soft). */
+  --color-look-red: oklch(0.5 0.18 25);
+  --color-look-red-soft: oklch(0.94 0.028 25);
+  --color-look-orange: oklch(0.5 0.125 50);
+  --color-look-orange-soft: oklch(0.94 0.031 50);
+  --color-look-amber: oklch(0.5 0.1 75);
+  --color-look-amber-soft: oklch(0.94 0.046 75);
+  --color-look-lime: oklch(0.5 0.124 128);
+  --color-look-lime-soft: oklch(0.94 0.05 128);
+  --color-look-green: oklch(0.5 0.131 150);
+  --color-look-green-soft: oklch(0.94 0.05 150);
+  --color-look-teal: oklch(0.5 0.084 182);
+  --color-look-teal-soft: oklch(0.94 0.05 182);
+  --color-look-cyan: oklch(0.5 0.082 212);
+  --color-look-cyan-soft: oklch(0.94 0.047 212);
+  --color-look-blue: oklch(0.5 0.142 252);
+  --color-look-blue-soft: oklch(0.94 0.027 252);
+  --color-look-indigo: oklch(0.5 0.18 277);
+  --color-look-indigo-soft: oklch(0.94 0.026 277);
+  --color-look-violet: oklch(0.5 0.18 302);
+  --color-look-violet-soft: oklch(0.94 0.032 302);
+  --color-look-pink: oklch(0.5 0.18 350);
+  --color-look-pink-soft: oklch(0.94 0.033 350);
+  --color-look-gray: oklch(0.5 0.02 265);
+  --color-look-gray-soft: oklch(0.94 0.008 265);
+
   --font-sans: 'Inter Variable', system-ui, sans-serif;
 }
 
@@ -93,8 +122,47 @@
 
   --color-scrim: oklch(0.05 0.01 265 / 0.6);
 
+  --color-look-red: oklch(0.8 0.108 25);
+  --color-look-red-soft: oklch(0.3 0.07 25);
+  --color-look-orange: oklch(0.8 0.119 50);
+  --color-look-orange-soft: oklch(0.3 0.07 50);
+  --color-look-amber: oklch(0.8 0.14 75);
+  --color-look-amber-soft: oklch(0.3 0.06 75);
+  --color-look-lime: oklch(0.8 0.14 128);
+  --color-look-lime-soft: oklch(0.3 0.07 128);
+  --color-look-green: oklch(0.8 0.14 150);
+  --color-look-green-soft: oklch(0.3 0.07 150);
+  --color-look-teal: oklch(0.8 0.135 182);
+  --color-look-teal-soft: oklch(0.3 0.051 182);
+  --color-look-cyan: oklch(0.8 0.132 212);
+  --color-look-cyan-soft: oklch(0.3 0.05 212);
+  --color-look-blue: oklch(0.8 0.097 252);
+  --color-look-blue-soft: oklch(0.3 0.07 252);
+  --color-look-indigo: oklch(0.8 0.095 277);
+  --color-look-indigo-soft: oklch(0.3 0.07 277);
+  --color-look-violet: oklch(0.8 0.114 302);
+  --color-look-violet-soft: oklch(0.3 0.07 302);
+  --color-look-pink: oklch(0.8 0.129 350);
+  --color-look-pink-soft: oklch(0.3 0.07 350);
+  --color-look-gray: oklch(0.8 0.02 265);
+  --color-look-gray-soft: oklch(0.3 0.015 265);
+
   color-scheme: dark;
 }
+
+/* data-look="<key>" (lib/look.ts) → the element's personalization color. */
+[data-look='red'] { --look: var(--color-look-red); --look-soft: var(--color-look-red-soft); }
+[data-look='orange'] { --look: var(--color-look-orange); --look-soft: var(--color-look-orange-soft); }
+[data-look='amber'] { --look: var(--color-look-amber); --look-soft: var(--color-look-amber-soft); }
+[data-look='lime'] { --look: var(--color-look-lime); --look-soft: var(--color-look-lime-soft); }
+[data-look='green'] { --look: var(--color-look-green); --look-soft: var(--color-look-green-soft); }
+[data-look='teal'] { --look: var(--color-look-teal); --look-soft: var(--color-look-teal-soft); }
+[data-look='cyan'] { --look: var(--color-look-cyan); --look-soft: var(--color-look-cyan-soft); }
+[data-look='blue'] { --look: var(--color-look-blue); --look-soft: var(--color-look-blue-soft); }
+[data-look='indigo'] { --look: var(--color-look-indigo); --look-soft: var(--color-look-indigo-soft); }
+[data-look='violet'] { --look: var(--color-look-violet); --look-soft: var(--color-look-violet-soft); }
+[data-look='pink'] { --look: var(--color-look-pink); --look-soft: var(--color-look-pink-soft); }
+[data-look='gray'] { --look: var(--color-look-gray); --look-soft: var(--color-look-gray-soft); }
 
 :root {
   /* Native controls (month/date pickers, checkboxes, scrollbars) follow the theme. */

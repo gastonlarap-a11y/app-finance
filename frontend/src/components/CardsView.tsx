@@ -6,7 +6,22 @@ import { useQuery } from '@/lib/useQuery'
 import { formatCLP } from '@/lib/format'
 import { Link } from './Link'
 import { CreditCard, Pencil, Plus } from 'lucide-react'
-import { Button, ConfirmAction, EmptyState, Field, Input, Modal, MoneyInput, QueryError, Section, SkeletonRows, inputCls } from './ui'
+import { cardColor } from '@/lib/look'
+import {
+  Button,
+  ColorPicker,
+  ConfirmAction,
+  EmptyState,
+  Field,
+  Input,
+  LookIcon,
+  Modal,
+  MoneyInput,
+  QueryError,
+  Section,
+  SkeletonRows,
+  inputCls,
+} from './ui'
 import { AccountSelect, useAccounts } from './Accounts'
 
 // CardsView is Configuración › Tarjetas. Their statements live in Importar ›
@@ -55,9 +70,7 @@ export function CardsView() {
             {cards.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sunken text-fg-muted ring-1 ring-inset ring-line">
-                    <CreditCard className="size-4" />
-                  </span>
+                  <LookIcon look={{ icon: 'credit-card', color: cardColor(c) }} size="lg" />
                   <div className="min-w-0">
                     <div className="font-medium text-fg">
                       {c.name}
@@ -106,6 +119,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
   const [lastDigits, setLastDigits] = useState(card?.lastDigits ?? '')
   const accounts = useAccounts()
   const [accountId, setAccountId] = useState<number | null>(card?.accountId ?? null)
+  const [color, setColor] = useState(card?.color ?? '')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: SubmitEvent) {
@@ -116,12 +130,15 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
       const res = card
         ? await FinanceService.UpdateCard(card.id, name, limit || '0', day, lastDigits)
         : await FinanceService.CreateCard(name, limit || '0', day, lastDigits)
-      if (failed(res)) return
-      if (res.data && accountId !== (card?.accountId ?? null) && failed(await FinanceService.SetCardAccount(res.data.id, accountId))) {
-        return
-      }
+      if (failed(res) || !res.data) return
+      const id = res.data.id
+      // The card is saved either way; a failed extra keeps the dialog open
+      // (with its toast) so that choice is not silently lost.
+      const extraFailed =
+        (accountId !== (card?.accountId ?? null) && failed(await FinanceService.SetCardAccount(id, accountId))) ||
+        (color !== (card?.color ?? '') && failed(await FinanceService.SetCardColor(id, color)))
       onSaved()
-      onClose()
+      if (!extraFailed) onClose()
     } finally {
       setBusy(false)
     }
@@ -153,6 +170,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
           />
         </Field>
         <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label="Se paga desde la cuenta" noneLabel="Ninguna" />
+        <ColorPicker value={color} onChange={setColor} auto={card ? cardColor({ id: card.id, color: '' }) : undefined} />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>
             Cancelar

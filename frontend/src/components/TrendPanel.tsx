@@ -4,7 +4,8 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { useQuery } from '@/lib/useQuery'
 import { maxAbs, pctChange, ratio } from '@/lib/money'
 import { formatCLP, monthLabel } from '@/lib/format'
-import { QueryError, Section, Skeleton, tbl } from './ui'
+import { LookIcon, QueryError, Section, Skeleton, tbl } from './ui'
+import { useCategoryLooks } from './useCategoryLooks'
 
 const WINDOW = 6
 
@@ -53,6 +54,7 @@ function Sparkline({ months }: { months: TrendMonth[] }) {
 export function TrendPanel({ period }: { period: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
+  const looks = useCategoryLooks()
   const query = useQuery(`${period}:${version}`, async () => {
     const res = await FinanceService.SpendingTrend(period, WINDOW)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'tendencia vacía')
@@ -111,7 +113,12 @@ export function TrendPanel({ period }: { period: string }) {
             <tbody>
               {movers.map((c) => (
                 <tr key={c.category} className={tbl.row}>
-                  <td className={`${tbl.td} text-fg`}>{c.category}</td>
+                  <td className={`${tbl.td} text-fg`}>
+                    <span className="flex items-center gap-2">
+                      <LookIcon look={looks.byName(c.category)} size="sm" />
+                      {c.category}
+                    </span>
+                  </td>
                   <td className={`${tbl.td} ${tbl.num}`}>{formatCLP(c.current)}</td>
                   <td className={`${tbl.td} ${tbl.num} hidden text-fg-muted sm:table-cell`}>{formatCLP(c.average)}</td>
                   <td className={`${tbl.td} text-right text-xs`}>
