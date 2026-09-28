@@ -44,10 +44,12 @@ import {
   Bar,
   Button,
   Callout,
+  ColorDot,
   ConfirmAction,
   ConfirmDialog,
   Empty,
   EmptyState,
+  LookIcon,
   Menu,
   QueryError,
   Section,
@@ -72,6 +74,7 @@ import { DuesBanner } from './DuesBanner'
 import { AccountBalancesPanel } from './Accounts'
 import { Link } from './Link'
 import { exportBasename, monthTable } from '@/lib/exportTables'
+import { autoColor, cardColor, categoryLooks, type ColorKey, type Look } from '@/lib/look'
 
 const filterCls =
   'h-9 rounded-lg bg-panel pl-3 text-sm text-fg outline-none ring-1 ring-inset ring-line-input focus:ring-2 focus:ring-focus'
@@ -103,6 +106,7 @@ export function MonthView() {
       summary: summary.data,
       expenses,
       categories: cats.map((c) => c.name),
+      looks: categoryLooks(cats),
       merchants: mers.map((m) => m.name),
     }
   })
@@ -121,7 +125,8 @@ export function MonthView() {
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
   if (!query.data) return <MonthSkeleton />
-  const { summary, expenses, categories, merchants } = query.data
+  const { summary, expenses, categories, looks, merchants } = query.data
+  const cardColors = new Map(summary.porTarjeta.map((t) => [t.card.id, cardColor(t.card)]))
   const stale = query.status === 'loading'
 
   // The month comes from the rows shown, not the navigation atom: while the next
@@ -303,6 +308,8 @@ export function MonthView() {
                           <MovementRow
                             key={movKey(m)}
                             m={m}
+                            look={looks.byName(m.category)}
+                            cardDot={m.cardId != null ? (cardColors.get(m.cardId) ?? autoColor(m.cardId)) : null}
                             busy={pending.has(movKey(m))}
                             actions={rowActions(m)}
                             onTogglePaid={(paid) => void togglePaid(m, paid)}
@@ -328,7 +335,10 @@ export function MonthView() {
                   return (
                     <li key={c.category} className="text-sm">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="w-40 shrink-0 truncate text-fg">{c.category}</span>
+                        <span className="flex w-40 shrink-0 items-center gap-2">
+                          <LookIcon look={looks.byName(c.category)} size="sm" />
+                          <span className="truncate text-fg">{c.category}</span>
+                        </span>
                         <div className="flex-1">
                           {budget && cap ? (
                             <Bar fill={ratio(budget.spent, cap)} tone={budget.over ? 'danger' : budget.near ? 'warning' : 'success'} />
@@ -381,7 +391,10 @@ export function MonthView() {
                   return (
                     <li key={t.card.id}>
                       <div className="mb-1 flex items-center justify-between gap-2 text-sm">
-                        <span className="font-medium text-fg">{t.card.name}</span>
+                        <span className="flex items-center gap-2 font-medium text-fg">
+                          <ColorDot color={cardColor(t.card)} />
+                          {t.card.name}
+                        </span>
                         <span className="tabular-nums text-fg-muted">{formatCLP(t.gastoMes)} este mes</span>
                       </div>
                       <Bar fill={hasLimit ? ratio(t.cupoUsado, t.card.creditLimit) : 0} tone={over ? 'danger' : 'primary'} />
@@ -475,12 +488,17 @@ export function MonthView() {
 // it is paid (a toggle) and its actions (a ⋯ menu for expenses).
 function MovementRow({
   m,
+  look,
+  cardDot,
   busy,
   actions,
   onTogglePaid,
   onRemoveRefund,
 }: {
   m: Movimiento
+  look: Look
+  // The color dot of the card it is charged to; null = no card.
+  cardDot: ColorKey | null
   busy: boolean
   actions: MenuAction[]
   onTogglePaid: (currentlyPaid: boolean) => void
@@ -493,11 +511,16 @@ function MovementRow({
   return (
     <tr className={tbl.row}>
       <td className={`${tbl.td} @lg:min-w-44`}>
-        <span className="line-clamp-2 max-w-[16rem] font-medium text-fg">{m.description}</span>
-        <BankDescription text={m.bankDescription} />
-        {m.currency !== '' && <span className="block text-[11px] text-fg-subtle">{formatAmount(m.originalAmount, m.currency)} en total</span>}
-        <TagChips tags={m.tags} />
-        <BankCodes codes={m.references} />
+        <div className="flex items-start gap-2.5">
+          <LookIcon look={look} size="sm" />
+          <div className="min-w-0">
+            <span className="line-clamp-2 max-w-[16rem] font-medium text-fg">{m.description}</span>
+            <BankDescription text={m.bankDescription} />
+            {m.currency !== '' && <span className="block text-[11px] text-fg-subtle">{formatAmount(m.originalAmount, m.currency)} en total</span>}
+            <TagChips tags={m.tags} />
+            <BankCodes codes={m.references} />
+          </div>
+        </div>
       </td>
       <td className={`${tbl.td} hidden text-fg-muted @xl:table-cell`}>
         <span className="line-clamp-2 max-w-[10rem] break-words">{m.category}</span>
@@ -506,7 +529,14 @@ function MovementRow({
         <span className="line-clamp-2 max-w-[10rem] break-words">{m.merchant || '—'}</span>
       </td>
       <td className={`${tbl.td} hidden text-fg-muted @4xl:table-cell`}>
-        <span className="line-clamp-2 max-w-[9rem] break-words">{m.cardName || '—'}</span>
+        {cardDot ? (
+          <span className="flex items-center gap-1.5">
+            <ColorDot color={cardDot} />
+            <span className="line-clamp-2 max-w-[9rem] break-words">{m.cardName || '—'}</span>
+          </span>
+        ) : (
+          '—'
+        )}
       </td>
       <td className={`${tbl.td} hidden whitespace-nowrap text-fg-muted @4xl:table-cell`}>
         {isFijo ? 'Fijo' : isRefund ? 'Reembolso' : m.total > 1 ? `${m.number}/${m.total}` : 'Único'}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import css from '../index.css?raw'
+import { LOOK_COLORS } from '@/engine/finance/looks'
 
 // Guards the semantic color tokens of index.css: every text/background pair the
 // primitives use must meet WCAG 2.2 AA (4.5:1 text, 3:1 UI graphics) in both
@@ -49,6 +50,7 @@ function contrast(x: Oklch, y: Oklch): number {
 const SURFACES = ['canvas', 'panel', 'raised', 'sunken']
 const TEXT = ['fg', 'fg-muted', 'fg-subtle', 'accent-fg', 'positive-fg', 'negative-fg', 'caution-fg', 'info-fg']
 const STATES = ['positive', 'negative', 'caution', 'info']
+const LOOKS = LOOK_COLORS
 
 const pairs: [fg: string, bg: string, min: number][] = [
   ...SURFACES.flatMap((bg) => TEXT.map((fg): [string, string, number] => [fg, bg, 4.5])),
@@ -67,6 +69,13 @@ const pairs: [fg: string, bg: string, min: number][] = [
     [`${s}-fg`, `${s}-soft`, 4.5],
     ['fg', `${s}-soft`, 4.5],
     ['fg-muted', `${s}-soft`, 4.5],
+  ]),
+  // Personalization: an icon on its chip (held to the text ratio, so a label
+  // may sit there too), and a bare dot or icon on the surfaces.
+  ...LOOKS.flatMap((k): [string, string, number][] => [
+    [`look-${k}`, `look-${k}-soft`, 4.5],
+    ['fg', `look-${k}-soft`, 4.5],
+    ...SURFACES.map((bg): [string, string, number] => [`look-${k}`, bg, 3]),
   ]),
 ]
 

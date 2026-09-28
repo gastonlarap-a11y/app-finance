@@ -4,8 +4,25 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
+import { autoIcon, categoryLook, isColorKey, resolveLook } from '@/lib/look'
 import { Pencil, Plus, Shapes, Target } from 'lucide-react'
-import { Button, ConfirmAction, EmptyState, Field, IconButton, Modal, MoneyInput, QueryError, Section, SkeletonRows, Switch, inputCls } from './ui'
+import {
+  Button,
+  ColorPicker,
+  ConfirmAction,
+  EmptyState,
+  Field,
+  IconButton,
+  IconPicker,
+  LookIcon,
+  Modal,
+  MoneyInput,
+  QueryError,
+  Section,
+  SkeletonRows,
+  Switch,
+  inputCls,
+} from './ui'
 
 // CategoriesView is Configuración › Categorías y presupuestos. Budgets are
 // effective-dated, so it shows the ones in force in a month of its own
@@ -73,6 +90,8 @@ export function CategoriesView() {
               const budget = budgetById.get(c.id)
               return (
                 <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-3 first:pt-0 last:pb-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                  <LookIcon look={categoryLook(c)} />
                   <div className="min-w-0">
                     <div className="font-medium text-fg">{c.name}</div>
                     <div className="text-xs text-fg-muted">
@@ -86,6 +105,7 @@ export function CategoriesView() {
                       )}
                       {c.rollover && ' · traspasa lo no gastado'}
                     </div>
+                  </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <Button variant="secondary" size="sm" icon={Target} onClick={() => setBudgetFor(c)}>
@@ -126,7 +146,11 @@ function CategoryForm({
   onSaved: () => void
 }) {
   const [name, setName] = useState(category?.name ?? '')
+  const [icon, setIcon] = useState(category?.icon ?? '')
+  const [color, setColor] = useState(category?.color ?? '')
   const [busy, setBusy] = useState(false)
+  // What 'Automático' resolves to, previewed live as the name changes.
+  const autoLook = category ? resolveLook({ id: category.id, name }) : { icon: autoIcon(name, 'tag'), color: undefined }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault()
@@ -135,7 +159,14 @@ function CategoryForm({
       const res = category
         ? await FinanceService.UpdateCategory(category.id, name)
         : await FinanceService.CreateCategory(name)
-      if (failed(res)) return
+      if (failed(res) || !res.data) return
+      const lookChanged = icon !== (category?.icon ?? '') || color !== (category?.color ?? '')
+      // The category is saved either way; a failed look write keeps the dialog
+      // open (with its toast) so the choice is not silently lost.
+      if (lookChanged && failed(await FinanceService.SetCategoryLook(res.data.id, icon, color))) {
+        onSaved()
+        return
+      }
       onSaved()
       onClose()
     } finally {
@@ -149,6 +180,8 @@ function CategoryForm({
         <Field label="Nombre">
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Comida, Transporte…" autoFocus required />
         </Field>
+        <IconPicker value={icon} onChange={setIcon} auto={autoLook.icon} color={isColorKey(color) ? color : (autoLook.color ?? 'gray')} />
+        <ColorPicker value={color} onChange={setColor} auto={autoLook.color} />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>
             Cancelar

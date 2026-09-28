@@ -714,6 +714,12 @@ silently.
   `SetCardColor`, `SetSavingsGoalIcon`). No CHECK constraint: the catalog may grow, and a key
   unknown to an older copy (written by a newer device) is shown as automatic, never rejected.
   Expenses reference categories by name, so a category's look follows a rename untouched.
+  On screen, `lib/look.ts` maps keys to static lucide imports (`ICONS`, with Spanish labels) and
+  derives the automatic look (icon from name keywords, color from the row id); `categoryLooks()`
+  resolves an expense's category by name. Colors reach the DOM only as `data-look="<key>"`, which
+  `index.css` turns into `--look`/`--look-soft` (per-theme `--color-look-*` tokens, contrast-tested),
+  so no class is ever built from a stored key. Primitives: `LookIcon`, `ColorDot`, `IconPicker`,
+  `ColorPicker` (native radio groups).
 - **Font**: Inter Variable, self-hosted (`@fontsource-variable/inter`; the CSP allows only
   same-origin fonts). The PWA precaches only its latin subsets.
 - **Tests**: interactive primitives run in a real headless Chromium through vitest's browser

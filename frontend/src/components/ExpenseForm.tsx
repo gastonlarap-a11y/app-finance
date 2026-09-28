@@ -4,8 +4,9 @@ import { errMsg, failed } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
 import { perInstallment, times, toPesos } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
-import { Button, Callout, Field, Modal, MoneyInput, Select, inputCls } from './ui'
+import { Button, Callout, Field, LookIcon, Modal, MoneyInput, Select, inputCls } from './ui'
 import { AccountSelect, useAccounts } from './Accounts'
+import { useCategoryLooks } from './useCategoryLooks'
 
 const MAX_CUOTAS = 120
 
@@ -118,6 +119,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const [description, setDescription] = useState(initial.description)
   const [amount, setAmount] = useState(initial.amount)
   const [category, setCategory] = useState(initial.category)
+  const looks = useCategoryLooks()
   const [merchant, setMerchant] = useState(initial.merchant)
   const [cardId, setCardId] = useState<string>(initial.cardId)
   const [kind, setKind] = useState(initial.kind)
@@ -315,14 +317,19 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Categoría">
-            <Select value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">Sin categoría</option>
-              {categoryOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </Select>
+            <div className="flex items-center gap-2">
+              {category !== '' && <LookIcon look={looks.byName(category)} size="md" />}
+              <div className="min-w-0 flex-1">
+                <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  <option value="">Sin categoría</option>
+                  {categoryOptions.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </div>
           </Field>
           <Field label="Comercio">
             <Select value={merchant} onChange={(e) => setMerchant(e.target.value)}>

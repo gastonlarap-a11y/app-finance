@@ -17,6 +17,8 @@ import {
   EmptyState,
   Field,
   IconButton,
+  IconPicker,
+  LookIcon,
   Menu,
   Modal,
   MoneyInput,
@@ -25,6 +27,7 @@ import {
   inputCls,
   type MenuAction,
 } from './ui'
+import { goalLook } from '@/lib/look'
 
 // SavingsView manages savings goals. Contributions count as an outflow of their
 // month (they lower disponible and the carried balance) but show apart from
@@ -114,9 +117,7 @@ export function SavingsView() {
               <li key={g.id} className="flex flex-col rounded-xl bg-panel p-5 shadow-xs ring-1 ring-line">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
-                    <span aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-fg">
-                      <PiggyBank className="size-5" />
-                    </span>
+                    <LookIcon look={goalLook(g)} size="lg" />
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-fg">{g.name}</span>
@@ -209,7 +210,10 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
   const [name, setName] = useState(goal?.name ?? '')
   const [target, setTarget] = useState(goal?.targetAmount ?? '')
   const [targetPeriod, setTargetPeriod] = useState(goal?.targetPeriod ?? '')
+  const [icon, setIcon] = useState(goal?.icon ?? '')
   const [busy, setBusy] = useState(false)
+  // Goals take the automatic color (by id); a new one has none to preview yet.
+  const preview = goalLook({ id: goal?.id ?? 0, name, icon: '' })
 
   async function submit(e: SubmitEvent) {
     e.preventDefault()
@@ -218,7 +222,13 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
       const res = goal
         ? await FinanceService.UpdateSavingsGoal(goal.id, name, target, targetPeriod)
         : await FinanceService.CreateSavingsGoal(name, target, targetPeriod)
-      if (failed(res)) return
+      if (failed(res) || !res.data) return
+      // The goal is saved either way; a failed icon write keeps the dialog open
+      // (with its toast) so the choice is not silently lost.
+      if (icon !== (goal?.icon ?? '') && failed(await FinanceService.SetSavingsGoalIcon(res.data.id, icon))) {
+        onSaved()
+        return
+      }
       onSaved()
       onClose()
     } finally {
@@ -238,6 +248,7 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
         <Field label="Fecha objetivo (opcional)">
           <input type="month" className={inputCls} value={targetPeriod} onChange={(e) => setTargetPeriod(e.target.value)} />
         </Field>
+        <IconPicker value={icon} onChange={setIcon} auto={preview.icon} color={goal ? preview.color : 'gray'} />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>
             Cancelar

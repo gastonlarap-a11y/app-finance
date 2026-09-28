@@ -19,6 +19,9 @@ paths:
   empty lists, `Skeleton`/`SkeletonRows` for loading (not "Cargando…"), `ConfirmAction` for
   destructive actions, `Menu` for row actions, `SegmentedControl`/`Tabs` for choices, `Field` +
   `Input`/`Select`/`MoneyInput`, `Switch` for immediate on/off settings, `tbl` for tables.
+- **Personalization**: a category/card/goal shows its look through `lib/look.ts`
+  (`categoryLook`, `cardColor`, `goalLook`, `categoryLooks()` for names) and `LookIcon`/`ColorDot`;
+  color only via `data-look` + `text-(--look)`/`bg-(--look-soft)`, never a class built from a key.
 - **Icons**: `lucide-react` static named imports, `aria-hidden="true"` next to visible text;
   icon-only controls go through `IconButton` or `Menu` (mandatory label). No emoji/Unicode glyphs
   as icons, and no ✓/⚠ inside `notify()` text (the toast's icon states the tone).

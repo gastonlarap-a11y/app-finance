@@ -24,8 +24,10 @@ import { errorText, useQuery } from '@/lib/useQuery'
 import { formatAmount, formatCLP, formatDate, periodLabel } from '@/lib/format'
 import { ExpenseForm } from './ExpenseForm'
 import { StatementImport } from './StatementImport'
+import { cardColor } from '@/lib/look'
 import {
   Badge,
+  ColorDot,
   Button,
   Callout,
   EmptyState,
@@ -389,6 +391,8 @@ function ImportRow({
   onLinkFixed: (fixedId: number, period: string) => void
   onRefund: (expenseId: number) => void
 }) {
+  const card = it.cardId != null ? cards.find((c) => c.id === it.cardId) : undefined
+  const cardDot = card ? cardColor(card) : null
   const cardLabel =
     it.cardName !== ''
       ? it.cardName
@@ -401,7 +405,12 @@ function ImportRow({
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
           <span className="mr-1">{formatDate(it.date)}</span>
           <Badge>{SOURCE_LABEL[it.source] ?? it.source}</Badge>
-          {cardLabel && <Badge>{cardLabel}</Badge>}
+          {cardLabel && (
+            <Badge>
+              {cardDot && <ColorDot color={cardDot} />}
+              {cardLabel}
+            </Badge>
+          )}
           {it.installmentsTotal > 1 && (
             <Badge>
               {it.installmentNumber > 1
