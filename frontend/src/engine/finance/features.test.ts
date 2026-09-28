@@ -235,6 +235,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     // Created after the statement import so it plays no part in its card matching.
     const card = ok(await finance.CreateCard('Visa', '1000000', 24, '')).data!
     const goal = ok(await finance.CreateSavingsGoal('Viaje', '500000', '')).data!
+    const savingsAcct = ok(await finance.CreateAccount('Ahorro', 'ahorro', '0', period, false)).data!
+    const transfer = ok(await finance.CreateTransfer(acct.id, savingsAcct.id, 'Ahorro mensual', '1000', period, true)).data!
+    const merchant = ok(await finance.CreateMerchant('Farmacia del barrio')).data!
 
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
@@ -271,6 +274,12 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetCategoryLook(cat.data!.id, 'tag', 'blue'),
       () => finance.SetCardColor(card.id, 'blue'),
       () => finance.SetSavingsGoalIcon(goal.id, 'car'),
+      () => finance.CreateTransfer(acct.id, savingsAcct.id, 'x', '1', period, false),
+      () => finance.UpdateTransfer(transfer.id, acct.id, savingsAcct.id, 'x', '1'),
+      () => finance.EndTransfer(transfer.id, period),
+      () => finance.DeleteTransfer(transfer.id),
+      () => finance.SetFixedExpenseAccount(fe.data!.id, null),
+      () => finance.SetMerchantCategory(merchant.id, ''),
     ]
     for (const w of writes) expect((await w()).error?.code).toBe('NOT_FOUND')
     for (const status of ['pendiente', 'confirmado']) {
@@ -295,8 +304,13 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const hersFeb = ok(await finance.MonthlySummary('2026-02')).data!
     expect([hersFeb.acumuladoDesde, hersFeb.acumulado]).toEqual(['', '0'])
     expect(await finance.UFMonthsNeeded()).toEqual([])
+    expect(await finance.ListTransfers()).toEqual([])
+    // The catalog lands in Camila's own profile, never in Gastón's (checked below).
+    expect(ok(await finance.ApplyCatalog()).data!.merchants).toBeGreaterThan(0)
 
     ok(await users.SwitchUser(1))
+    expect(await finance.ListMerchants()).toHaveLength(1)
+    expect((await finance.ListTransfers()).map((t) => t.endPeriod)).toEqual([''])
     expect(ok(await finance.MonthlySummary('2026-02')).data!.acumuladoDesde).toBe(reconciled)
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })

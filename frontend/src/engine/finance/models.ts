@@ -14,6 +14,7 @@ import type {
   Installment,
   Merchant,
   MerchantRule,
+  Transfer,
   PeriodSalary,
   Reconciliation,
   Receivable,
@@ -213,6 +214,20 @@ export function rowToScheduleEntry(r: SqlRow): CardStatementScheduleEntry {
   }
 }
 
+export function rowToTransfer(r: SqlRow): Transfer {
+  return {
+    id: asNumber(r.id),
+    userId: asNumber(r.user_id),
+    fromAccountId: asNumber(r.from_account_id),
+    toAccountId: asNumber(r.to_account_id),
+    description: asString(r.description),
+    amount: asString(r.amount),
+    startPeriod: asString(r.start_period),
+    endPeriod: asString(r.end_period),
+    createdAt: asString(r.created_at),
+  }
+}
+
 export function rowToMerchantRule(r: SqlRow): MerchantRule {
   return {
     id: asNumber(r.id),
@@ -270,6 +285,7 @@ export function rowToMerchant(r: SqlRow): Merchant {
     id: asNumber(r.id),
     userId: asNumber(r.user_id),
     name: asString(r.name),
+    category: asString(r.category),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }
@@ -381,6 +397,7 @@ export function rowToFixedExpense(r: SqlRow): FixedExpense {
     description: asString(r.description),
     category: asString(r.category),
     cardId: asNullableNumber(r.card_id),
+    accountId: asNullableNumber(r.account_id),
     startPeriod: asString(r.start_period),
     // end_period is NULL in SQL for "active forever"; Go models it as "".
     endPeriod: asString(r.end_period),

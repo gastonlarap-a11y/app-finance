@@ -24,22 +24,27 @@ type Account struct {
 	ID             int64         `bun:"id,pk,autoincrement" json:"id"`
 	UserID         int64         `bun:"user_id,notnull" json:"userId"`
 	Name           string        `bun:"name,notnull" json:"name"`
-	Kind           string        `bun:"kind,notnull" json:"kind"` // corriente | vista | efectivo | ahorro | otra
+	Kind           string        `bun:"kind,notnull" json:"kind"` // corriente | vista | digital | efectivo | ahorro | otra
 	OpeningBalance types.Decimal `bun:"opening_balance,notnull" json:"openingBalance"`
 	OpeningPeriod  string        `bun:"opening_period,notnull" json:"openingPeriod"` // YYYY-MM the balance counts from
 	ReceivesSalary bool          `bun:"receives_salary,notnull" json:"receivesSalary"`
 	CreatedAt      time.Time     `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
 }
 
-var accountKinds = []string{"corriente", "vista", "efectivo", "ahorro", "otra"}
+// accountKinds: "digital" is a prepaid digital account or wallet (Mercado
+// Pago, Tenpo, MACH): money is loaded into it before it can be spent.
+var accountKinds = []string{"corriente", "vista", "digital", "efectivo", "ahorro", "otra"}
 
 // AccountView is an account at the close of a month: its balance and what
-// came in and went out that month.
+// came in and went out that month. Transfers between own accounts are apart
+// from ingresos/gastos: they move the balance, not what was earned or spent.
 type AccountView struct {
 	Account
-	Balance  types.Decimal `json:"balance"`
-	Ingresos types.Decimal `json:"ingresos"`
-	Gastos   types.Decimal `json:"gastos"`
+	Balance     types.Decimal `json:"balance"`
+	Ingresos    types.Decimal `json:"ingresos"`
+	Gastos      types.Decimal `json:"gastos"`
+	TransferIn  types.Decimal `json:"transferIn"`
+	TransferOut types.Decimal `json:"transferOut"`
 }
 
 // AccountsSummary is every account at a month plus the month's movements no
@@ -181,8 +186,15 @@ func (s *FinanceService) SetCardAccount(ctx context.Context, cardID int64, accou
 	return s.setAccountOf(ctx, (*Card)(nil), cardID, accountID, "tarjeta no encontrada")
 }
 
-// accountFlow is what one account (0 = none) received and spent in a month.
-type accountFlow struct{ in, out types.Decimal }
+// SetFixedExpenseAccount names the account a fixed expense is paid from (a
+// mortgage by automatic debit); it wins over its card's (nil = its card's, or none).
+func (s *FinanceService) SetFixedExpenseAccount(ctx context.Context, fixedExpenseID int64, accountID *int64) OpResult {
+	return s.setAccountOf(ctx, (*FixedExpense)(nil), fixedExpenseID, accountID, "gasto fijo no encontrado")
+}
+
+// accountFlow is what one account (0 = none) received and spent in a month,
+// and what it passed to or got from another own account.
+type accountFlow struct{ in, out, tin, tout types.Decimal }
 
 // ListAccounts returns every account at the close of `period` and the month's
 // movements no account claims.
@@ -205,16 +217,18 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	}
 	out := &AccountsSummary{Accounts: make([]AccountView, 0, len(accs))}
 	for _, a := range accs {
-		v := AccountView{Account: a, Balance: types.Zero(), Ingresos: types.Zero(), Gastos: types.Zero()}
+		v := AccountView{Account: a, Balance: types.Zero(), Ingresos: types.Zero(), Gastos: types.Zero(),
+			TransferIn: types.Zero(), TransferOut: types.Zero()}
 		if a.OpeningPeriod <= period {
 			v.Balance = a.OpeningBalance
 			for m := a.OpeningPeriod; m <= period; m = addMonths(m, 1) {
 				f := flows[a.ID][m]
-				v.Balance = v.Balance.Add(f.in).Sub(f.out)
+				v.Balance = v.Balance.Add(f.in).Sub(f.out).Add(f.tin).Sub(f.tout)
 			}
 		}
 		f := flows[a.ID][period]
 		v.Ingresos, v.Gastos = v.Ingresos.Add(f.in), v.Gastos.Add(f.out)
+		v.TransferIn, v.TransferOut = v.TransferIn.Add(f.tin), v.TransferOut.Add(f.tout)
 		out.Accounts = append(out.Accounts, v)
 	}
 	none := flows[0][period]
@@ -224,17 +238,29 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 
 // accountFlows sums, per account (0 = none) and month in [from, to], the same
 // flows as a month's balance: salary (to the salary account), extra incomes,
-// cuotas and fixed charges (the expense's account, else its card's) and
-// refunds (back to where the expense was paid from).
+// cuotas and fixed charges (the expense's own account, else its card's) and
+// refunds (back to where the expense was paid from); plus the transfers
+// between own accounts, which only move money from one account to another.
 func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Account, from, to string) (map[int64]map[string]accountFlow, error) {
 	out := map[int64]map[string]accountFlow{}
-	add := func(acc int64, period string, in, outAmt types.Decimal) {
+	flow := func(acc int64, period string) accountFlow {
 		if out[acc] == nil {
 			out[acc] = map[string]accountFlow{}
 		}
-		f := out[acc][period]
+		return out[acc][period]
+	}
+	add := func(acc int64, period string, in, outAmt types.Decimal) {
+		f := flow(acc, period)
 		f.in, f.out = f.in.Add(in), f.out.Add(outAmt)
 		out[acc][period] = f
+	}
+	move := func(fromAcc, toAcc int64, period string, amt types.Decimal) {
+		f := flow(fromAcc, period)
+		f.tout = f.tout.Add(amt)
+		out[fromAcc][period] = f
+		g := flow(toAcc, period)
+		g.tin = g.tin.Add(amt)
+		out[toAcc][period] = g
 	}
 	var salaryAcc int64
 	for _, a := range accs {
@@ -316,6 +342,10 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 			cardAcc[c.ID] = *c.AccountID
 		}
 	}
+	var transfers []Transfer
+	if err := s.db.NewSelect().Model(&transfers).Where("user_id = ?", uid).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("transfers: %w", err)
+	}
 	for m := from; m <= to; m = addMonths(m, 1) {
 		for _, fe := range fixed {
 			if !fe.billsIn(m) {
@@ -323,10 +353,18 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 			}
 			amt, _, _ := fixedCharge(fe, amountsByID[fe.ID], uf, m)
 			var acc int64
-			if fe.CardID != nil {
+			switch {
+			case fe.AccountID != nil:
+				acc = *fe.AccountID
+			case fe.CardID != nil:
 				acc = cardAcc[*fe.CardID]
 			}
 			add(acc, m, types.Zero(), amt)
+		}
+		for _, t := range transfers {
+			if t.activeIn(m) {
+				move(t.FromAccountID, t.ToAccountID, m, t.Amount)
+			}
 		}
 	}
 	return out, nil

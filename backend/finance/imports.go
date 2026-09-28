@@ -315,6 +315,10 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 	if err != nil {
 		return nil, err
 	}
+	usualCategory, err := s.merchantCategories(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
 	fx, err := latestFxRate(ctx, s.db, uid)
 	if err != nil {
 		return nil, err
@@ -353,6 +357,9 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		}
 		if r, ok := ruleFor(rules, it.Description); ok {
 			v.RulePattern, v.SuggestedMerchant, v.SuggestedCategory = r.Pattern, r.Merchant, r.Category
+			if v.SuggestedCategory == "" {
+				v.SuggestedCategory = usualCategory[strings.ToLower(r.Merchant)]
+			}
 		}
 		v.SuggestedAmountClp = suggestClp(it, fx)
 		if it.Status == ImportPendiente && it.Kind == ImportKindExpense {
@@ -827,6 +834,20 @@ func (s *FinanceService) listMerchantRules(ctx context.Context, uid int64) ([]Me
 		return nil, fmt.Errorf("listing merchant rules: %w", err)
 	}
 	return rules, nil
+}
+
+// merchantCategories maps each live merchant (lowercased name) to its usual
+// category, for rules that name a merchant but no category.
+func (s *FinanceService) merchantCategories(ctx context.Context, uid int64) (map[string]string, error) {
+	var mers []Merchant
+	if err := s.db.NewSelect().Model(&mers).Where("user_id = ? AND category <> ''", uid).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("listing merchant categories: %w", err)
+	}
+	out := make(map[string]string, len(mers))
+	for _, m := range mers {
+		out[strings.ToLower(m.Name)] = m.Category
+	}
+	return out, nil
 }
 
 // DeleteMerchantRule forgets a learned rule for good (it is re-learned by

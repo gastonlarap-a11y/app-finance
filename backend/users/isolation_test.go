@@ -195,6 +195,18 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if card.Error != nil {
 		t.Fatalf("CreateCard: %v", card.Error)
 	}
+	savingsAcct := fin.CreateAccount(ctx, "Ahorro", "ahorro", "0", period, false)
+	if savingsAcct.Error != nil {
+		t.Fatalf("CreateAccount savings: %v", savingsAcct.Error)
+	}
+	transfer := fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "Ahorro mensual", "1000", period, true)
+	if transfer.Error != nil {
+		t.Fatalf("CreateTransfer: %v", transfer.Error)
+	}
+	merchant := fin.CreateMerchant(ctx, "Farmacia del barrio")
+	if merchant.Error != nil {
+		t.Fatalf("CreateMerchant: %v", merchant.Error)
+	}
 
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
@@ -266,6 +278,16 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetCategoryLook", func() finance.OpResult { return fin.SetCategoryLook(ctx, cat.Data.ID, "tag", "blue") }},
 		{"SetCardColor", func() finance.OpResult { return fin.SetCardColor(ctx, card.Data.ID, "blue") }},
 		{"SetSavingsGoalIcon", func() finance.OpResult { return fin.SetSavingsGoalIcon(ctx, goal.Data.ID, "car") }},
+		{"CreateTransfer", func() finance.OpResult {
+			return finance.OpResult{Error: fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "x", "1", period, false).Error}
+		}},
+		{"UpdateTransfer", func() finance.OpResult {
+			return finance.OpResult{Error: fin.UpdateTransfer(ctx, transfer.Data.ID, acct.Data.ID, savingsAcct.Data.ID, "x", "1").Error}
+		}},
+		{"EndTransfer", func() finance.OpResult { return fin.EndTransfer(ctx, transfer.Data.ID, period) }},
+		{"DeleteTransfer", func() finance.OpResult { return fin.DeleteTransfer(ctx, transfer.Data.ID) }},
+		{"SetFixedExpenseAccount", func() finance.OpResult { return fin.SetFixedExpenseAccount(ctx, fe.Data.ID, nil) }},
+		{"SetMerchantCategory", func() finance.OpResult { return fin.SetMerchantCategory(ctx, merchant.Data.ID, "") }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {
@@ -298,6 +320,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if goals, err := fin.ListSavingsGoals(ctx); err != nil || len(goals) != 0 {
 		t.Fatalf("Camila ListSavingsGoals = %+v (err %v), want none", goals, err)
+	}
+	if trs, err := fin.ListTransfers(ctx); err != nil || len(trs) != 0 {
+		t.Fatalf("Camila ListTransfers = %+v (err %v), want none", trs, err)
 	}
 	if r := fin.AddSavingsContribution(ctx, goal.Data.ID, period, "1"); r.Error == nil || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("Camila AddSavingsContribution on Gastón's goal = %+v, want NOT_FOUND", r.Error)
@@ -355,6 +380,11 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		t.Fatalf("Camila UpcomingDues = %+v, want none", r)
 	}
 
+	// The catalog lands in Camila's own profile, never in Gastón's (checked below).
+	if applied := fin.ApplyCatalog(ctx); applied.Error != nil || applied.Data.Merchants == 0 {
+		t.Fatalf("Camila ApplyCatalog = %+v", applied)
+	}
+
 	// Back as Gastón, the fixed expense is untouched: amount 8000, still pending.
 	if r := usr.SwitchUser(ctx, 1); r.Error != nil {
 		t.Fatalf("SwitchUser(1): %v", r.Error)
@@ -380,6 +410,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != reconciled {
 		t.Fatalf("Gastón's reconciliation after Camila = %+v, want the carried balance from %s", r, reconciled)
+	}
+	// Camila's catalog added nothing to Gastón's profile, and his transfer stands.
+	if mers, err := fin.ListMerchants(ctx); err != nil || len(mers) != 1 {
+		t.Fatalf("Gastón's merchants after Camila's catalog = %d (err %v), want his 1", len(mers), err)
+	}
+	if trs, err := fin.ListTransfers(ctx); err != nil || len(trs) != 1 || trs[0].EndPeriod != "" {
+		t.Fatalf("Gastón's transfers after Camila = %+v (err %v), want his open monthly one", trs, err)
 	}
 }
 

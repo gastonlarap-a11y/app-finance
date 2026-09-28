@@ -1,0 +1,163 @@
+package finance
+
+import (
+	"testing"
+
+	"github.com/gastonlarap-a11y/app-finance/backend/shared"
+)
+
+func accountByName(t *testing.T, s *FinanceService, period, name string) AccountView {
+	t.Helper()
+	res := s.ListAccounts(t.Context(), period)
+	mustOK(t, "ListAccounts", res.Error)
+	for _, a := range res.Data.Accounts {
+		if a.Name == name {
+			return a
+		}
+	}
+	t.Fatalf("account %q not listed", name)
+	return AccountView{}
+}
+
+func TestTransfersMoveBalancesNotTotals(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	chile := s.CreateAccount(ctx, "Banco de Chile", "corriente", "0", "2026-07", true)
+	mustOK(t, "chile", chile.Error)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "0", "2026-07", false)
+	mustOK(t, "itau", itau.Error)
+	mp := s.CreateAccount(ctx, "Mercado Pago", "digital", "0", "2026-07", false)
+	mustOK(t, "mercado pago", mp.Error)
+	for _, p := range []string{"2026-07", "2026-08", "2026-09"} {
+		mustOK(t, "salary "+p, s.SetSalary(ctx, p, "2000000").Error)
+	}
+
+	salaryMove := s.CreateTransfer(ctx, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", "1500000", "2026-08", true)
+	mustOK(t, "monthly", salaryMove.Error)
+	once := s.CreateTransfer(ctx, itau.Data.ID, mp.Data.ID, "Carga", "50000", "2026-09", false)
+	mustOK(t, "once", once.Error)
+	if once.Data.EndPeriod != "2026-09" || salaryMove.Data.EndPeriod != "" {
+		t.Fatalf("end periods = %q / %q, want 2026-09 / \"\"", once.Data.EndPeriod, salaryMove.Data.EndPeriod)
+	}
+
+	tests := []struct {
+		period, account, balance, transferIn, transferOut string
+	}{
+		{"2026-07", "Banco de Chile", "2000000", "0", "0"}, // before the monthly transfer starts
+		{"2026-08", "Banco de Chile", "2500000", "0", "1500000"},
+		{"2026-08", "Itaú", "1500000", "1500000", "0"},
+		{"2026-09", "Banco de Chile", "3000000", "0", "1500000"},
+		{"2026-09", "Itaú", "2950000", "1500000", "50000"},
+		{"2026-09", "Mercado Pago", "50000", "50000", "0"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.period+" "+tc.account, func(t *testing.T) {
+			a := accountByName(t, s, tc.period, tc.account)
+			wantMoney(t, "balance", a.Balance, tc.balance)
+			wantMoney(t, "transferIn", a.TransferIn, tc.transferIn)
+			wantMoney(t, "transferOut", a.TransferOut, tc.transferOut)
+			wantMoney(t, "gastos", a.Gastos, "0") // a transfer is not spending
+		})
+	}
+	// The app's balance ignores transfers: no money left the household. It is the
+	// three salaries carried month to month, as without any transfer.
+	wantMoney(t, "september balance", monthly(t, s, "2026-09").Balance, "6000000")
+
+	// Ending the monthly transfer keeps its past months.
+	mustOK(t, "EndTransfer", s.EndTransfer(ctx, salaryMove.Data.ID, "2026-08").Error)
+	wantMoney(t, "itau after end", accountByName(t, s, "2026-09", "Itaú").Balance, "1450000")
+	if r := s.EndTransfer(ctx, salaryMove.Data.ID, "2026-07"); r.Error == nil || r.Error.Code != shared.ErrNotFound {
+		t.Fatalf("ending before its start: %v, want not found", r.Error)
+	}
+
+	mustOK(t, "UpdateTransfer", s.UpdateTransfer(ctx, once.Data.ID, itau.Data.ID, mp.Data.ID, "Carga MP", "80000").Error)
+	wantMoney(t, "mp after update", accountByName(t, s, "2026-09", "Mercado Pago").Balance, "80000")
+
+	mustOK(t, "DeleteTransfer", s.DeleteTransfer(ctx, once.Data.ID).Error)
+	list, err := s.ListTransfers(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListTransfers = %+v, %v; want the monthly one", list, err)
+	}
+	// Deleting an account takes its transfers along.
+	mustOK(t, "DeleteAccount", s.DeleteAccount(ctx, itau.Data.ID).Error)
+	if list, _ := s.ListTransfers(ctx); len(list) != 0 {
+		t.Fatalf("transfers after deleting their account = %+v", list)
+	}
+}
+
+func TestTransferValidation(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	a := s.CreateAccount(ctx, "A", "corriente", "0", "2026-09", false)
+	mustOK(t, "a", a.Error)
+	b := s.CreateAccount(ctx, "B", "vista", "0", "2026-09", false)
+	mustOK(t, "b", b.Error)
+
+	tests := []struct {
+		name     string
+		from, to int64
+		amount   string
+		period   string
+		wantCode string
+	}{
+		{"same account", a.Data.ID, a.Data.ID, "1000", "2026-09", shared.ErrValidation},
+		{"zero amount", a.Data.ID, b.Data.ID, "0", "2026-09", shared.ErrValidation},
+		{"negative amount", a.Data.ID, b.Data.ID, "-5", "2026-09", shared.ErrValidation},
+		{"not a number", a.Data.ID, b.Data.ID, "mucho", "2026-09", shared.ErrValidation},
+		{"bad period", a.Data.ID, b.Data.ID, "1000", "2026-13", shared.ErrValidation},
+		{"unknown account", a.Data.ID, 9999, "1000", "2026-09", shared.ErrNotFound},
+		{"valid", a.Data.ID, b.Data.ID, "1000", "2026-09", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := s.CreateTransfer(ctx, tc.from, tc.to, "", tc.amount, tc.period, false)
+			if tc.wantCode == "" {
+				mustOK(t, "CreateTransfer", res.Error)
+				return
+			}
+			if res.Error == nil || res.Error.Code != tc.wantCode {
+				t.Fatalf("error = %v, want %s", res.Error, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestDigitalAccountKind(t *testing.T) {
+	s := newTestService(t)
+	mustOK(t, "digital", s.CreateAccount(t.Context(), "Mercado Pago", "digital", "0", "2026-09", false).Error)
+	if r := s.CreateAccount(t.Context(), "X", "prepago", "0", "2026-09", false); r.Error == nil {
+		t.Fatal("an unknown account kind was accepted")
+	}
+}
+
+func TestFixedExpenseAccountWinsOverCard(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	chile := s.CreateAccount(ctx, "Banco de Chile", "corriente", "0", "2026-09", false)
+	mustOK(t, "chile", chile.Error)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "0", "2026-09", false)
+	mustOK(t, "itau", itau.Error)
+	card := s.CreateCard(ctx, "Visa", "1000000", 24, "")
+	mustOK(t, "card", card.Error)
+	mustOK(t, "card account", s.SetCardAccount(ctx, card.Data.ID, &itau.Data.ID).Error)
+
+	mortgage := s.CreateFixedExpense(ctx, "Dividendo", "Vivienda", nil, "2026-09", "600000", 1, CurrencyCLP)
+	mustOK(t, "mortgage", mortgage.Error)
+	netflix := s.CreateFixedExpense(ctx, "Netflix", "Suscripciones", &card.Data.ID, "2026-09", "9000", 1, CurrencyCLP)
+	mustOK(t, "netflix", netflix.Error)
+
+	mustOK(t, "SetFixedExpenseAccount", s.SetFixedExpenseAccount(ctx, mortgage.Data.ID, &chile.Data.ID).Error)
+	wantMoney(t, "chile pays the mortgage", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "600000")
+	wantMoney(t, "itau pays the card's fixed", accountByName(t, s, "2026-09", "Itaú").Gastos, "9000")
+
+	// Its own account wins over its card's.
+	mustOK(t, "netflix from chile", s.SetFixedExpenseAccount(ctx, netflix.Data.ID, &chile.Data.ID).Error)
+	wantMoney(t, "chile pays both", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "609000")
+	// Editing the fixed expense keeps its account.
+	mustOK(t, "UpdateFixedExpense", s.UpdateFixedExpense(ctx, mortgage.Data.ID, "Dividendo casa", "Vivienda", nil).Error)
+	wantMoney(t, "still chile", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "609000")
+
+	if r := s.SetFixedExpenseAccount(ctx, mortgage.Data.ID, new(int64(9999))); r.Error == nil || r.Error.Code != shared.ErrNotFound {
+		t.Fatalf("unknown account: %v, want not found", r.Error)
+	}
+}
