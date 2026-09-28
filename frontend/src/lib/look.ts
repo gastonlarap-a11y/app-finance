@@ -243,10 +243,19 @@ export function goalLook(g: { id: number; name: string; icon: string }): Look {
   return resolveLook({ id: g.id, name: g.name, icon: g.icon }, 'piggy-bank')
 }
 
+// The bucket the backend gives expenses without a category (Go's and the
+// engine's `uncategorized`); no category may take that name.
+const UNCATEGORIZED = 'sin categoría'
+
+// UNCATEGORIZED_LOOK is neutral on purpose: "no category" must not read as one more category.
+const UNCATEGORIZED_LOOK: Look = { icon: 'tag', color: 'gray' }
+
 // nameLook is the look of a category known only by name (an expense whose
 // category was deleted or never created): automatic, seeded by the name.
 export function nameLook(name: string): Look {
-  return { icon: autoIcon(name, 'tag'), color: autoColor(name) }
+  const n = name.trim()
+  if (n === '' || n.toLowerCase() === UNCATEGORIZED) return UNCATEGORIZED_LOOK
+  return { icon: autoIcon(n, 'tag'), color: autoColor(n) }
 }
 
 export interface CategoryLooks {

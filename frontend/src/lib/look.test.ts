@@ -78,6 +78,13 @@ describe('resolveLook', () => {
   it('a category known only by name gets a look seeded by the name', () => {
     expect(nameLook('Luz')).toEqual({ icon: 'zap', color: autoColor('Luz') })
   })
+
+  it('an expense without a category looks neutral, not like one more category', () => {
+    for (const name of ['', '  ', 'Sin categoría', 'SIN CATEGORÍA']) {
+      expect(nameLook(name), JSON.stringify(name)).toEqual({ icon: 'tag', color: 'gray' })
+    }
+    expect(categoryLooks([]).byName('Sin categoría').color).toBe('gray')
+  })
 })
 
 describe('categoryLooks', () => {
