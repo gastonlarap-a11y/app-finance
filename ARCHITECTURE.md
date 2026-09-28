@@ -746,6 +746,12 @@ silently.
   (`paletteOpenAtom`, like `quickAddAtom`).
 - **Guía de inicio** (`OnboardingChecklist`, rules in `lib/onboarding.ts`): derived from existing
   queries, no stored progress; hidden per profile and device.
+- **Swipe** (`lib/swipe.ts` pure classifier + `lib/useSwipePeriod.ts`): on month/year screens a
+  horizontal touch swipe turns the period (left = next). ≥ 64 px, 1.5× more horizontal than
+  vertical, quick (< 600 ms or ≥ 0.3 px/ms); never from the left 24 px (iOS back), on form fields,
+  dialogs, `[data-no-swipe]` or sideways-scrolling content (tables keep their pan). `<main>` is
+  `touch-action: pan-y pinch-zoom`, so the browser keeps scroll and zoom and a pan it takes over
+  arrives as `pointercancel`.
 - **Desktop window** (`main.go`): minimum 960×640 (`windowstate.MinWidth/MinHeight`; a smaller saved
   geometry is clamped), background = the dark canvas token, and on macOS a hidden-inset title bar:
   the traffic lights sit over the sidebar, whose top band and the screen header drag the window

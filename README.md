@@ -48,7 +48,8 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
   completarlos o con «Ocultar».
 - **Atajos**: `⌘K` abre la paleta; `N` abre «Agregar gasto» desde cualquier pantalla; `←`/`→` cambian
   de mes (o de año en «Año»); `⌘1`…`⌘7` (Ctrl en Windows) saltan a cada sección de la barra lateral y
-  `⌘,` abre Configuración. Ninguno actúa con un diálogo abierto.
+  `⌘,` abre Configuración. Ninguno actúa con un diálogo abierto. En el iPad, deslizar el dedo hacia
+  los lados cambia de mes (o de año) en Resumen, Gastos fijos, Proyección y Año.
 - **Perfiles (multi-usuario, sin login)**: varios perfiles sobre una sola base de datos; cada uno ve
   únicamente sus datos y el cambio de perfil es instantáneo (pie de la barra lateral; crear y eliminar en
   Configuración › Perfiles).

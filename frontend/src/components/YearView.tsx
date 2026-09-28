@@ -107,9 +107,9 @@ export function YearView() {
                     <span className="inline-flex items-center gap-1">
                       {formatCLP(m.saldo)}
                       {m.conciliado && (
-                        <span className="text-fg-subtle" title="Saldo real conciliado con el banco">
+                        <span className="text-fg-subtle">
                           <CircleCheck aria-hidden="true" className="size-3.5" />
-                          <span className="sr-only"> conciliado</span>
+                          <span className="sr-only"> conciliado con el banco</span>
                         </span>
                       )}
                     </span>
@@ -126,6 +126,12 @@ export function YearView() {
             </tbody>
           </table>
         </div>
+        {data.months.some((m) => m.conciliado) && (
+          <p className="mt-2 flex items-center gap-1 text-xs text-fg-subtle">
+            <CircleCheck aria-hidden="true" className="size-3.5" />
+            Saldo real, conciliado con el banco.
+          </p>
+        )}
         <div className="mt-5 grid grid-cols-12 items-end gap-1" style={{ height: 88 }} aria-hidden="true">
           {data.months.map((m) => (
             <div key={m.period} className="flex flex-col items-center gap-1" title={`${monthLabel(m.period)}: ${formatCLP(m.gastos)}`}>

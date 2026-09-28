@@ -7,6 +7,7 @@ import { IS_APPLE, IS_WEB } from '@/lib/platform'
 import { formatHash, type Route } from '@/lib/route'
 import { isTyping, resolveShortcut } from '@/lib/shortcuts'
 import { useMediaQuery } from '@/lib/useMediaQuery'
+import { useSwipePeriod } from '@/lib/useSwipePeriod'
 import { navigate, useRoute } from '@/lib/useRoute'
 import { UpdateBanner } from '../UpdateNotice'
 import { WebUpdateBanner } from '../WebUpdateBanner'
@@ -80,11 +81,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const collapsed = useAtomValue(sidebarCollapsedAtom)
   const setQuickAdd = useSetAtom(quickAddAtom)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const setPeriod = useSetAtom(periodAtom)
   useAppShortcuts(meta.period)
   useFocusOnNavigate(formatHash(route))
+  // On month/year screens a sideways swipe turns the period, like ←/→.
+  const swipe = useSwipePeriod((step) => setPeriod((p) => shiftPeriod(p, step * (meta.period === 'year' ? 12 : 1))))
 
   return (
-    <div className="flex min-h-dvh">
+    // Side insets for phones in landscape (iPad has none; harmless there).
+    <div className="flex min-h-dvh pl-safe pr-safe">
       {medium && (
         <div className="sticky top-0 h-dvh shrink-0">
           <Sidebar variant={wide && !collapsed ? 'expanded' : 'rail'} collapsible={wide} />
@@ -93,7 +98,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col bg-canvas">
         {!medium && <MobileTopBar onOpenMenu={() => setDrawerOpen(true)} />}
         {IS_WEB ? <WebUpdateBanner /> : <UpdateBanner />}
-        <main className="mx-auto w-full max-w-[1400px] flex-1 space-y-6 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 sm:px-6 lg:px-8">
+        <main
+          {...(meta.period ? swipe : {})}
+          // pan-y: the browser keeps vertical scroll (and zoom) and hands sideways moves to the swipe.
+          className={`mx-auto w-full max-w-[1400px] flex-1 space-y-6 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 sm:px-6 lg:px-8 ${
+            meta.period ? 'touch-pan-y touch-pinch-zoom' : ''
+          }`}
+        >
           {/* Window drag band on the desktop build (hidden title bar); its controls opt out. */}
           <div className="[--wails-draggable:drag]">
             <PageHeader
