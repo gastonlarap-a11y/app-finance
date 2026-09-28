@@ -209,7 +209,7 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `IconButton` (mandatory accessible label). React Compiler is on: no manual `useCallback`/`useMemo`.
 - **UI look (invariant)**: screens are built from the primitives in `frontend/src/components/ui/`
   and the semantic color tokens of `frontend/src/index.css` — never raw palette colors
-  (`slate-400`, `amber-200`…), which `src/styles/rawclasses.test.ts` ratchets down to zero; token
+  (`slate-400`, `amber-200`…), which `src/styles/rawclasses.test.ts` rejects; token
   contrast is asserted by `src/styles/tokens.test.ts`. Icons are `lucide-react` static imports.
   Details: `.claude/rules/frontend-ui.md` and `ARCHITECTURE.md` §21.
 - **Navigation**: screens are routes in the URL hash (`frontend/src/lib/route.ts`); move with

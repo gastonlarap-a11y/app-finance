@@ -6,7 +6,23 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { currentPeriod, formatCLP, formatUF, parseDecimalInput, periodLabel } from '@/lib/format'
-import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
+import { CalendarX, Coins, Pencil, Plus, Repeat, Trash } from 'lucide-react'
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  Field,
+  Menu,
+  Modal,
+  MoneyInput,
+  QueryError,
+  Section,
+  Select,
+  SkeletonRows,
+  inputCls,
+  type MenuAction,
+} from './ui'
 import { RecurringSuggestions } from './RecurringSuggestions'
 
 // Billing frequencies (backend/finance/fixedexpense.go validIntervals).
@@ -58,8 +74,8 @@ export function FixedExpensesView() {
   const [editing, setEditing] = useState<FixedExpenseView | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [amountFor, setAmountFor] = useState<FixedExpenseView | null>(null)
-  const [confirmCancel, setConfirmCancel] = useState<number | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
+  const [cancelling, setCancelling] = useState<FixedExpenseView | null>(null)
+  const [deleting, setDeleting] = useState<FixedExpenseView | null>(null)
 
   const query = useQuery(version, async () => {
     const [items, cards, cats] = await Promise.all([
@@ -71,110 +87,121 @@ export function FixedExpensesView() {
   })
 
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
-  if (!query.data) return <Spinner />
-  const { items, cards, categories } = query.data
 
   async function cancelFrom(id: number) {
-    setConfirmCancel(null)
     const res = await FinanceService.EndFixedExpense(id, period)
     if (!failed(res)) reload()
   }
 
   async function remove(id: number) {
-    setConfirmDelete(null)
     const res = await FinanceService.DeleteFixedExpense(id)
     if (!failed(res)) reload()
   }
 
+  function openNew() {
+    setEditing(null)
+    setShowForm(true)
+  }
+
+  const data = query.data
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
     <RecurringSuggestions period={period} />
     <Section
-      title="Gastos fijos"
+      title="Tus gastos fijos"
       action={
-        <Button
-          onClick={() => {
-            setEditing(null)
-            setShowForm(true)
-          }}
-        >
-          + Nuevo gasto fijo
+        <Button icon={Plus} onClick={openNew}>
+          Nuevo gasto fijo
         </Button>
       }
     >
-      <p className="mb-3 text-xs text-slate-500">
+      <p className="mb-4 text-sm text-fg-muted">
         Suscripciones, servicios y seguros que se cobran solos: cada mes, trimestre, año… en pesos o en
         UF (se convierte con el valor de la UF de cada mes). Al cambiar un monto, sólo aplica desde el
         mes seleccionado ({periodLabel(period)}) en adelante; los meses anteriores no se modifican.
       </p>
 
-      {items.length === 0 ? (
-        <Empty>Aún no tienes gastos fijos. Crea uno (Netflix, plan celular, etc.) para que se cargue cada mes.</Empty>
+      {!data ? (
+        <SkeletonRows rows={4} />
+      ) : data.items.length === 0 ? (
+        <EmptyState
+          icon={Repeat}
+          title="Aún no tienes gastos fijos"
+          action={
+            <Button icon={Plus} onClick={openNew}>
+              Crear el primero
+            </Button>
+          }
+        >
+          Netflix, el plan del celular, el arriendo en UF… Se cargan solos cada mes y puedes marcarlos pagados en el Resumen.
+        </EmptyState>
       ) : (
-        <ul className="space-y-2">
-          {items.map((fe) => (
-            <li key={fe.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
-              <div>
-                <div className="font-medium">
-                  {fe.description}
-                  {/* active is false both before the start and after the end month. */}
-                  {!fe.active &&
-                    (fe.endPeriod !== '' && fe.endPeriod < currentPeriod() ? (
-                      <span className="ml-2 text-xs text-slate-500">(cancelado)</span>
-                    ) : (
-                      <span className="ml-2 text-xs text-primary">(programado desde {periodLabel(fe.startPeriod)})</span>
-                    ))}
+        <ul className="divide-y divide-line">
+          {data.items.map((fe) => {
+            // active is false both before the start and after the end month.
+            const cancelled = !fe.active && fe.endPeriod !== '' && fe.endPeriod < currentPeriod()
+            const actions: MenuAction[] = [
+              { label: 'Cambiar monto', icon: Coins, onSelect: () => setAmountFor(fe) },
+              {
+                label: 'Editar',
+                icon: Pencil,
+                onSelect: () => {
+                  setEditing(fe)
+                  setShowForm(true)
+                },
+              },
+              ...(cancelled ? [] : [{ label: `Cancelar desde ${periodLabel(period)}…`, icon: CalendarX, onSelect: () => setCancelling(fe) }]),
+              { label: 'Eliminar…', icon: Trash, tone: 'danger' as const, onSelect: () => setDeleting(fe) },
+            ]
+            return (
+              <li key={fe.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-fg">{fe.description}</span>
+                    {!fe.active &&
+                      (cancelled ? (
+                        <Badge>Cancelado</Badge>
+                      ) : (
+                        <Badge tone="info">Programado desde {periodLabel(fe.startPeriod)}</Badge>
+                      ))}
+                  </div>
+                  <div className="mt-0.5 text-xs text-fg-muted">
+                    <span className="font-medium tabular-nums text-fg">{amountLabel(fe)}</span> · {frequencyLabel(fe.intervalMonths)} ·{' '}
+                    {fe.category || 'Sin categoría'}
+                    {fe.cardName ? ` · ${fe.cardName}` : ''} · desde {periodLabel(fe.startPeriod)}
+                    {fe.endPeriod ? ` · hasta ${periodLabel(fe.endPeriod)}` : ''}
+                    {fe.dueDay != null && fe.cardId == null && ` · vence el día ${fe.dueDay}`}
+                    {fe.intervalMonths > 1 && fe.nextPeriod !== '' && ` · próximo cobro: ${periodLabel(fe.nextPeriod)}`}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-500">
-                  {amountLabel(fe)} · {frequencyLabel(fe.intervalMonths)} · {fe.category || 'Sin categoría'}
-                  {fe.cardName ? ` · ${fe.cardName}` : ''} · desde {fe.startPeriod}
-                  {fe.endPeriod ? ` · hasta ${fe.endPeriod}` : ''}
-                  {fe.dueDay != null && fe.cardId == null && ` · vence el día ${fe.dueDay}`}
-                  {fe.intervalMonths > 1 && fe.nextPeriod !== '' && ` · próximo cobro: ${periodLabel(fe.nextPeriod)}`}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button variant="ghost" onClick={() => setAmountFor(fe)}>
-                  Cambiar monto
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setEditing(fe)
-                    setShowForm(true)
-                  }}
-                >
-                  Editar
-                </Button>
-                {confirmCancel === fe.id ? (
-                  <>
-                    <span className="text-sm text-warning">¿Cancelar desde {periodLabel(period)}?</span>
-                    <Button variant="danger" onClick={() => cancelFrom(fe.id)}>Sí</Button>
-                    <Button variant="ghost" onClick={() => setConfirmCancel(null)}>No</Button>
-                  </>
-                ) : (
-                  <Button variant="ghost" onClick={() => setConfirmCancel(fe.id)}>Cancelar</Button>
-                )}
-                {confirmDelete === fe.id ? (
-                  <>
-                    <span className="text-sm text-danger">¿Eliminar?</span>
-                    <Button variant="danger" onClick={() => remove(fe.id)}>Sí</Button>
-                    <Button variant="ghost" onClick={() => setConfirmDelete(null)}>No</Button>
-                  </>
-                ) : (
-                  <Button variant="danger" onClick={() => setConfirmDelete(fe.id)}>Eliminar</Button>
-                )}
-              </div>
-            </li>
-          ))}
+                <Menu label={`Acciones de ${fe.description}`} items={actions} />
+              </li>
+            )
+          })}
         </ul>
       )}
 
-      {showForm && (
+      {cancelling && (
+        <ConfirmDialog
+          title="Cancelar gasto fijo"
+          confirmLabel="Cancelar desde este mes"
+          onConfirm={() => cancelFrom(cancelling.id)}
+          onClose={() => setCancelling(null)}
+        >
+          «{cancelling.description}» deja de cobrarse desde {periodLabel(period)}. Los meses anteriores quedan como están.
+        </ConfirmDialog>
+      )}
+      {deleting && (
+        <ConfirmDialog title="Eliminar gasto fijo" onConfirm={() => remove(deleting.id)} onClose={() => setDeleting(null)}>
+          ¿Eliminar «{deleting.description}» de todos los meses? Va a la papelera; si solo dejó de cobrarse, usa «Cancelar desde…».
+        </ConfirmDialog>
+      )}
+
+      {showForm && data && (
         <FixedExpenseForm
           fixed={editing}
-          cards={cards}
-          categories={categories}
+          cards={data.cards}
+          categories={data.categories}
           defaultPeriod={period}
           onClose={() => setShowForm(false)}
           onSaved={reload}
@@ -284,7 +311,7 @@ function FixedExpenseForm({
                 <input type="month" className={inputCls} value={startPeriod} onChange={(e) => setStartPeriod(e.target.value)} required />
               </Field>
             </div>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-fg-subtle">
               La frecuencia y la moneda no se pueden cambiar después: cambiarías cobros ya registrados.
               {currency === 'UF' && ' El valor de la UF se descarga solo (mindicador.cl) y en meses sin valor se estima con el último.'}
             </p>
@@ -330,7 +357,7 @@ function FixedExpenseForm({
               onChange={(e) => setDueDay(e.target.value)}
               placeholder="5"
             />
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-fg-subtle">
               Te avisa unos días antes mientras siga pendiente. Si el mes es más corto, vence su último día. Los
               cargados a una tarjeta se avisan con el vencimiento de su estado de cuenta.
             </p>
@@ -338,17 +365,17 @@ function FixedExpenseForm({
         )}
 
         {editing && (
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-fg-subtle">
             Para cambiar el monto usa “Cambiar monto”, así sólo afecta del mes elegido en adelante.
           </p>
         )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : editing ? 'Guardar' : 'Crear'}
+          <Button type="submit" loading={busy}>
+            {editing ? 'Guardar' : 'Crear'}
           </Button>
         </div>
       </form>
@@ -386,19 +413,19 @@ function AmountModal({
   return (
     <Modal title={`Cambiar monto · ${fixed.description}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-xs text-slate-500">
-          El nuevo monto aplica desde <strong>{periodLabel(period)}</strong> en adelante. Los meses
+        <p className="text-sm text-fg-muted">
+          El nuevo monto aplica desde <strong className="text-fg">{periodLabel(period)}</strong> en adelante. Los meses
           anteriores conservan su valor.
         </p>
         <Field label={fixed.currency === 'UF' ? 'Nuevo monto en UF' : 'Nuevo monto'}>
           <AmountInput currency={fixed.currency} value={amount} onChange={setAmount} />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Aplicar'}
+          <Button type="submit" loading={busy}>
+            Aplicar
           </Button>
         </div>
       </form>

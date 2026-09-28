@@ -5,7 +5,9 @@ import type { OpResult } from '@/services/contract'
 import { failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { Button, Field, QueryError, Section, Spinner, inputCls } from './ui'
+import { PlugZap, RefreshCw, Unplug } from 'lucide-react'
+import { Button, Callout, ConfirmAction, Field, QueryError, Section, SkeletonRows, inputCls } from './ui'
+import { Link } from './Link'
 
 function isoDaysAgo(days: number): string {
   const d = new Date()
@@ -38,7 +40,7 @@ export function MailSettings() {
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={reload} />
       ) : !query.data ? (
-        <Spinner />
+        <SkeletonRows rows={5} />
       ) : (
         // Keyed by the saved values so the form re-initializes after a save.
         <MailForm key={`${query.data.username}|${query.data.host}|${query.data.startDate}`} state={query.data} onChanged={reload} />
@@ -58,7 +60,6 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
   const [startDate, setStartDate] = useState(state.configured ? state.startDate : isoDaysAgo(30))
   const [autoSync, setAutoSync] = useState(state.configured ? state.autoSync : true)
   const [busy, setBusy] = useState<'save' | 'test' | 'sync' | 'disconnect' | null>(null)
-  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
 
   // run performs one action with its pending state; true when it succeeded.
   // The state reloads either way: a failed connection test records its error.
@@ -89,7 +90,7 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
           startDate,
           autoSync,
         }),
-      '✓ Correo guardado',
+      'Correo guardado.',
     ).then((saved) => {
       if (saved) setPassword('') // stored in the keychain: do not keep it in the form
     })
@@ -97,9 +98,9 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
 
   return (
     <form onSubmit={save} className="space-y-4">
-      <p className="text-sm text-slate-400">
-        La app lee las alertas de compra que tu banco te envía por correo y las deja en <strong>Importar</strong> para
-        revisarlas. Sólo busca correos del remitente indicado y desde la última revisión; nunca los marca como leídos.
+      <p className="text-sm text-fg-muted">
+        La app lee las alertas de compra que tu banco te envía por correo y las deja en{' '}
+        <Link to={{ page: 'importar', tab: 'bandeja' }}>Importar</Link> para revisarlas. Sólo busca correos del remitente indicado y desde la última revisión; nunca los marca como leídos.
       </p>
       <div className="grid grid-cols-[1fr_7rem] gap-3">
         <Field label="Servidor IMAP">
@@ -123,12 +124,12 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
           required={!state.configured}
           aria-describedby="mail-password-help"
         />
-        <p id="mail-password-help" className="mt-1 text-xs text-slate-500">
+        <p id="mail-password-help" className="mt-1 text-xs text-fg-subtle">
           {host.toLowerCase().includes('gmail') ? (
             <>
-              Gmail <strong className="text-slate-300">no acepta tu clave normal</strong>: activa la verificación en
+              Gmail <strong className="text-fg-muted">no acepta tu clave normal</strong>: activa la verificación en
               2 pasos y crea una contraseña de aplicación en{' '}
-              <span className="select-all font-mono text-slate-300">myaccount.google.com/apppasswords</span> (16
+              <span className="select-all font-mono text-fg-muted">myaccount.google.com/apppasswords</span> (16
               letras, puedes pegarla con o sin espacios).
             </>
           ) : (
@@ -145,72 +146,72 @@ function MailForm({ state, onChanged }: { state: MailState; onChanged: () => voi
           <input className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="INBOX" />
         </Field>
       </div>
-      <p className="-mt-2 text-xs text-slate-500">
+      <p className="-mt-2 text-xs text-fg-subtle">
         Si un filtro archiva las alertas, usa la carpeta «[Gmail]/Todos» (o «[Gmail]/All Mail»).
       </p>
       <div className="grid grid-cols-2 items-end gap-3">
         <Field label="Revisar desde">
           <input className={inputCls} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
         </Field>
-        <label className="flex h-10 items-center gap-2 text-sm">
-          <input type="checkbox" checked={autoSync} onChange={(e) => setAutoSync(e.target.checked)} className="h-4 w-4" />
+        <label className="flex min-h-10 items-center gap-2 text-sm text-fg">
+          <input type="checkbox" className="size-4 accent-accent" checked={autoSync} onChange={(e) => setAutoSync(e.target.checked)} />
           Revisar solo cada 15 min mientras la app está abierta
         </label>
       </div>
 
       {state.configured && (
-        <div className="space-y-1 rounded bg-surface p-3 text-xs ring-1 ring-slate-800">
-          <p className="text-slate-400">{syncStatusText(state)}</p>
-          {state.lastError && <p className="text-red-300">Último error: {state.lastError}</p>}
+        <div className="space-y-2">
+          <p className="text-xs text-fg-subtle">{syncStatusText(state)}</p>
+          {state.lastError && (
+            <Callout tone="negative" role="alert">
+              Último error: {state.lastError}
+            </Callout>
+          )}
           {state.issuers.length === 0 && (
-            <p className="text-amber-200">
+            <Callout tone="caution">
               Aún no hay un lector para el formato de alertas de ningún banco: los correos encontrados se informan como
               «no reconocidos» hasta que se agregue.
-            </p>
+            </Callout>
           )}
         </div>
       )}
 
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {state.configured && (
           <>
-            {confirmDisconnect ? (
-              <>
-                <span className="self-center text-sm text-danger">¿Quitar el correo?</span>
-                <Button
-                  variant="danger"
-                  disabled={busy !== null}
-                  onClick={() => void run('disconnect', () => MailSyncService.DisconnectMail(), 'Correo desconectado')}
-                >
-                  Sí, quitar
-                </Button>
-                <Button variant="ghost" onClick={() => setConfirmDisconnect(false)}>
-                  No
-                </Button>
-              </>
-            ) : (
-              <Button variant="ghost" onClick={() => setConfirmDisconnect(true)}>
-                Desconectar
-              </Button>
-            )}
+            <span className="mr-auto">
+              <ConfirmAction
+                label="Desconectar"
+                icon={Unplug}
+                question="¿Quitar el correo?"
+                confirmLabel="Quitar"
+                onConfirm={async () => {
+                  await run('disconnect', () => MailSyncService.DisconnectMail(), 'Correo desconectado.')
+                }}
+              />
+            </span>
             <Button
-              variant="ghost"
+              variant="secondary"
+              icon={PlugZap}
               disabled={busy !== null}
-              onClick={() => void run('test', () => MailSyncService.TestMailConnection(), '✓ Conexión correcta')}
+              loading={busy === 'test'}
+              onClick={() => void run('test', () => MailSyncService.TestMailConnection(), 'Conexión correcta.')}
             >
               {busy === 'test' ? 'Probando…' : 'Probar conexión'}
             </Button>
             <Button
-              variant="ghost"
+              variant="secondary"
+              icon={RefreshCw}
               disabled={busy !== null || state.syncing}
+              loading={state.syncing}
               onClick={() => void run('sync', () => MailSyncService.SyncNow(), 'Revisando el correo…')}
             >
               {state.syncing ? 'Revisando…' : 'Revisar ahora'}
             </Button>
           </>
         )}
-        <Button type="submit" disabled={busy !== null}>
-          {busy === 'save' ? 'Guardando…' : 'Guardar'}
+        <Button type="submit" disabled={busy !== null} loading={busy === 'save'}>
+          Guardar
         </Button>
       </div>
     </form>

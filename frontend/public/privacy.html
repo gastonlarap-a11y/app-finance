@@ -5,22 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Política de privacidad · App Finance</title>
   <meta name="description" content="Qué datos usa App Finance, dónde se guardan y cómo usa Google Drive y el correo." />
+  <script src="theme-init.js"></script>
   <style>
+    /* The app's tokens (src/index.css: canvas, fg, fg-muted, accent-fg, line),
+       copied because this page stands alone. theme-init.js applies the theme
+       chosen in the app; without it, the system appearance decides. */
     :root {
-      color-scheme: light dark;
-      --bg: #ffffff;
-      --fg: #1f2933;
-      --muted: #52606d;
-      --accent: #4f46e5;
-      --rule: #e4e7eb;
+      color-scheme: light;
+      --bg: oklch(0.985 0.004 265);
+      --fg: oklch(0.21 0.03 265);
+      --muted: oklch(0.44 0.03 265);
+      --accent: oklch(0.5 0.22 277);
+      --rule: oklch(0.91 0.008 265);
+    }
+    :root[data-theme='dark'] {
+      color-scheme: dark;
+      --bg: oklch(0.17 0.02 265);
+      --fg: oklch(0.96 0.006 265);
+      --muted: oklch(0.77 0.02 265);
+      --accent: oklch(0.77 0.12 277);
+      --rule: oklch(0.3 0.022 265);
     }
     @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f172a;
-        --fg: #e2e8f0;
-        --muted: #94a3b8;
-        --accent: #818cf8;
-        --rule: #1e293b;
+      :root:not([data-theme]) {
+        color-scheme: dark;
+        --bg: oklch(0.17 0.02 265);
+        --fg: oklch(0.96 0.006 265);
+        --muted: oklch(0.77 0.02 265);
+        --accent: oklch(0.77 0.12 277);
+        --rule: oklch(0.3 0.022 265);
       }
     }
     body {

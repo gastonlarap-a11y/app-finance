@@ -86,9 +86,14 @@ export default defineConfig(({ mode }) => {
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-capable', content: 'yes' }, injectTo: 'head' as const },
                   // Standard name (Chromium deprecates the apple- one); iOS still reads the above.
                   { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' }, injectTo: 'head' as const },
-                  { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' }, injectTo: 'head' as const },
+                  // 'default': an opaque bar whose text follows the system, legible
+                  // with either app theme. iOS fixes it at launch and ignores later
+                  // changes; 'black-translucent' always draws white text (unreadable
+                  // over the light theme).
+                  { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'default' }, injectTo: 'head' as const },
                   { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: 'App Finance' }, injectTo: 'head' as const },
-                  // Dark canvas token in sRGB; lib/theme.ts rewrites it when the theme changes.
+                  // Canvas token in sRGB for the browser chrome; lib/theme.ts rewrites
+                  // it to the resolved theme at startup and on every change.
                   { tag: 'meta', attrs: { name: 'theme-color', content: '#0b0f18' }, injectTo: 'head' as const },
                 ]
               },

@@ -1,10 +1,13 @@
 import { useState, type SubmitEvent } from 'react'
+import { Pencil, Plus, Search, Store } from 'lucide-react'
 import { FinanceService, type Merchant } from '@/services/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { Button, Empty, Field, Modal, QueryError, Section, Spinner, inputCls } from './ui'
+import { Button, ConfirmAction, Empty, EmptyState, Field, IconButton, Modal, QueryError, Section, SkeletonRows, inputCls } from './ui'
 
+// MerchantsView is Configuración › Comercios: where you buy, assignable to
+// expenses and used by the import rules.
 export function MerchantsView() {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
@@ -12,81 +15,69 @@ export function MerchantsView() {
   const reload = () => invalidate('ledger', 'imports')
   const [editing, setEditing] = useState<Merchant | null>(null)
   const [showForm, setShowForm] = useState(false)
-  const [confirmId, setConfirmId] = useState<number | null>(null)
   const [query, setQuery] = useState('')
 
   const merchantsQuery = useQuery(version, () => FinanceService.ListMerchants())
 
   async function remove(id: number) {
-    setConfirmId(null)
     const res = await FinanceService.DeleteMerchant(id)
     if (!failed(res)) reload()
+  }
+
+  function open(merchant: Merchant | null) {
+    setEditing(merchant)
+    setShowForm(true)
   }
 
   if (merchantsQuery.status === 'error') {
     return <QueryError message={merchantsQuery.error} onRetry={reload} />
   }
-  if (!merchantsQuery.data) return <Spinner />
-  const merchants = merchantsQuery.data
+  const merchants = merchantsQuery.data ?? []
   const filtered = merchants.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()))
 
   return (
     <Section
       title="Comercios"
       action={
-        <Button
-          onClick={() => {
-            setEditing(null)
-            setShowForm(true)
-          }}
-        >
-          + Nuevo comercio
+        <Button icon={Plus} onClick={() => open(null)}>
+          Nuevo comercio
         </Button>
       }
     >
-      {merchants.length === 0 ? (
-        <Empty>Aún no tienes comercios. Crea uno para asignarlo a tus gastos.</Empty>
+      {!merchantsQuery.data ? (
+        <SkeletonRows rows={4} />
+      ) : merchants.length === 0 ? (
+        <EmptyState icon={Store} title="Aún no tienes comercios" action={<Button icon={Plus} onClick={() => open(null)}>Crear un comercio</Button>}>
+          Jumbo, Falabella, la farmacia… Asígnalos a tus gastos; las reglas de importación los completan solas.
+        </EmptyState>
       ) : (
         <>
-          <input
-            className={`${inputCls} mb-3`}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar comercio…"
-          />
+          <div className="relative mb-3">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-subtle" />
+            <input
+              type="search"
+              aria-label="Buscar comercio"
+              className={`${inputCls} pl-9`}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar comercio…"
+            />
+          </div>
           {filtered.length === 0 ? (
             <Empty>No hay comercios que coincidan con la búsqueda.</Empty>
           ) : (
-            <ul className="space-y-2">
+            <ul className="divide-y divide-line">
               {filtered.map((m) => (
-                <li key={m.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
+                <li key={m.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-bold text-accent-fg">
                       {m.name.charAt(0).toUpperCase()}
                     </span>
-                    <span className="font-medium">{m.name}</span>
+                    <span className="truncate font-medium text-fg">{m.name}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing(m)
-                        setShowForm(true)
-                      }}
-                    >
-                      Editar
-                    </Button>
-                    {confirmId === m.id ? (
-                      <>
-                        <span className="text-sm text-danger">¿Eliminar?</span>
-                        <Button variant="danger" onClick={() => remove(m.id)}>Sí</Button>
-                        <Button variant="ghost" onClick={() => setConfirmId(null)}>No</Button>
-                      </>
-                    ) : (
-                      <Button variant="danger" onClick={() => setConfirmId(m.id)}>
-                        Eliminar
-                      </Button>
-                    )}
+                  <div className="flex items-center gap-1">
+                    <IconButton label={`Editar el comercio ${m.name}`} icon={Pencil} onClick={() => open(m)} />
+                    <ConfirmAction label={`Eliminar el comercio ${m.name}`} iconOnly onConfirm={() => remove(m.id)} />
                   </div>
                 </li>
               ))}
@@ -95,13 +86,7 @@ export function MerchantsView() {
         </>
       )}
 
-      {showForm && (
-        <MerchantForm
-          merchant={editing}
-          onClose={() => setShowForm(false)}
-          onSaved={reload}
-        />
-      )}
+      {showForm && <MerchantForm merchant={editing} onClose={() => setShowForm(false)} onSaved={reload} />}
     </Section>
   )
 }
@@ -123,9 +108,7 @@ function MerchantForm({
     e.preventDefault()
     setBusy(true)
     try {
-      const res = merchant
-        ? await FinanceService.UpdateMerchant(merchant.id, name)
-        : await FinanceService.CreateMerchant(name)
+      const res = merchant ? await FinanceService.UpdateMerchant(merchant.id, name) : await FinanceService.CreateMerchant(name)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -141,11 +124,11 @@ function MerchantForm({
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Jumbo, Falabella…" autoFocus required />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Guardar'}
+          <Button type="submit" loading={busy}>
+            Guardar
           </Button>
         </div>
       </form>

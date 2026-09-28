@@ -4,27 +4,16 @@ import App from '@/App'
 import '@fontsource-variable/inter/wght.css'
 import '@/index.css'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { FatalScreen } from '@/components/FatalScreen'
 import { startThemeSync } from '@/lib/theme'
 import { startRouteMemory } from '@/lib/useRoute'
 
-// Fatal replaces the app with a message. It always offers a reload: an
-// installed PWA has no browser chrome, so without the button a stuck screen
-// could only be left by killing the app.
+// Fatal replaces the app with a message; the way out is a reload.
 function Fatal({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
-      <div className="max-w-md space-y-3 text-center">
-        <h1 className="text-xl font-semibold">{title}</h1>
-        <p className="text-sm text-slate-400">{children}</p>
-        <button
-          type="button"
-          className="rounded-base bg-primary px-4 py-2 text-sm font-medium text-white"
-          onClick={() => window.location.reload()}
-        >
-          Recargar
-        </button>
-      </div>
-    </div>
+    <FatalScreen title={title} actionLabel="Recargar" onAction={() => window.location.reload()}>
+      {children}
+    </FatalScreen>
   )
 }
 

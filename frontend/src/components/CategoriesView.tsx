@@ -4,7 +4,8 @@ import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
-import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Spinner, inputCls } from './ui'
+import { Pencil, Plus, Shapes, Target } from 'lucide-react'
+import { Button, ConfirmAction, EmptyState, Field, IconButton, Modal, MoneyInput, QueryError, Section, SkeletonRows, Switch, inputCls } from './ui'
 
 // CategoriesView is Configuración › Categorías y presupuestos. Budgets are
 // effective-dated, so it shows the ones in force in a month of its own
@@ -17,7 +18,6 @@ export function CategoriesView() {
   const [editing, setEditing] = useState<Category | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [budgetFor, setBudgetFor] = useState<Category | null>(null)
-  const [confirmId, setConfirmId] = useState<number | null>(null)
 
   const query = useQuery(`${period}:${version}`, async () => {
     const [categories, budgets] = await Promise.all([
@@ -29,31 +29,34 @@ export function CategoriesView() {
   })
 
   async function remove(id: number) {
-    setConfirmId(null)
     if (!failed(await FinanceService.DeleteCategory(id))) reload()
   }
 
+  function open(category: Category | null) {
+    setEditing(category)
+    setShowForm(true)
+  }
+
   if (query.status === 'error') return <QueryError message={query.error} onRetry={reload} />
-  if (!query.data) return <Spinner />
-  const { categories, budgetById } = query.data
+  const categories = query.data?.categories ?? []
+  const budgetById = query.data?.budgetById ?? new Map<number, CategoryBudgetView>()
 
   return (
     <div className="space-y-5">
     <Section
       title="Categorías"
       action={
-        <Button
-          onClick={() => {
-            setEditing(null)
-            setShowForm(true)
-          }}
-        >
-          + Nueva categoría
+        <Button icon={Plus} onClick={() => open(null)}>
+          Nueva categoría
         </Button>
       }
     >
-      {categories.length === 0 ? (
-        <Empty>Aún no tienes categorías. Crea una para clasificar tus gastos.</Empty>
+      {!query.data ? (
+        <SkeletonRows rows={4} />
+      ) : categories.length === 0 ? (
+        <EmptyState icon={Shapes} title="Aún no tienes categorías" action={<Button icon={Plus} onClick={() => open(null)}>Crear una categoría</Button>}>
+          Supermercado, transporte, salud… Clasifica tus gastos para ver en qué se va la plata y ponerle un tope a cada una.
+        </EmptyState>
       ) : (
         <>
           <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-fg-muted">
@@ -65,50 +68,31 @@ export function CategoriesView() {
               onChange={(e) => e.target.value && setPeriod(e.target.value)}
             />
           </label>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line">
             {categories.map((c) => {
               const budget = budgetById.get(c.id)
               return (
-                <li
-                  key={c.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-base bg-surface p-3 ring-1 ring-slate-800"
-                >
-                  <div>
-                    <div className="font-medium">{c.name}</div>
-                    <div className="text-xs text-slate-500">
-                      {budget
-                        ? `Tope ${formatCLP(budget.amount)} / mes · desde ${periodLabel(budget.effectiveFrom)}`
-                        : 'Sin presupuesto'}
+                <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-3 first:pt-0 last:pb-0">
+                  <div className="min-w-0">
+                    <div className="font-medium text-fg">{c.name}</div>
+                    <div className="text-xs text-fg-muted">
+                      {budget ? (
+                        <>
+                          Tope <span className="tabular-nums text-fg">{formatCLP(budget.amount)}</span> / mes · desde{' '}
+                          {periodLabel(budget.effectiveFrom)}
+                        </>
+                      ) : (
+                        'Sin presupuesto'
+                      )}
+                      {c.rollover && ' · traspasa lo no gastado'}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" onClick={() => setBudgetFor(c)}>
+                  <div className="flex items-center gap-1">
+                    <Button variant="secondary" size="sm" icon={Target} onClick={() => setBudgetFor(c)}>
                       Presupuesto
                     </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing(c)
-                        setShowForm(true)
-                      }}
-                    >
-                      Editar
-                    </Button>
-                    {confirmId === c.id ? (
-                      <>
-                        <span className="text-sm text-danger">¿Eliminar?</span>
-                        <Button variant="danger" onClick={() => remove(c.id)}>
-                          Sí
-                        </Button>
-                        <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                          No
-                        </Button>
-                      </>
-                    ) : (
-                      <Button variant="danger" onClick={() => setConfirmId(c.id)}>
-                        Eliminar
-                      </Button>
-                    )}
+                    <IconButton label={`Editar la categoría ${c.name}`} icon={Pencil} onClick={() => open(c)} />
+                    <ConfirmAction label={`Eliminar la categoría ${c.name}`} iconOnly onConfirm={() => remove(c.id)} />
                   </div>
                 </li>
               )
@@ -166,11 +150,11 @@ function CategoryForm({
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Comida, Transporte…" autoFocus required />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Guardar'}
+          <Button type="submit" loading={busy}>
+            Guardar
           </Button>
         </div>
       </form>
@@ -230,30 +214,27 @@ function BudgetForm({
         <Field label="Desde el mes">
           <input type="month" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} required />
         </Field>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-subtle">
           Rige desde {from ? periodLabel(from) : 'el mes elegido'} en adelante; los meses anteriores mantienen su tope. Un tope de
           $0 significa «no gastar nada» en esta categoría.
         </p>
-        <label className="flex items-start gap-2 text-sm text-slate-300">
-          <input type="checkbox" className="mt-1" checked={rollover} onChange={(e) => setRollover(e.target.checked)} />
-          <span>
-            Traspasar lo no gastado al mes siguiente
-            <span className="block text-xs text-slate-500">
-              Lo que sobre de un mes se suma al tope del siguiente (si te pasas, el mes siguiente parte de cero).
-            </span>
-          </span>
-        </label>
+        <Switch
+          label="Traspasar lo no gastado al mes siguiente"
+          description="Lo que sobre de un mes se suma al tope del siguiente (si te pasas, el mes siguiente parte de cero)."
+          checked={rollover}
+          onChange={setRollover}
+        />
         <div className="flex flex-wrap justify-end gap-2 pt-2">
           {current && (
-            <Button variant="danger" onClick={() => save(null)} disabled={busy}>
+            <Button variant="quiet" className="mr-auto" onClick={() => void save(null)} disabled={busy}>
               Quitar tope
             </Button>
           )}
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Guardar'}
+          <Button type="submit" loading={busy}>
+            Guardar
           </Button>
         </div>
       </form>

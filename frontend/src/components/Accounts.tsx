@@ -8,7 +8,8 @@ import { useQuery } from '@/lib/useQuery'
 import { isNegative } from '@/lib/money'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Link } from './Link'
-import { Button, Empty, Field, Modal, MoneyInput, QueryError, Section, Select, Spinner, inputCls } from './ui'
+import { Landmark, Pencil, Plus } from 'lucide-react'
+import { Badge, Button, ConfirmAction, EmptyState, Field, Modal, MoneyInput, QueryError, Section, Select, SkeletonRows, inputCls } from './ui'
 
 const KIND_LABEL: Record<string, string> = {
   corriente: 'Cuenta corriente',
@@ -98,7 +99,6 @@ function AccountsSection({ period }: { period: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
   const [editing, setEditing] = useState<Account | null | undefined>(undefined)
-  const [confirmId, setConfirmId] = useState<number | null>(null)
   const query = useQuery(`accounts-view:${period}:${version}`, async () => {
     const res = await FinanceService.ListAccounts(period)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'cuentas no disponibles')
@@ -106,61 +106,57 @@ function AccountsSection({ period }: { period: string }) {
   })
 
   async function remove(id: number) {
-    setConfirmId(null)
     if (!failed(await FinanceService.DeleteAccount(id))) invalidate('ledger')
   }
 
   return (
-    <Section title={`Cuentas · saldo a ${periodLabel(period)}`} action={<Button onClick={() => setEditing(null)}>+ Nueva cuenta</Button>}>
+    <Section
+      title={`Cuentas · saldo a ${periodLabel(period)}`}
+      action={
+        <Button icon={Plus} onClick={() => setEditing(null)}>
+          Nueva cuenta
+        </Button>
+      }
+    >
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
       ) : !query.data ? (
-        <Spinner />
+        <SkeletonRows rows={3} />
       ) : query.data.accounts.length === 0 ? (
-        <Empty>
+        <EmptyState icon={Landmark} title="Aún no tienes cuentas" action={<Button icon={Plus} onClick={() => setEditing(null)}>Agregar una cuenta</Button>}>
           Agrega tus cuentas (corriente, vista, efectivo) para ver cuánto hay en cada una. Luego indica en tus gastos, ingresos y
           tarjetas de qué cuenta salen.
-        </Empty>
+        </EmptyState>
       ) : (
         <>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line">
             {query.data.accounts.map((a: AccountView) => (
-              <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 rounded-base bg-surface p-3 ring-1 ring-slate-800">
-                <div>
-                  <div className="font-medium">
-                    {a.name}
-                    {a.receivesSalary && <span className="ml-2 text-xs text-slate-500">recibe el sueldo</span>}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {KIND_LABEL[a.kind] ?? a.kind} · este mes +{formatCLP(a.ingresos)} / −{formatCLP(a.gastos)}
+              <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-sunken text-fg-muted ring-1 ring-inset ring-line">
+                    <Landmark className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 font-medium text-fg">
+                      {a.name}
+                      {a.receivesSalary && <Badge tone="positive">Recibe el sueldo</Badge>}
+                    </div>
+                    <div className="text-xs text-fg-muted">
+                      {KIND_LABEL[a.kind] ?? a.kind} · este mes +{formatCLP(a.ingresos)} / −{formatCLP(a.gastos)}
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-danger' : ''}`}>{formatCLP(a.balance)}</strong>
-                  {confirmId === a.id ? (
-                    <>
-                      <Button variant="danger" onClick={() => void remove(a.id)}>
-                        Eliminar
-                      </Button>
-                      <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                        No
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button variant="ghost" onClick={() => setEditing(a)}>
-                        Editar
-                      </Button>
-                      <Button variant="ghost" onClick={() => setConfirmId(a.id)}>
-                        Eliminar
-                      </Button>
-                    </>
-                  )}
+                <div className="flex items-center gap-2">
+                  <strong className={`mr-1 tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
+                  <Button variant="secondary" size="sm" icon={Pencil} onClick={() => setEditing(a)}>
+                    Editar
+                  </Button>
+                  <ConfirmAction label={`Eliminar la cuenta ${a.name}`} iconOnly onConfirm={() => remove(a.id)} />
                 </div>
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-fg-subtle">
             Sin cuenta este mes: +{formatCLP(query.data.unassignedIngresos)} / −{formatCLP(query.data.unassignedGastos)}. Eliminar
             una cuenta deja sus movimientos sin cuenta.
           </p>
@@ -232,16 +228,16 @@ function AccountForm({
             <input type="month" className={inputCls} value={openingPeriod} onChange={(e) => setOpeningPeriod(e.target.value)} required />
           </Field>
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <input type="checkbox" checked={salary} onChange={(e) => setSalary(e.target.checked)} />
+        <label className="flex items-center gap-2 text-sm text-fg">
+          <input type="checkbox" className="size-4 accent-accent" checked={salary} onChange={(e) => setSalary(e.target.checked)} />
           Aquí cae mi sueldo
         </label>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Guardar'}
+          <Button type="submit" loading={busy}>
+            Guardar
           </Button>
         </div>
       </form>
