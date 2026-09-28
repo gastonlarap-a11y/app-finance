@@ -40,9 +40,15 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
   (Compartir/Archivos) en el iPad.
 - **Configuración › Tarjetas / Cuentas / Categorías y presupuestos / Etiquetas / Comercios / Reglas de
   importación**: todo lo que se configura una vez.
-- **Atajos**: `N` abre «Agregar gasto» desde cualquier pantalla; `←`/`→` cambian de mes (o de año en
-  «Año»); `⌘1`…`⌘7` (Ctrl en Windows) saltan a cada sección de la barra lateral y `⌘,` abre
-  Configuración. Ninguno actúa con un diálogo abierto.
+- **Paleta de comandos** (`⌘K` / Ctrl+K, o «Ir a…» en la barra lateral): ir a cualquier pantalla o
+  sección de Configuración, agregar un gasto, cambiar de mes, de tema o de perfil, respaldar, o buscar
+  gastos por texto. Recuerda lo último que usaste.
+- **Guía de inicio**: en el Resumen de un perfil nuevo, los primeros pasos (tarjeta o cuenta,
+  categorías, sueldo, primer gasto y respaldo) con el botón para hacer cada uno; desaparece sola al
+  completarlos o con «Ocultar».
+- **Atajos**: `⌘K` abre la paleta; `N` abre «Agregar gasto» desde cualquier pantalla; `←`/`→` cambian
+  de mes (o de año en «Año»); `⌘1`…`⌘7` (Ctrl en Windows) saltan a cada sección de la barra lateral y
+  `⌘,` abre Configuración. Ninguno actúa con un diálogo abierto.
 - **Perfiles (multi-usuario, sin login)**: varios perfiles sobre una sola base de datos; cada uno ve
   únicamente sus datos y el cambio de perfil es instantáneo (pie de la barra lateral; crear y eliminar en
   Configuración › Perfiles).

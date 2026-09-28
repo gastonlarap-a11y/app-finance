@@ -2,9 +2,9 @@ import { lazy, Suspense, useState } from 'react'
 import { CloudUpload } from 'lucide-react'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { SettingsService, type SettingsState } from '@/services/settings'
-import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
 import { IconButton } from '../ui'
+import { requestBackup } from './backupNow'
 
 // import.meta.env.VITE_TARGET is inlined by `define` at transform time, so the
 // bundler sees a literal condition and never pulls the web engine (worker +
@@ -45,20 +45,8 @@ function DriveBackup({ rail }: { rail: boolean }) {
   async function backupNow() {
     setBusy(true)
     try {
-      const res = await SettingsService.BackupNow()
-      if (res.error) {
-        notify('Respaldo: ' + res.error.message)
-      } else if (res.data) {
-        notify(
-          res.data.uploaded
-            ? 'Respaldo subido a Google Drive.'
-            : 'Respaldo local creado. Conecta Google Drive en Configuración › Respaldo para subirlo.',
-          'success',
-        )
-      }
+      await requestBackup()
       invalidate('settings')
-    } catch (err) {
-      notify('Respaldo: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setBusy(false)
     }

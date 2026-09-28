@@ -69,6 +69,7 @@ import { RefundDialog } from './RefundDialog'
 import { CuotaDialog } from './CuotaDialog'
 import { ReceivableDialog, ReceivablesPanel } from './Receivables'
 import { DuesBanner } from './DuesBanner'
+import { OnboardingChecklist } from './OnboardingChecklist'
 import { AccountBalancesPanel } from './Accounts'
 import { Link } from './Link'
 import { exportBasename, monthTable } from '@/lib/exportTables'
@@ -213,6 +214,7 @@ export function MonthView() {
 
   return (
     <div className={`@container space-y-6 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
+      <OnboardingChecklist />
       <DuesBanner />
       <BudgetAlerts budgets={summary.presupuestos} />
       <MonthHeadline summary={summary} />
