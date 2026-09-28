@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
 )
@@ -23,15 +24,17 @@ type lookCatalog struct {
 	icons  map[string]bool
 }
 
-var looks = mustParseLooks(looksJSON)
+// loadLooks parses the embedded catalog once. It can only fail if the file
+// shipped broken, which TestLooksCatalog catches before a release.
+var loadLooks = sync.OnceValues(func() (lookCatalog, error) { return parseLooks(looksJSON) })
 
-func mustParseLooks(raw []byte) lookCatalog {
+func parseLooks(raw []byte) (lookCatalog, error) {
 	var file struct {
 		Colors []string `json:"colors"`
 		Icons  []string `json:"icons"`
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
-		panic(fmt.Sprintf("finance: invalid looks.json: %v", err)) // embedded at build time: a bad file is a build bug
+		return lookCatalog{}, fmt.Errorf("parsing looks.json: %w", err)
 	}
 	cat := lookCatalog{colors: make(map[string]bool, len(file.Colors)), icons: make(map[string]bool, len(file.Icons))}
 	for _, c := range file.Colors {
@@ -40,25 +43,32 @@ func mustParseLooks(raw []byte) lookCatalog {
 	for _, i := range file.Icons {
 		cat.icons[i] = true
 	}
-	return cat
+	return cat, nil
 }
 
-func validColor(key string) bool { return key == "" || looks.colors[key] }
-func validIcon(key string) bool  { return key == "" || looks.icons[key] }
-
-func invalidLook(what string) *shared.AppError {
-	return shared.NewError(shared.ErrValidation, what+" no válido")
+// validateLook checks an icon and a color key against the catalog; "" is
+// automatic and always valid, so a setter of only one of them passes "" for
+// the other.
+func validateLook(icon, color string) *shared.AppError {
+	cat, err := loadLooks()
+	if err != nil {
+		return internalErr(err)
+	}
+	if icon != "" && !cat.icons[icon] {
+		return shared.NewError(shared.ErrValidation, "ícono no válido")
+	}
+	if color != "" && !cat.colors[color] {
+		return shared.NewError(shared.ErrValidation, "color no válido")
+	}
+	return nil
 }
 
 // SetCategoryLook sets the icon and color of a live category of the profile
 // ("" = automatic). Expenses reference categories by name, so the look follows
 // a rename with no extra work.
 func (s *FinanceService) SetCategoryLook(ctx context.Context, categoryID int64, icon, color string) OpResult {
-	if !validIcon(icon) {
-		return OpResult{Error: invalidLook("ícono")}
-	}
-	if !validColor(color) {
-		return OpResult{Error: invalidLook("color")}
+	if aerr := validateLook(icon, color); aerr != nil {
+		return OpResult{Error: aerr}
 	}
 	res, err := s.db.NewUpdate().Model((*Category)(nil)).Set("icon = ?", icon).Set("color = ?", color).
 		Where("id = ? AND user_id = ?", categoryID, s.uid()).Exec(ctx)
@@ -67,8 +77,8 @@ func (s *FinanceService) SetCategoryLook(ctx context.Context, categoryID int64, 
 
 // SetCardColor sets the color of a live card of the profile ("" = automatic).
 func (s *FinanceService) SetCardColor(ctx context.Context, cardID int64, color string) OpResult {
-	if !validColor(color) {
-		return OpResult{Error: invalidLook("color")}
+	if aerr := validateLook("", color); aerr != nil {
+		return OpResult{Error: aerr}
 	}
 	res, err := s.db.NewUpdate().Model((*Card)(nil)).Set("color = ?", color).
 		Where("id = ? AND user_id = ?", cardID, s.uid()).Exec(ctx)
@@ -78,8 +88,8 @@ func (s *FinanceService) SetCardColor(ctx context.Context, cardID int64, color s
 // SetSavingsGoalIcon sets the icon of a live savings goal of the profile
 // ("" = automatic).
 func (s *FinanceService) SetSavingsGoalIcon(ctx context.Context, goalID int64, icon string) OpResult {
-	if !validIcon(icon) {
-		return OpResult{Error: invalidLook("ícono")}
+	if aerr := validateLook(icon, ""); aerr != nil {
+		return OpResult{Error: aerr}
 	}
 	res, err := s.db.NewUpdate().Model((*SavingsGoal)(nil)).Set("icon = ?", icon).
 		Where("id = ? AND user_id = ?", goalID, s.uid()).Exec(ctx)

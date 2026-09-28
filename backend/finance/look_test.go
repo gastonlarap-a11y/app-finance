@@ -7,30 +7,47 @@ import (
 )
 
 func TestLooksCatalog(t *testing.T) {
-	if len(looks.colors) != 12 {
-		t.Fatalf("looks.json has %d colors, want 12", len(looks.colors))
+	cat, err := loadLooks()
+	if err != nil {
+		t.Fatalf("looks.json: %v", err)
 	}
-	if len(looks.icons) < 40 {
-		t.Fatalf("looks.json has %d icons, want at least 40", len(looks.icons))
+	if len(cat.colors) != 12 {
+		t.Fatalf("looks.json has %d colors, want 12", len(cat.colors))
 	}
-	for _, key := range []string{"", "blue", "gray"} {
-		if !validColor(key) {
-			t.Errorf("validColor(%q) = false", key)
-		}
+	if len(cat.icons) < 40 {
+		t.Fatalf("looks.json has %d icons, want at least 40", len(cat.icons))
 	}
-	for _, key := range []string{"", "shopping-cart", "piggy-bank", "tag"} {
-		if !validIcon(key) {
-			t.Errorf("validIcon(%q) = false", key)
-		}
+	if _, err := parseLooks([]byte(`{"colors": [`)); err == nil {
+		t.Fatal("parseLooks accepted broken JSON")
 	}
-	// Keys are exact: no case folding, no palette shades, no arbitrary CSS.
-	for _, key := range []string{"Blue", "blue-500", "#ff0000", " blue"} {
-		if validColor(key) {
-			t.Errorf("validColor(%q) = true", key)
-		}
+
+	tests := []struct {
+		name, icon, color string
+		valid             bool
+	}{
+		{"both automatic", "", "", true},
+		{"known keys", "shopping-cart", "blue", true},
+		{"icon only", "piggy-bank", "", true},
+		{"color only", "", "gray", true},
+		// Keys are exact: no case folding, no palette shades, no arbitrary CSS.
+		{"color case", "", "Blue", false},
+		{"color shade", "", "blue-500", false},
+		{"color hex", "", "#ff0000", false},
+		{"color padded", "", " blue", false},
+		{"icon case", "ShoppingCart", "", false},
+		{"icon outside catalog", "skull", "", false},
+		{"color key as icon", "green", "", false},
 	}
-	if validIcon("ShoppingCart") || validIcon("skull") {
-		t.Error("validIcon accepted a key outside the catalog")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			aerr := validateLook(tc.icon, tc.color)
+			if tc.valid && aerr != nil {
+				t.Fatalf("validateLook(%q, %q) = %v, want valid", tc.icon, tc.color, aerr)
+			}
+			if !tc.valid && (aerr == nil || aerr.Code != shared.ErrValidation) {
+				t.Fatalf("validateLook(%q, %q) = %v, want validation error", tc.icon, tc.color, aerr)
+			}
+		})
 	}
 }
 
