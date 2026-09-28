@@ -42,8 +42,8 @@ export function BankDescription({ text }: { text: string }) {
 export function BankCodes({ codes }: { codes: readonly string[] }) {
   if (codes.length === 0) return null
   return (
-    <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-fg-subtle" title="Código de referencia del banco: sirve para reclamar el cargo">
-      Cód.
+    <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-fg-subtle">
+      Cód. banco
       {codes.map((c) => (
         <span key={c} className="select-all font-mono">
           {c}

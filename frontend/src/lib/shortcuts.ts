@@ -2,6 +2,7 @@ import type { Route } from '@/lib/route'
 
 // Keyboard shortcuts, resolved by a pure function so the rules are tested
 // apart from the DOM. One listener in the shell (useAppShortcuts) applies them.
+//   ⌘K / Ctrl+K        command palette (also while typing in a field)
 //   ⌘1…⌘7 / Ctrl+1…7  main sections, in sidebar order
 //   ⌘, / Ctrl+,        Configuración (the platform's "Settings" shortcut)
 //   N                   new expense
@@ -9,7 +10,11 @@ import type { Route } from '@/lib/route'
 // None fires inside an open dialog (it would drop a half-filled form), and the
 // plain keys never fire while typing.
 
-export type ShortcutAction = { kind: 'navigate'; route: Route } | { kind: 'period'; step: -1 | 1 } | { kind: 'quick-add' }
+export type ShortcutAction =
+  | { kind: 'navigate'; route: Route }
+  | { kind: 'period'; step: -1 | 1 }
+  | { kind: 'quick-add' }
+  | { kind: 'palette' }
 
 export type KeyInput = {
   key: string
@@ -43,6 +48,7 @@ export function resolveShortcut(e: KeyInput, ctx: ShortcutContext): ShortcutActi
   const command = ctx.apple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
   if (command) {
     if (e.altKey || e.shiftKey) return null
+    if (e.key.toLowerCase() === 'k') return { kind: 'palette' }
     if (e.key === ',') return { kind: 'navigate', route: { page: 'config', section: null } }
     const route = /^[1-9]$/.test(e.key) ? SECTION_SHORTCUTS[Number(e.key) - 1] : undefined
     return route ? { kind: 'navigate', route } : null

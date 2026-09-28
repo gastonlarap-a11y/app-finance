@@ -13,7 +13,7 @@ import { Download, RotateCw, ShieldCheck, Upload } from 'lucide-react'
 import { exportDb, importDb, inspectDb, type ImportSummary } from '@/services/web/settings'
 import { SyncNoticeBox } from './SyncNoticeBox'
 import { validateSqliteFile } from '@/engine/db/dbfile'
-import { backupFilename, shareOrDownload } from '@/lib/exportFile'
+import { backupFilename, lastExport, rememberExport, shareOrDownload } from '@/lib/exportFile'
 import { useQuery } from '@/lib/useQuery'
 import { Button, Callout, IconButton, Modal, Section } from './ui'
 
@@ -36,27 +36,6 @@ type ImportState =
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
-}
-
-// LAST_EXPORT_KEY remembers, per device, when a backup last left the app: the
-// data lives only here, so "never" or "months ago" deserves a nudge.
-const LAST_EXPORT_KEY = 'app-finance:last-export'
-
-function lastExport(): Date | null {
-  try {
-    const v = localStorage.getItem(LAST_EXPORT_KEY)
-    return v ? new Date(v) : null
-  } catch {
-    return null // storage blocked: the reminder is a convenience only
-  }
-}
-
-function rememberExport(): void {
-  try {
-    localStorage.setItem(LAST_EXPORT_KEY, new Date().toISOString())
-  } catch {
-    // storage blocked: the reminder is a convenience only
-  }
 }
 
 async function handOff(blob: Blob, setState: (s: ExportState) => void) {

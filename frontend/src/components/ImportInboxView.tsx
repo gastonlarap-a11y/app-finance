@@ -419,8 +419,9 @@ function ImportRow({
             </Badge>
           )}
           {it.reference !== '' && (
-            <span className="select-all font-mono" title="Código de referencia del banco: sirve para reclamar el cargo">
-              Cód. {it.reference}
+            // The bank's reference: the proof to quote in a dispute.
+            <span>
+              Cód. banco <span className="select-all font-mono">{it.reference}</span>
             </span>
           )}
           {it.currency !== 'CLP' && <Badge tone="caution">{it.currency}</Badge>}
