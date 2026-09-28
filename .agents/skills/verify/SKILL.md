@@ -29,6 +29,11 @@ This is a Wails v3 desktop app — "verify" means the app actually builds, binds
      (owner "App Finance") and run `screencapture -x -o -l<id> <file>.png`.
    - Web target: `npm run build:web && npx vite preview --mode web`; unregister the service worker
      (DevTools or `navigator.serviceWorker.getRegistrations()`) or you get the previously cached build.
+     A browser whose OPFS database was migrated by a newer build is (rightly) refused by an older
+     one: clear it from `/app-finance/privacy.html`, where the engine is not running
+     (`navigator.storage.getDirectory()` → remove `.opfs-sahpool`).
+   - UI changes: look at them in both themes (⌘K → «Tema claro/oscuro», or Configuración ›
+     Apariencia) and at 1440 and 390 px wide.
 4. Stop the dev process; report what was actually observed (not just that it compiled).
 
 > Never use `wails dev` (the v2 CLI) — it fails with *"Unable to find Wails in go.mod"*. Use
