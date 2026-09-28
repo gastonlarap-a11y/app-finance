@@ -1,6 +1,7 @@
 // Detects color classes that bypass the semantic tokens of index.css: raw
-// Tailwind palette colors (slate-400, amber-200…), black/white, and the legacy
-// token names bridged while views migrate. Used by rawclasses.test.ts.
+// Tailwind palette colors (slate-400, amber-200…), black/white, and the
+// pre-redesign token names (surface, primary, danger…), which no longer exist.
+// Used by rawclasses.test.ts.
 
 const COLOR_UTILITY = '(?:bg|text|ring|border|outline|fill|stroke|divide|from|via|to|decoration|placeholder|caret|shadow)'
 const PALETTE = '(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)'

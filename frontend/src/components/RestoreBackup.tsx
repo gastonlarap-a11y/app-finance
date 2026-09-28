@@ -3,10 +3,11 @@
 // the backup holds and confirms; the current data is kept aside first (the
 // backend's pre-restore copy), so a restore can be undone the same way.
 import { useState } from 'react'
+import { ArchiveRestore, CloudDownload, FileUp, History } from 'lucide-react'
 import { SettingsService, type BackupFile, type BackupSummary } from '@/services/settings'
 import { errMsg } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
-import { Button, Empty, Modal, QueryError, Spinner } from './ui'
+import { Button, Callout, EmptyState, Modal, QueryError, SkeletonRows } from './ui'
 import { SyncNoticeBox } from './SyncNoticeBox'
 
 const KIND_LABEL: Record<string, string> = {
@@ -50,6 +51,7 @@ export function RestoreBackup({ driveConnected }: { driveConnected: boolean }) {
     return res.data ?? []
   })
   const busy = step.kind === 'inspecting' || step.kind === 'restoring' || step.kind === 'done'
+  const inspectingKey = step.kind === 'inspecting' ? step.key : null
 
   // inspect validates a backup (in a temp copy) and opens the confirmation. A
   // source may relabel it (the Drive copy names its device and date).
@@ -110,61 +112,75 @@ export function RestoreBackup({ driveConnected }: { driveConnected: boolean }) {
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-slate-200">Restaurar un respaldo</h3>
-      <p className="text-xs text-slate-500">
+      <h3 className="text-sm font-semibold text-fg">Restaurar un respaldo</h3>
+      <p className="text-xs text-fg-subtle">
         Reemplaza tus datos actuales por los de un respaldo. Antes se guarda una copia de lo que tienes
         ahora, que aparece en esta lista como «Antes de restaurar» por si quieres volver atrás.
       </p>
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="ghost" disabled={busy} onClick={() => void inspect('file', 'Archivo elegido', pickFile)}>
-          {step.kind === 'inspecting' && step.key === 'file' ? 'Revisando…' : 'Elegir archivo…'}
+        <Button
+          variant="secondary"
+          icon={FileUp}
+          disabled={busy}
+          loading={inspectingKey === 'file'}
+          onClick={() => void inspect('file', 'Archivo elegido', pickFile)}
+        >
+          {inspectingKey === 'file' ? 'Revisando…' : 'Elegir archivo…'}
         </Button>
         {driveConnected && (
-          <Button variant="ghost" disabled={busy} onClick={() => void inspect('drive', 'Google Drive', fromDrive)}>
-            {step.kind === 'inspecting' && step.key === 'drive' ? 'Descargando…' : 'Desde Google Drive'}
+          <Button
+            variant="secondary"
+            icon={CloudDownload}
+            disabled={busy}
+            loading={inspectingKey === 'drive'}
+            onClick={() => void inspect('drive', 'Google Drive', fromDrive)}
+          >
+            {inspectingKey === 'drive' ? 'Descargando…' : 'Desde Google Drive'}
           </Button>
         )}
       </div>
 
       {step.kind === 'failed' && (
-        <p role="alert" className="rounded-base bg-danger/10 px-3 py-2 text-sm text-red-300 ring-1 ring-danger/40">
+        <Callout tone="negative" role="alert">
           No se pudo restaurar: {step.message}
-        </p>
+        </Callout>
       )}
       {step.kind === 'done' && (
-        <p role="status" className="rounded-base bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 ring-1 ring-emerald-500/40">
-          Respaldo restaurado. Tus datos anteriores quedaron en <code>{step.safetyCopy}</code>. Recargando…
-        </p>
+        <Callout tone="positive" role="status">
+          Respaldo restaurado. Tus datos anteriores quedaron en <code className="font-mono">{step.safetyCopy}</code>. Recargando…
+        </Callout>
       )}
 
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={() => setReloadKey((n) => n + 1)} />
       ) : !query.data ? (
-        <Spinner />
+        <SkeletonRows rows={3} />
       ) : query.data.length === 0 ? (
-        <Empty>
-          Aún no hay respaldos en este equipo. Se crean al cerrar la app (si está activado arriba) o con «Respaldar
-          ahora».
-        </Empty>
+        <EmptyState icon={History} title="Aún no hay respaldos en este equipo">
+          Se crean al cerrar la app (si está activado arriba) o con «Respaldar ahora».
+        </EmptyState>
       ) : (
-        <ul className="divide-y divide-slate-800 rounded-base ring-1 ring-slate-800">
+        <ul className="divide-y divide-line rounded-lg ring-1 ring-inset ring-line">
           {query.data.map((f: BackupFile) => (
             <li key={f.path} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm">
               <div className="min-w-0">
-                <div className="text-slate-200">{when(f.at)}</div>
-                <div className="text-xs text-slate-500">
+                <div className="text-fg">{when(f.at)}</div>
+                <div className="text-xs text-fg-subtle">
                   {KIND_LABEL[f.kind] ?? f.kind} · {size(f.size)}
                 </div>
               </div>
               <Button
-                variant="ghost"
+                variant="quiet"
+                size="sm"
+                icon={ArchiveRestore}
                 disabled={busy}
+                loading={inspectingKey === f.path}
                 onClick={() =>
                   void inspect(f.path, `${KIND_LABEL[f.kind] ?? f.kind} del ${when(f.at)}`, () => Promise.resolve({ path: f.path }))
                 }
               >
-                {step.kind === 'inspecting' && step.key === f.path ? 'Revisando…' : 'Restaurar…'}
+                {inspectingKey === f.path ? 'Revisando…' : 'Restaurar…'}
               </Button>
             </li>
           ))}
@@ -198,8 +214,8 @@ function ConfirmRestore({
   const empty = s.expenses === 0 && s.incomes === 0
   return (
     <Modal title="Restaurar este respaldo" onClose={restoring ? () => undefined : onCancel}>
-      <p className="text-sm text-slate-300">
-        <strong>{candidate.label}</strong> contiene {s.profiles} {s.profiles === 1 ? 'perfil' : 'perfiles'},{' '}
+      <p className="text-sm text-fg-muted">
+        <strong className="text-fg">{candidate.label}</strong> contiene {s.profiles} {s.profiles === 1 ? 'perfil' : 'perfiles'},{' '}
         {s.expenses} {s.expenses === 1 ? 'gasto' : 'gastos'} y {s.incomes} {s.incomes === 1 ? 'ingreso' : 'ingresos'}
         {s.firstPeriod !== '' && (
           <>
@@ -209,25 +225,25 @@ function ConfirmRestore({
         .
       </p>
       {empty && (
-        <p className="mt-2 text-sm text-amber-300">
+        <Callout tone="caution" className="mt-3">
           Este respaldo no tiene gastos ni ingresos. ¿Seguro que es el que buscas?
-        </p>
+        </Callout>
       )}
       {s.migrations > 0 && (
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-fg-subtle">
           Es de una versión anterior de la app: se pondrá al día al restaurarlo.
         </p>
       )}
       <SyncNoticeBox sync={s.sync} />
-      <p className="mt-3 text-sm text-slate-300">
-        Se reemplazarán <strong>todos</strong> tus datos actuales. Antes se guardará una copia de ellos para poder
-        volver atrás.
+      <p className="mt-3 text-sm text-fg-muted">
+        Se reemplazarán <strong className="text-fg">todos</strong> tus datos actuales. Antes se guardará una copia de ellos para
+        poder volver atrás.
       </p>
-      <div className="mt-5 flex justify-end gap-3">
-        <Button variant="ghost" disabled={restoring} onClick={onCancel}>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="secondary" disabled={restoring} onClick={onCancel}>
           Cancelar
         </Button>
-        <Button variant="danger" disabled={restoring} onClick={onConfirm}>
+        <Button variant="danger" loading={restoring} onClick={onConfirm}>
           {restoring ? 'Restaurando…' : 'Reemplazar mis datos'}
         </Button>
       </div>

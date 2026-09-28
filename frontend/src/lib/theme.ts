@@ -4,29 +4,26 @@ import { useSyncExternalStore } from 'react'
 // not finance data, so it needs no binding and no Go⇄TS parity.
 // public/theme-init.js applies it before the first paint; this module keeps it
 // applied afterwards (OS appearance changes, other tabs, the Apariencia
-// setting). THEME_STORAGE_KEY and THEME_LIGHT_ENABLED are mirrored in
-// public/theme-init.js; theme.test.ts keeps both in sync.
+// setting). THEME_STORAGE_KEY is mirrored in public/theme-init.js;
+// theme.test.ts keeps both in sync.
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 
 export const THEME_STORAGE_KEY = 'app-finance:theme'
 
-// The light theme stays off until every view uses the semantic tokens
-// (src/styles/rawclasses.test.ts at zero): 'system' resolves to dark meanwhile.
-// An explicit 'light' saved by hand still applies, to preview the migration.
-export const THEME_LIGHT_ENABLED = false
-
-// The canvas token of each theme in sRGB, for the browser/OS chrome.
+// The canvas token of each theme in sRGB, for the browser chrome (Safari's tab
+// bar, Android's status bar). An installed iOS PWA fixes its status bar at
+// launch instead: vite.config.ts uses the 'default' style, legible in both.
 const THEME_COLOR: Record<ResolvedTheme, string> = { light: '#f9fafd', dark: '#0b0f18' }
 
 export function parseThemeMode(raw: string | null | undefined): ThemeMode {
   return raw === 'light' || raw === 'dark' ? raw : 'system'
 }
 
-export function resolveTheme(mode: ThemeMode, systemDark: boolean, lightEnabled = THEME_LIGHT_ENABLED): ResolvedTheme {
+export function resolveTheme(mode: ThemeMode, systemDark: boolean): ResolvedTheme {
   if (mode !== 'system') return mode
-  return systemDark || !lightEnabled ? 'dark' : 'light'
+  return systemDark ? 'dark' : 'light'
 }
 
 function readStoredMode(): ThemeMode {

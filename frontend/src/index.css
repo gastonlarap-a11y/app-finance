@@ -55,22 +55,10 @@
   /* Dims the page behind modal dialogs. */
   --color-scrim: oklch(0.15 0.02 265 / 0.45);
 
-  /* Legacy names, bridged to the semantic tokens while views migrate
-     (removed once src/styles/rawclasses.test.ts reaches zero). */
-  --color-surface: var(--color-canvas);
-  --color-surface-alt: var(--color-panel);
-  --color-primary: var(--color-accent);
-  --color-primary-dark: var(--color-accent-hover);
-  --color-success: var(--color-positive-fg);
-  --color-danger: var(--color-negative-fg);
-  --color-warning: var(--color-caution-fg);
-
   --font-sans: 'Inter Variable', system-ui, sans-serif;
-  --radius-base: 0.5rem;
 }
 
-/* Unlayered, so it beats the theme layer where the light values live. Must sit
-   on the root element: the legacy aliases above resolve var() there. */
+/* Unlayered, so it beats the theme layer where the light values live. */
 :root[data-theme='dark'] {
   --color-canvas: oklch(0.17 0.02 265);
   --color-panel: oklch(0.215 0.024 265);

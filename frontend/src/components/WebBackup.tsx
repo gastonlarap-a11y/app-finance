@@ -8,14 +8,14 @@
 // dialogs while a user activation is live, and the one that starts this flow is
 // spent in the system file picker. A suppressed confirm() returns false, which
 // used to abort the import without a single word on screen.
-import { useRef, useState, type ReactNode } from 'react'
-import { Download, Upload } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Download, RotateCw, ShieldCheck, Upload } from 'lucide-react'
 import { exportDb, importDb, inspectDb, type ImportSummary } from '@/services/web/settings'
 import { SyncNoticeBox } from './SyncNoticeBox'
 import { validateSqliteFile } from '@/engine/db/dbfile'
 import { backupFilename, shareOrDownload } from '@/lib/exportFile'
 import { useQuery } from '@/lib/useQuery'
-import { Button, IconButton, Modal, Section } from './ui'
+import { Button, Callout, IconButton, Modal, Section } from './ui'
 
 type ExportState =
   | { kind: 'idle' }
@@ -122,13 +122,18 @@ function StorageStatus() {
   )
   const last = lastExport()
   return (
-    <div className="mt-2 space-y-1 text-sm text-slate-400">
-      {query.data === true && <p>El navegador guarda tus datos de forma persistente.</p>}
+    <div className="mt-3 space-y-2 text-sm text-fg-muted">
+      {query.data === true && (
+        <p className="flex items-center gap-2">
+          <ShieldCheck aria-hidden="true" className="size-4 shrink-0 text-positive-fg" />
+          El navegador guarda tus datos de forma persistente.
+        </p>
+      )}
       {query.data === false && (
-        <p className="text-amber-300">
+        <Callout tone="caution">
           El navegador podría borrar tus datos si no usas la app por un tiempo. Instálala (Compartir →
           «Añadir a pantalla de inicio») y exporta respaldos seguido.
-        </p>
+        </Callout>
       )}
       <p>
         {last
@@ -139,22 +144,13 @@ function StorageStatus() {
   )
 }
 
-function Notice({ tone, children }: { tone: 'error' | 'ok' | 'warn'; children: ReactNode }) {
-  const tones = {
-    error: 'bg-danger/10 text-red-300 ring-danger/40',
-    ok: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/40',
-    warn: 'bg-amber-500/10 text-amber-300 ring-amber-500/40',
-  }
-  return <p className={`mt-3 rounded-base px-3 py-2 text-sm ring-1 ${tones[tone]}`}>{children}</p>
-}
-
 function ImportResult({ summary }: { summary: ImportSummary }) {
   if (summary.users === 0 && summary.expenses === 0 && summary.incomes === 0) {
     return (
-      <Notice tone="warn">
+      <Callout tone="caution" className="mt-3">
         El archivo se abrió correctamente pero no tiene movimientos ni perfiles. ¿Seguro que es el
         respaldo que buscabas?
-      </Notice>
+      </Callout>
     )
   }
   const range =
@@ -162,12 +158,12 @@ function ImportResult({ summary }: { summary: ImportSummary }) {
       ? ` · datos de ${summary.firstPeriod} a ${summary.lastPeriod}`
       : ''
   return (
-    <Notice tone="ok">
+    <Callout tone="positive" role="status" className="mt-3">
       Importado: {summary.users} {summary.users === 1 ? 'perfil' : 'perfiles'}, {summary.expenses}{' '}
       {summary.expenses === 1 ? 'gasto' : 'gastos'} y {summary.incomes}{' '}
       {summary.incomes === 1 ? 'ingreso' : 'ingresos'}
       {range}. Recargando…
-    </Notice>
+    </Callout>
   )
 }
 
@@ -212,11 +208,11 @@ export function WebSettingsView() {
   return (
     <div className="space-y-5">
       <Section title="Tus datos">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           Tus finanzas se guardan únicamente en este dispositivo (almacenamiento local del
           navegador). Nadie más tiene acceso: no hay servidor ni cuenta.
         </p>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-fg-muted">
           Para no perder nada si cambias de dispositivo o borras la app, exporta un respaldo cada
           cierto tiempo y guárdalo en Archivos, iCloud o donde prefieras.
         </p>
@@ -228,7 +224,13 @@ export function WebSettingsView() {
           <Button icon={Download} onClick={() => void runExport(exportState, setExportState)} loading={exportState.kind === 'running'}>
             {exportLabel(exportState)}
           </Button>
-          <Button variant="secondary" icon={Upload} onClick={() => fileRef.current?.click()} disabled={busy}>
+          <Button
+            variant="secondary"
+            icon={Upload}
+            onClick={() => fileRef.current?.click()}
+            disabled={busy}
+            loading={state.kind === 'running' || state.kind === 'inspecting'}
+          >
             {state.kind === 'running' ? 'Importando…' : state.kind === 'inspecting' ? 'Revisando…' : 'Importar respaldo'}
           </Button>
           <input
@@ -246,42 +248,54 @@ export function WebSettingsView() {
           />
         </div>
 
-        {exportState.kind === 'failed' && <Notice tone="error">No se pudo exportar: {exportState.message}</Notice>}
+        {exportState.kind === 'failed' && (
+          <Callout tone="negative" role="alert" className="mt-3">
+            No se pudo exportar: {exportState.message}
+          </Callout>
+        )}
         {exportState.kind === 'ready' && (
-          <Notice tone="warn">El respaldo está listo: toca «Compartir respaldo» para guardarlo.</Notice>
+          <Callout tone="info" role="status" className="mt-3">
+            El respaldo está listo: toca «Compartir respaldo» para guardarlo.
+          </Callout>
         )}
         {state.kind === 'failed' && (
-          <Notice tone="error">
-            No se pudo importar: {state.message}{' '}
-            <button type="button" className="underline" onClick={() => window.location.reload()}>
-              Recargar
-            </button>
-          </Notice>
+          <Callout
+            tone="negative"
+            role="alert"
+            className="mt-3"
+            action={
+              <Button variant="secondary" size="sm" icon={RotateCw} onClick={() => window.location.reload()}>
+                Recargar
+              </Button>
+            }
+          >
+            No se pudo importar: {state.message}
+          </Callout>
         )}
         {state.kind === 'done' && <ImportResult summary={state.summary} />}
 
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-4 text-xs text-fg-subtle">
           El archivo exportado es la base de datos completa (.db) y también se puede abrir con la app
           de escritorio de macOS/Windows, y al revés.
         </p>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-fg-subtle">
           Para restaurar en el iPad un respaldo que está en Google Drive: ábrelo en la app de Drive,
           toca ⋯ → «Abrir en» → «Guardar en Archivos», y luego elígelo aquí con «Importar respaldo».
-          El respaldo de la app de escritorio se llama <code>app-finance.db</code>.
+          El respaldo de la app de escritorio se llama <code className="font-mono">app-finance.db</code>.
         </p>
       </Section>
 
       {state.kind === 'confirming' && (
         <Modal title="Reemplazar tus datos" onClose={() => setState({ kind: 'idle' })}>
-          <p className="text-sm text-slate-300">
-            Se reemplazarán <strong>todos</strong> los datos actuales de la app por los del archivo
+          <p className="text-sm text-fg-muted">
+            Se reemplazarán <strong className="text-fg">todos</strong> los datos actuales de la app por los del archivo
             «{state.file.name}»: {state.summary.users} {state.summary.users === 1 ? 'perfil' : 'perfiles'},{' '}
             {state.summary.expenses} {state.summary.expenses === 1 ? 'gasto' : 'gastos'} y {state.summary.incomes}{' '}
             {state.summary.incomes === 1 ? 'ingreso' : 'ingresos'}.
           </p>
           <SyncNoticeBox sync={state.summary.sync} />
-          <div className="mt-5 flex justify-end gap-3">
-            <Button variant="ghost" onClick={() => setState({ kind: 'idle' })}>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setState({ kind: 'idle' })}>
               Cancelar
             </Button>
             <Button variant="danger" onClick={() => void runImport(state.bytes)}>

@@ -16,6 +16,19 @@ export function Section({ title, action, children }: { title?: string; action?: 
   )
 }
 
+// Banner is the app-wide strip above the page (a new version to install). It
+// lines up with <main>'s width and gutters; its buttons follow the message.
+export function Banner({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+  return (
+    <div role="status" className="border-b border-line bg-accent-soft text-fg">
+      <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 text-sm sm:px-6 lg:px-8">
+        <Icon aria-hidden="true" className="size-4 shrink-0 text-accent-fg" />
+        {children}
+      </div>
+    </div>
+  )
+}
+
 type StatTone = 'default' | 'success' | 'danger' | 'primary' | 'caution'
 
 const STAT_TONE: Record<StatTone, string> = {

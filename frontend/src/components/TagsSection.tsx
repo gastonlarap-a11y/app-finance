@@ -1,9 +1,10 @@
 import { useState, type SubmitEvent } from 'react'
+import { Pencil, Tag } from 'lucide-react'
 import { FinanceService, type TagView } from '@/services/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { Button, Empty, Field, Modal, QueryError, Section, Spinner, inputCls } from './ui'
+import { Button, ConfirmAction, EmptyState, Field, IconButton, Modal, QueryError, Section, SkeletonRows, inputCls } from './ui'
 
 // TagsSection lists the tags in use (labels across categories: viaje, trabajo,
 // deducible) and lets the user rename or delete them. Tags are added on the
@@ -13,55 +14,45 @@ export function TagsSection() {
   const invalidate = useInvalidate()
   const reload = () => invalidate('ledger')
   const [renaming, setRenaming] = useState<TagView | null>(null)
-  const [confirmId, setConfirmId] = useState<number | null>(null)
   const query = useQuery(version, () => FinanceService.ListTags())
 
   async function remove(id: number) {
-    setConfirmId(null)
     if (!failed(await FinanceService.DeleteTag(id))) reload()
   }
 
   return (
     <Section title="Etiquetas">
-      <p className="mb-3 text-xs text-slate-500">
-        Marcas que cruzan categorías (viaje, trabajo, deducible). Se agregan al crear o editar un gasto; en Buscar puedes
-        filtrar por una y ver cuánto suma.
+      <p className="mb-4 text-sm text-fg-muted">
+        Marcas que cruzan categorías (viaje, trabajo, deducible). Se agregan al crear o editar un gasto; en Buscar puedes filtrar
+        por una y ver cuánto suma.
       </p>
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={reload} />
       ) : !query.data ? (
-        <Spinner />
+        <SkeletonRows rows={3} />
       ) : query.data.length === 0 ? (
-        <Empty>Aún no usas etiquetas.</Empty>
+        <EmptyState icon={Tag} title="Aún no usas etiquetas">
+          Escríbelas en el campo «Etiquetas» al agregar o editar un gasto, separadas por coma.
+        </EmptyState>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line">
           {query.data.map((t) => (
-            <li key={t.id} className="flex items-center justify-between rounded-base bg-surface p-3 ring-1 ring-slate-800">
-              <span>
-                <span className="font-medium">#{t.name}</span>{' '}
-                <span className="text-xs text-slate-500">
+            <li key={t.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+              <span className="min-w-0">
+                <span className="rounded-full bg-accent-soft px-2 py-0.5 text-sm font-medium text-accent-fg">#{t.name}</span>{' '}
+                <span className="text-xs text-fg-muted">
                   {t.count} {t.count === 1 ? 'gasto' : 'gastos'}
                 </span>
               </span>
-              <span className="flex items-center gap-2">
-                <Button variant="ghost" onClick={() => setRenaming(t)}>
-                  Renombrar
-                </Button>
-                {confirmId === t.id ? (
-                  <>
-                    <span className="text-sm text-danger">¿Quitarla de todos sus gastos?</span>
-                    <Button variant="danger" onClick={() => remove(t.id)}>
-                      Sí
-                    </Button>
-                    <Button variant="ghost" onClick={() => setConfirmId(null)}>
-                      No
-                    </Button>
-                  </>
-                ) : (
-                  <Button variant="danger" onClick={() => setConfirmId(t.id)}>
-                    Eliminar
-                  </Button>
-                )}
+              <span className="flex items-center gap-1">
+                <IconButton label={`Renombrar la etiqueta ${t.name}`} icon={Pencil} onClick={() => setRenaming(t)} />
+                <ConfirmAction
+                  label={`Eliminar la etiqueta ${t.name}`}
+                  iconOnly
+                  question="¿Quitarla de todos sus gastos?"
+                  confirmLabel="Quitar"
+                  onConfirm={() => remove(t.id)}
+                />
               </span>
             </li>
           ))}
@@ -102,11 +93,11 @@ function RenameTagModal({ tag, onClose, onSaved }: { tag: TagView; onClose: () =
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} maxLength={30} required />
         </Field>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Guardando…' : 'Renombrar'}
+          <Button type="submit" loading={busy}>
+            Renombrar
           </Button>
         </div>
       </form>

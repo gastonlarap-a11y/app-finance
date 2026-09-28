@@ -12,8 +12,7 @@ paths:
 - **Colors**: only the semantic tokens of `src/index.css` (`bg-panel`, `text-fg-muted`,
   `ring-line`, `text-negative-fg`, `bg-caution-soft`…). Never raw palette colors, black/white or the
   legacy names (`surface`, `primary`, `danger`…): `src/styles/rawclasses.test.ts` fails on them.
-  When a file drops raw classes, lower its count in `src/styles/rawclasses.baseline.ts`.
-  A new token needs a light value in `@theme`, a dark one in `:root[data-theme='dark']`, and its
+  Check every screen in both themes (Configuración › Apariencia). A new token needs a light value in `@theme`, a dark one in `:root[data-theme='dark']`, and its
   text/background pairs in `src/styles/tokens.test.ts`.
 - **Primitives first** (`src/components/ui/`): `Button`/`IconButton` (never a bare styled
   `<button>`), `Callout` for inline messages, `Badge` for statuses, `EmptyState` with an action for

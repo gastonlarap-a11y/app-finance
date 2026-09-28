@@ -22,8 +22,7 @@ const ICON_SIZE: Record<Size, string> = { sm: 'size-3.5', md: 'size-4', lg: 'siz
 type ButtonProps = {
   children: ReactNode
   onClick?: () => void
-  // 'ghost' is the pre-redesign name of 'secondary', kept while views migrate.
-  variant?: Variant | 'ghost'
+  variant?: Variant
   size?: Size
   icon?: LucideIcon
   iconEnd?: LucideIcon
@@ -50,7 +49,7 @@ export function Button({
   title,
   className = '',
 }: ButtonProps) {
-  const look = VARIANT[variant === 'ghost' ? 'secondary' : variant]
+  const look = VARIANT[variant]
   const iconCls = `${ICON_SIZE[size]} shrink-0`
   return (
     <button

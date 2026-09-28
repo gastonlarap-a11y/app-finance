@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { RAW_CLASS_BASELINE } from './rawclasses.baseline'
 import { rawColorClasses } from './rawclasses'
 
 // Every .tsx under src, as text (tests excluded: they may name any class).
@@ -25,20 +24,13 @@ describe('rawColorClasses', () => {
   })
 })
 
-describe('raw color class ratchet', () => {
-  const counts = Object.fromEntries(Object.entries(sources).map(([path, src]) => [path, rawColorClasses(src).length]))
-
-  it('adds no raw color class to any file', () => {
-    const over = Object.entries(counts)
-      .filter(([path, n]) => n > (RAW_CLASS_BASELINE[path] ?? 0))
-      .map(([path, n]) => `${path}: ${n} (allowed ${RAW_CLASS_BASELINE[path] ?? 0}) → ${rawColorClasses(sources[path] ?? '').join(', ')}`)
-    expect(over, 'use the semantic tokens of index.css instead').toEqual([])
-  })
-
-  it('keeps the baseline tight (lower it as files migrate)', () => {
-    const loose = Object.entries(RAW_CLASS_BASELINE)
-      .filter(([path, allowed]) => (counts[path] ?? 0) < allowed)
-      .map(([path, allowed]) => `${path}: ${counts[path] ?? 0} (baseline ${allowed})`)
-    expect(loose, 'update src/styles/rawclasses.baseline.ts').toEqual([])
+describe('semantic tokens only', () => {
+  it('no component uses a raw color class', () => {
+    const offenders = Object.entries(sources)
+      .map(([path, src]) => [path, rawColorClasses(src)] as const)
+      .filter(([, found]) => found.length > 0)
+      .map(([path, found]) => `${path}: ${found.join(', ')}`)
+    // Both themes read the tokens; a raw color looks right in one theme only.
+    expect(offenders, 'use the semantic tokens of index.css instead').toEqual([])
   })
 })

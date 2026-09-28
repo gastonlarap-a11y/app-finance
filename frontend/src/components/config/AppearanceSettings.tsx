@@ -1,7 +1,7 @@
 import { useAtom } from 'jotai'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { sidebarCollapsedAtom } from '@/atoms/finance'
-import { THEME_LIGHT_ENABLED, setThemeMode, useThemeMode, type ThemeMode } from '@/lib/theme'
+import { setThemeMode, useThemeMode, type ThemeMode } from '@/lib/theme'
 import { Section, SegmentedControl, Switch } from '../ui'
 
 const THEMES = [
@@ -17,13 +17,13 @@ export function AppearanceSettings() {
   return (
     <Section title="Apariencia">
       <div className="space-y-6">
-        {THEME_LIGHT_ENABLED && (
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-fg">Tema</p>
-            <SegmentedControl label="Tema" value={mode} options={THEMES} onChange={setThemeMode} />
-            <p className="text-xs text-fg-subtle">«Sistema» sigue el modo claro u oscuro de tu dispositivo.</p>
-          </div>
-        )}
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-fg">Tema</p>
+          <SegmentedControl label="Tema" value={mode} options={THEMES} onChange={setThemeMode} />
+          <p className="text-xs text-fg-subtle">
+            «Sistema» sigue el modo claro u oscuro de tu dispositivo. Se guarda en este dispositivo, no en tus datos.
+          </p>
+        </div>
         <Switch
           label="Barra lateral compacta"
           description="En pantallas anchas, muestra solo los íconos de las secciones. En pantallas angostas siempre es compacta."

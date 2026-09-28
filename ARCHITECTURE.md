@@ -690,15 +690,16 @@ silently.
   `:root[data-theme='dark']`. Components name only these tokens, so both themes stay consistent.
   `src/styles/tokens.test.ts` computes the WCAG contrast of every pair the primitives use (4.5:1
   text, 3:1 form outlines and focus ring) straight from the CSS.
-- **Raw colors are ratcheted out**: `src/styles/rawclasses.test.ts` counts raw palette classes and
-  the legacy token names (`surface`, `primary`, `danger`…, bridged to the new tokens while views
-  migrate) per file against `rawclasses.baseline.ts`. A count may only go down.
-- **Theme preference** is per device (`localStorage['app-finance:theme']`: `system|light|dark`),
-  never in the DB. `public/theme-init.js`, a blocking same-origin script (the web CSP forbids
-  inline scripts) injected by the `theme-init` Vite plugin, sets `data-theme` on `<html>` before
-  the first paint. `lib/theme.ts` keeps it applied (OS appearance changes, other tabs) and feeds
-  `useThemeMode()`. The light theme stays gated (`THEME_LIGHT_ENABLED`) until the ratchet reaches
-  zero: `system` resolves to dark meanwhile.
+- **No raw colors**: `src/styles/rawclasses.test.ts` fails on any raw palette class, black/white or
+  pre-redesign token name (`surface`, `primary`, `danger`…) in a component — such a color is right
+  in one theme only. A missing color becomes a new token (light + dark value + contrast pair).
+- **Theme preference** is per device (`localStorage['app-finance:theme']`: `system|light|dark`,
+  Configuración › Apariencia), never in the DB. `public/theme-init.js`, a blocking same-origin
+  script (the web CSP forbids inline scripts) injected by the `theme-init` Vite plugin, sets
+  `data-theme` on `<html>` before the first paint. `lib/theme.ts` keeps it applied (OS appearance
+  changes, other tabs), feeds `useThemeMode()` and rewrites the `theme-color` meta. The installed
+  iOS PWA uses the `default` status-bar style: iOS fixes the bar at launch, and
+  `black-translucent`'s white text is unreadable over the light theme.
 - **Primitives** (`frontend/src/components/ui/`, one barrel): `Button`/`IconButton` (sizes, icon,
   `loading`), `Badge`, `Callout`, `EmptyState`, `Skeleton`, `SegmentedControl` and `Tabs`
   (roving tabindex), `Menu` and `Toggletip` (native Popover API: top layer, light dismiss, Escape;

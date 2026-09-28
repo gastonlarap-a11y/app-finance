@@ -3,7 +3,8 @@ import { UpdatesService, onDownloadProgress, onUpdateStateChange, type DownloadP
 import { errMsg, failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { useQuery } from '@/lib/useQuery'
-import { Bar, Button, Modal, Section } from './ui'
+import { RefreshCw, Sparkles } from 'lucide-react'
+import { Banner, Bar, Button, Callout, Modal, Section } from './ui'
 
 function formatMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -27,10 +28,10 @@ function ReleaseNotes({ state, onClose }: { state: UpdateState; onClose: () => v
   if (!rel) return null
   return (
     <Modal title={`Novedades de la versión ${rel.version}`} onClose={onClose}>
-      <p className="mb-3 text-xs text-slate-400">
+      <p className="mb-3 text-xs text-fg-subtle">
         Publicada el {formatWhen(rel.publishedAt)} · descarga de {formatMB(rel.size)} · tienes la {state.currentVersion}
       </p>
-      <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded bg-surface p-3 text-sm text-slate-300 ring-1 ring-slate-800">
+      <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-sunken p-3 text-sm text-fg-muted ring-1 ring-inset ring-line">
         {rel.notes.trim() || 'Sin notas.'}
       </div>
     </Modal>
@@ -77,59 +78,59 @@ export function UpdateBanner() {
   const pct = progress && progress.total > 0 ? progress.written / progress.total : 0
 
   return (
-    <div role="status" className="border-b border-primary/40 bg-primary/10">
-      <div className="mx-auto flex max-w-[1536px] flex-wrap items-center gap-3 px-6 py-2 text-sm">
-        {state.blocked ? (
-          <span className="text-amber-200">
-            Hay una versión nueva ({rel.version}), pero no se puede instalar desde aquí: {state.blocked}
-          </span>
-        ) : state.phase === 'downloading' ? (
-          <div className="flex min-w-64 flex-1 items-center gap-3">
-            <span>Descargando la versión {rel.version}…</span>
-            <div className="w-48">
-              <Bar fill={pct} />
-            </div>
-            <span className="tabular-nums text-slate-400" aria-live="polite">
-              {progress ? `${Math.round(pct * 100)}%` : ''}
-            </span>
+    <Banner icon={Sparkles}>
+      {state.blocked ? (
+        <span className="text-caution-fg">
+          Hay una versión nueva ({rel.version}), pero no se puede instalar desde aquí: {state.blocked}
+        </span>
+      ) : state.phase === 'downloading' ? (
+        <div className="flex min-w-64 flex-1 items-center gap-3">
+          <span>Descargando la versión {rel.version}…</span>
+          <div className="w-48">
+            <Bar fill={pct} />
           </div>
-        ) : state.phase === 'ready' || state.phase === 'restarting' ? (
-          <>
-            <span>La versión {rel.version} está lista.</span>
-            {backupError ? (
-              <>
-                <span className="text-amber-200">{backupError}</span>
-                <Button variant="ghost" disabled={busy} onClick={() => void restart(false)}>
-                  Reintentar
-                </Button>
-                <Button variant="danger" disabled={busy} onClick={() => void restart(true)}>
-                  Actualizar sin respaldo
-                </Button>
-              </>
-            ) : (
-              <Button disabled={busy || state.phase === 'restarting'} onClick={() => void restart(false)}>
-                {busy || state.phase === 'restarting' ? 'Respaldando y reiniciando…' : 'Reiniciar y actualizar'}
+          <span className="tabular-nums text-fg-muted" aria-live="polite">
+            {progress ? `${Math.round(pct * 100)}%` : ''}
+          </span>
+        </div>
+      ) : state.phase === 'ready' || state.phase === 'restarting' ? (
+        <>
+          <span>La versión {rel.version} está lista.</span>
+          {backupError ? (
+            <>
+              <span className="text-caution-fg">{backupError}</span>
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => void restart(false)}>
+                Reintentar
               </Button>
-            )}
-          </>
-        ) : (
-          <>
-            <span>
-              Nueva versión <strong>{rel.version}</strong> disponible (tienes la {state.currentVersion}).
-            </span>
-            {state.lastError && <span className="text-red-300">{state.lastError}</span>}
-            <Button variant="ghost" onClick={() => setShowNotes(true)}>
-              Ver novedades
+              <Button variant="danger" size="sm" disabled={busy} onClick={() => void restart(true)}>
+                Actualizar sin respaldo
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" loading={busy || state.phase === 'restarting'} onClick={() => void restart(false)}>
+              {busy || state.phase === 'restarting' ? 'Respaldando y reiniciando…' : 'Reiniciar y actualizar'}
             </Button>
-            <Button onClick={() => void install()}>{state.lastError ? 'Reintentar' : 'Actualizar'}</Button>
-            <Button variant="ghost" onClick={() => setDismissed(rel.version)}>
-              Más tarde
-            </Button>
-          </>
-        )}
-      </div>
+          )}
+        </>
+      ) : (
+        <>
+          <span>
+            Nueva versión <strong>{rel.version}</strong> disponible (tienes la {state.currentVersion}).
+          </span>
+          {state.lastError && <span className="text-negative-fg">{state.lastError}</span>}
+          <Button variant="quiet" size="sm" onClick={() => setShowNotes(true)}>
+            Ver novedades
+          </Button>
+          <Button size="sm" onClick={() => void install()}>
+            {state.lastError ? 'Reintentar' : 'Actualizar'}
+          </Button>
+          <Button variant="quiet" size="sm" onClick={() => setDismissed(rel.version)}>
+            Más tarde
+          </Button>
+        </>
+      )}
       {showNotes && <ReleaseNotes state={state} onClose={() => setShowNotes(false)} />}
-    </div>
+    </Banner>
   )
 }
 
@@ -153,17 +154,21 @@ export function UpdatesSettings() {
 
   return (
     <Section title="Actualizaciones">
-      <div className="space-y-2 text-sm">
+      <div className="space-y-3 text-sm text-fg">
         <p>
           Versión instalada: <strong>{state?.currentVersion || '—'}</strong>
         </p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-subtle">
           La app busca versiones nuevas al abrirse y cada 6 horas. Última revisión: {formatWhen(state?.lastChecked ?? null)}.
           Antes de instalar, respalda tus datos si tienes activado el respaldo al cerrar.
         </p>
-        {state?.lastError && <p className="text-xs text-red-300">{state.lastError}</p>}
-        {state?.blocked && <p className="text-xs text-amber-200">{state.blocked}</p>}
-        <Button variant="ghost" onClick={() => void checkNow()} disabled={checking}>
+        {state?.lastError && (
+          <Callout tone="negative" role="alert">
+            {state.lastError}
+          </Callout>
+        )}
+        {state?.blocked && <Callout tone="caution">{state.blocked}</Callout>}
+        <Button variant="secondary" icon={RefreshCw} onClick={() => void checkNow()} loading={checking}>
           {checking ? 'Buscando…' : 'Buscar actualizaciones'}
         </Button>
       </div>
