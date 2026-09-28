@@ -30,6 +30,7 @@ export interface Card {
   billingDay: number
   lastDigits: string // last 4 digits, '' = not informed
   accountId: number | null // the account it is paid from
+  color: string // looks.json color key, '' = automatic
   createdAt: string
   deletedAt?: string | null
 }
@@ -74,6 +75,8 @@ export interface Category {
   userId: number
   name: string
   rollover: boolean // unspent budget carries into the next month
+  icon: string // looks.json icon key, '' = automatic
+  color: string // looks.json color key, '' = automatic
   createdAt: string
   deletedAt?: string | null
 }
@@ -336,6 +339,7 @@ export interface SavingsGoal {
   name: string
   targetAmount: string
   targetPeriod: string // YYYY-MM, '' = no target month
+  icon: string // looks.json icon key, '' = automatic
   createdAt: string
   deletedAt?: string | null
 }
@@ -922,6 +926,10 @@ export interface FinanceServiceContract {
   RemoveCategoryBudget(categoryID: number, fromPeriod: string): Promise<OpResult>
   SetCategoryRollover(categoryID: number, on: boolean): Promise<OpResult>
   ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult>
+  // Personalization: keys of backend/finance/looks.json, '' = automatic.
+  SetCategoryLook(categoryID: number, icon: string, color: string): Promise<OpResult>
+  SetCardColor(cardID: number, color: string): Promise<OpResult>
+  SetSavingsGoalIcon(goalID: number, icon: string): Promise<OpResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
 

@@ -190,6 +190,12 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		t.Fatalf("Gastón UpcomingDues = %+v, want his fixed expense", r)
 	}
 
+	// Created after the statement import so it plays no part in its card matching.
+	card := fin.CreateCard(ctx, "Visa", "1000000", 24, "")
+	if card.Error != nil {
+		t.Fatalf("CreateCard: %v", card.Error)
+	}
+
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
 	}
@@ -257,6 +263,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetExpenseTags", func() finance.OpResult { return fin.SetExpenseTags(ctx, expense.Data.ID, []string{"x"}) }},
 		{"RenameTag", func() finance.OpResult { return fin.RenameTag(ctx, tags[0].ID, "x") }},
 		{"DeleteTag", func() finance.OpResult { return fin.DeleteTag(ctx, tags[0].ID) }},
+		{"SetCategoryLook", func() finance.OpResult { return fin.SetCategoryLook(ctx, cat.Data.ID, "tag", "blue") }},
+		{"SetCardColor", func() finance.OpResult { return fin.SetCardColor(ctx, card.Data.ID, "blue") }},
+		{"SetSavingsGoalIcon", func() finance.OpResult { return fin.SetSavingsGoalIcon(ctx, goal.Data.ID, "car") }},
 	}
 	for _, w := range writes {
 		t.Run("Camila "+w.name, func(t *testing.T) {

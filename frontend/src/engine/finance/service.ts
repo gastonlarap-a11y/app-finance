@@ -83,6 +83,7 @@ import type {
 } from '@/services/contract'
 import { ErrConflict, ErrNotFound, ErrValidation, isUniqueViolation, newError } from '@/engine/errors'
 import { Money } from '@/engine/decimal'
+import { validColor, validIcon } from '@/engine/finance/looks'
 import {
   addMonths,
   currentPeriod,
@@ -204,6 +205,11 @@ const trashTables: Readonly<Record<string, string>> = {
   expense: 'expenses',
   savingsgoal: 'savings_goals',
   fixedexpense: 'fixed_expenses',
+}
+
+// invalidLookError mirrors look.go's invalidLook: a key outside looks.json.
+function invalidLookError(what: string): ReturnType<typeof newError> {
+  return newError(ErrValidation, `${what} no válido`)
 }
 
 // validCategoryName mirrors Go: trimmed, not empty, and not the name of the
@@ -4110,6 +4116,35 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     async ListCategoryBudgets(period: string): Promise<CategoryBudgetsResult> {
       if (!validPeriod(period)) return { error: invalidPeriodError() }
       return { data: budgetsInEffect(period) }
+    },
+
+    // ---------- personalization (mirror of look.go) ----------
+
+    async SetCategoryLook(categoryID: number, icon: string, color: string): Promise<OpResult> {
+      if (!validIcon(icon)) return { error: invalidLookError('ícono') }
+      if (!validColor(color)) return { error: invalidLookError('color') }
+      db.exec('UPDATE categories SET icon = ?, color = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+        icon,
+        color,
+        categoryID,
+        uid(),
+      ])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'categoría no encontrada') }
+      return {}
+    },
+
+    async SetCardColor(cardID: number, color: string): Promise<OpResult> {
+      if (!validColor(color)) return { error: invalidLookError('color') }
+      db.exec('UPDATE cards SET color = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [color, cardID, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
+      return {}
+    },
+
+    async SetSavingsGoalIcon(goalID: number, icon: string): Promise<OpResult> {
+      if (!validIcon(icon)) return { error: invalidLookError('ícono') }
+      db.exec('UPDATE savings_goals SET icon = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [icon, goalID, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+      return {}
     },
 
     // ---------- search ----------

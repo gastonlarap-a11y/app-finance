@@ -19,6 +19,7 @@ type Card struct {
 	BillingDay  int           `bun:"billing_day,notnull" json:"billingDay"`   // día de corte (ej. 24)
 	LastDigits  string        `bun:"last_digits,notnull" json:"lastDigits"`   // últimos 4 dígitos; "" = sin informar
 	AccountID   *int64        `bun:"account_id" json:"accountId"`             // cuenta desde la que se paga (nil = ninguna)
+	Color       string        `bun:"color,notnull" json:"color"`              // clave de color de looks.json; "" = automático
 	CreatedAt   time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"createdAt"`
 	DeletedAt   *time.Time    `bun:",soft_delete" json:"deletedAt,omitempty"`
 }

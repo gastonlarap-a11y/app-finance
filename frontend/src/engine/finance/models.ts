@@ -233,6 +233,7 @@ export function rowToCard(r: SqlRow): Card {
     billingDay: asNumber(r.billing_day),
     lastDigits: asString(r.last_digits),
     accountId: asNullableNumber(r.account_id),
+    color: asString(r.color),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }
@@ -257,6 +258,8 @@ export function rowToCategory(r: SqlRow): Category {
     userId: asNumber(r.user_id),
     name: asString(r.name),
     rollover: asNumber(r.rollover) === 1,
+    icon: asString(r.icon),
+    color: asString(r.color),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }
@@ -279,6 +282,7 @@ export function rowToSavingsGoal(r: SqlRow): SavingsGoal {
     name: asString(r.name),
     targetAmount: asString(r.target_amount),
     targetPeriod: asString(r.target_period),
+    icon: asString(r.icon),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

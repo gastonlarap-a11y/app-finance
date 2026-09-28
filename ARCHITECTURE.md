@@ -707,6 +707,13 @@ silently.
   `ConfirmAction` (inline two-step confirm; no `window.confirm`), `Field`/`Input`/`Select`/
   `MoneyInput`/`Switch` (hint and error wired to `aria-describedby`), `Modal`, `Toaster`, and the
   `tbl` class recipes for tables.
+- **Personalization** (icon + color per category, color per card, icon per savings goal) is stored
+  as keys of `backend/finance/looks.json` in `TEXT NOT NULL DEFAULT ''` columns (`''` = automatic:
+  the app picks from the name or id). Go embeds the file (`look.go`) and the engine raw-imports it
+  (`engine/finance/looks.ts`), so both validate the same keys on write (`SetCategoryLook`,
+  `SetCardColor`, `SetSavingsGoalIcon`). No CHECK constraint: the catalog may grow, and a key
+  unknown to an older copy (written by a newer device) is shown as automatic, never rejected.
+  Expenses reference categories by name, so a category's look follows a rename untouched.
 - **Font**: Inter Variable, self-hosted (`@fontsource-variable/inter`; the CSP allows only
   same-origin fonts). The PWA precaches only its latin subsets.
 - **Tests**: interactive primitives run in a real headless Chromium through vitest's browser

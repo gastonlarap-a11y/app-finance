@@ -25,6 +25,7 @@ type SavingsGoal struct {
 	Name         string        `bun:"name,notnull" json:"name"`
 	TargetAmount types.Decimal `bun:"target_amount,notnull" json:"targetAmount"`
 	TargetPeriod string        `bun:"target_period,notnull" json:"targetPeriod"` // YYYY-MM; "" = sin fecha
+	Icon         string        `bun:"icon,notnull" json:"icon"`                  // clave de ícono de looks.json; "" = automático
 	CreatedAt    time.Time     `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
 	DeletedAt    *time.Time    `bun:",soft_delete" json:"deletedAt,omitempty"`
 }
