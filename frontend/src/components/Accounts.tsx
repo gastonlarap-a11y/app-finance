@@ -5,15 +5,17 @@ import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { isNegative } from '@/lib/money'
+import { isNegative, isZero } from '@/lib/money'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Link } from './Link'
+import { TransfersSection } from './Transfers'
 import { Landmark, Pencil, Plus } from 'lucide-react'
 import { Badge, Button, ConfirmAction, EmptyState, Field, Modal, MoneyInput, QueryError, Section, Select, SkeletonRows, inputCls } from './ui'
 
 const KIND_LABEL: Record<string, string> = {
   corriente: 'Cuenta corriente',
   vista: 'Cuenta vista / RUT',
+  digital: 'Cuenta digital / prepago',
   efectivo: 'Efectivo',
   ahorro: 'Cuenta de ahorro',
   otra: 'Otra',
@@ -61,7 +63,13 @@ export function AccountSelect({
 // balance at the close of the current month (month by month they show in the
 // Resumen panel, AccountBalancesPanel).
 export function AccountsSettings() {
-  return <AccountsSection period={currentPeriod()} />
+  const period = currentPeriod()
+  return (
+    <div className="space-y-5">
+      <AccountsSection period={period} />
+      <TransfersSection period={period} />
+    </div>
+  )
 }
 
 // AccountBalancesPanel shows, in the Resumen, each account at the close of the
@@ -143,6 +151,12 @@ function AccountsSection({ period }: { period: string }) {
                     </div>
                     <div className="text-xs text-fg-muted">
                       {KIND_LABEL[a.kind] ?? a.kind} · este mes +{formatCLP(a.ingresos)} / −{formatCLP(a.gastos)}
+                      {(!isZero(a.transferIn) || !isZero(a.transferOut)) && (
+                        <>
+                          {' '}
+                          · transferencias +{formatCLP(a.transferIn)} / −{formatCLP(a.transferOut)}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -210,7 +224,10 @@ function AccountForm({
           <Field label="Nombre">
             <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="Cuenta Itaú" required autoFocus />
           </Field>
-          <Field label="Tipo">
+          <Field
+            label="Tipo"
+            hint={kind === 'digital' ? 'Mercado Pago, Tenpo, MACH: se carga con plata antes de usarla.' : undefined}
+          >
             <Select value={kind} onChange={(e) => setKind(e.target.value)}>
               {Object.entries(KIND_LABEL).map(([k, label]) => (
                 <option key={k} value={k}>

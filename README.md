@@ -40,6 +40,14 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
   (Compartir/Archivos) en el iPad.
 - **Configuración › Tarjetas / Cuentas / Categorías y presupuestos / Etiquetas / Comercios / Reglas de
   importación**: todo lo que se configura una vez.
+- **Cuentas y transferencias**: cuentas corrientes, vista, digitales/prepago (Mercado Pago), efectivo y
+  ahorro, cada una con su saldo. Una tarjeta y un gasto fijo (el dividendo por PAC) indican de qué cuenta
+  se pagan; las transferencias entre tus cuentas (el sueldo que pasas a otro banco, la carga de Mercado
+  Pago), únicas o mensuales, mueven el saldo de cada cuenta sin contar como gasto ni ingreso.
+- **Catálogo sugerido**: con un botón en Categorías o Comercios agrega las categorías habituales en
+  Chile (con su ícono y color) y ~200 comercios conocidos con su categoría y las reglas que los reconocen
+  al importar. Un comercio con categoría habitual la propone al elegirlo en un gasto (Apple →
+  Tecnología). No duplica ni cambia lo que ya tienes.
 - **Paleta de comandos** (`⌘K` / Ctrl+K, o «Ir a…» en la barra lateral): ir a cualquier pantalla o
   sección de Configuración, agregar un gasto, cambiar de mes, de tema o de perfil, respaldar, o buscar
   gastos por texto. Recuerda lo último que usaste.

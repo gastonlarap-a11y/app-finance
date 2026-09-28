@@ -6,6 +6,7 @@ import { useQuery } from '@/lib/useQuery'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { autoIcon, categoryLook, isColorKey, resolveLook } from '@/lib/look'
 import { Pencil, Plus, Shapes, Target } from 'lucide-react'
+import { CatalogButton } from './CatalogButton'
 import {
   Button,
   ColorPicker,
@@ -71,20 +72,35 @@ export function CategoriesView() {
       {!query.data ? (
         <SkeletonRows rows={4} />
       ) : categories.length === 0 ? (
-        <EmptyState icon={Shapes} title="Aún no tienes categorías" action={<Button icon={Plus} onClick={() => open(null)}>Crear una categoría</Button>}>
-          Supermercado, transporte, salud… Clasifica tus gastos para ver en qué se va la plata y ponerle un tope a cada una.
+        <EmptyState
+          icon={Shapes}
+          title="Aún no tienes categorías"
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <CatalogButton variant="primary" />
+              <Button variant="secondary" icon={Plus} onClick={() => open(null)}>
+                Crear una categoría
+              </Button>
+            </div>
+          }
+        >
+          Supermercado, transporte, salud… Clasifica tus gastos para ver en qué se va la plata y ponerle un tope a cada una. El
+          catálogo sugerido trae las categorías habituales en Chile, con su ícono y color.
         </EmptyState>
       ) : (
         <>
-          <label className="mb-3 flex flex-wrap items-center gap-2 text-sm text-fg-muted">
-            Presupuestos vigentes en
-            <input
-              type="month"
-              className="h-8 rounded-md bg-panel px-2 text-fg outline-none ring-1 ring-inset ring-line-input focus:ring-2 focus:ring-focus"
-              value={period}
-              onChange={(e) => e.target.value && setPeriod(e.target.value)}
-            />
-          </label>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <label className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+              Presupuestos vigentes en
+              <input
+                type="month"
+                className="h-8 rounded-md bg-panel px-2 text-fg outline-none ring-1 ring-inset ring-line-input focus:ring-2 focus:ring-focus"
+                value={period}
+                onChange={(e) => e.target.value && setPeriod(e.target.value)}
+              />
+            </label>
+            <CatalogButton />
+          </div>
           <ul className="divide-y divide-line">
             {categories.map((c) => {
               const budget = budgetById.get(c.id)

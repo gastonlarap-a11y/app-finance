@@ -6,7 +6,7 @@ import { perInstallment, times, toPesos } from '@/lib/money'
 import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
 import { Button, Callout, Field, LookIcon, Modal, MoneyInput, Select, inputCls } from './ui'
 import { AccountSelect, useAccounts } from './Accounts'
-import { useCategoryLooks } from './useCategoryLooks'
+import { useCategoryLooks, useMerchantCategories } from './useCategoryLooks'
 
 const MAX_CUOTAS = 120
 
@@ -120,7 +120,16 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
   const [amount, setAmount] = useState(initial.amount)
   const [category, setCategory] = useState(initial.category)
   const looks = useCategoryLooks()
+  const usualCategory = useMerchantCategories()
   const [merchant, setMerchant] = useState(initial.merchant)
+
+  // Picking a merchant proposes its usual category (Apple → Tecnología), but
+  // never replaces one already chosen.
+  function pickMerchant(name: string) {
+    setMerchant(name)
+    const usual = usualCategory.get(name.toLowerCase())
+    if (category === '' && usual) setCategory(usual)
+  }
   const [cardId, setCardId] = useState<string>(initial.cardId)
   const [kind, setKind] = useState(initial.kind)
   const [total, setTotal] = useState(initial.total)
@@ -332,7 +341,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
             </div>
           </Field>
           <Field label="Comercio">
-            <Select value={merchant} onChange={(e) => setMerchant(e.target.value)}>
+            <Select value={merchant} onChange={(e) => pickMerchant(e.target.value)}>
               <option value="">Sin comercio</option>
               {merchantOptions.map((m) => (
                 <option key={m} value={m}>
