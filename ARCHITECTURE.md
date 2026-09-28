@@ -733,9 +733,19 @@ silently.
   `<dialog>` below 768px), the screen's `PageHeader` with `PeriodNav` on month/year screens and the
   global «Gasto» button (`QuickAddHost` + `quickAddAtom`: new expenses from any screen; editing stays
   in the Resumen table). Focus moves to the new screen's `h1` after each navigation.
-- **Shortcuts** (`lib/shortcuts.ts`, a pure resolver with tests; one listener in `AppShell`): ⌘/Ctrl
-  1…7 sections, ⌘/Ctrl+, Configuración, N new expense, ←/→ period. None fires inside an open dialog
-  (it would drop a half-filled form); plain keys never fire while typing.
+- **Shortcuts** (`lib/shortcuts.ts`, a pure resolver with tests; one listener in `AppShell`): ⌘/Ctrl+K
+  command palette (also while typing), ⌘/Ctrl 1…7 sections, ⌘/Ctrl+, Configuración, N new expense,
+  ←/→ period. None fires inside an open dialog (it would drop a half-filled form); plain keys never
+  fire while typing.
+- **Command palette** (`components/palette/`): `commands.ts` builds the catalog with a pure function
+  from the platform, profiles and Configuración sections, the shell injecting the actions;
+  `rankCommands` orders it with `lib/fuzzy.ts` (accent-insensitive; prefix > word start > letters in
+  order) and keeps «Buscar gastos: …» last. The UI is a native `<dialog>` around an ARIA 1.2
+  combobox (focus stays in the input, `aria-activedescendant` marks the option), state in the pure
+  `paletteReducer`, recents per device in localStorage. Opened by ⌘K or the sidebar's «Ir a…»
+  (`paletteOpenAtom`, like `quickAddAtom`).
+- **Guía de inicio** (`OnboardingChecklist`, rules in `lib/onboarding.ts`): derived from existing
+  queries, no stored progress; hidden per profile and device.
 - **Desktop window** (`main.go`): minimum 960×640 (`windowstate.MinWidth/MinHeight`; a smaller saved
   geometry is clamped), background = the dark canvas token, and on macOS a hidden-inset title bar:
   the traffic lights sit over the sidebar, whose top band and the screen header drag the window

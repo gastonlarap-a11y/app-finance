@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Plus, Settings } from 'lucide-react'
-import { periodAtom, quickAddAtom, sidebarCollapsedAtom } from '@/atoms/finance'
+import { paletteOpenAtom, periodAtom, quickAddAtom, sidebarCollapsedAtom } from '@/atoms/finance'
 import { shiftPeriod } from '@/lib/format'
 import { IS_APPLE, IS_WEB } from '@/lib/platform'
 import { formatHash, type Route } from '@/lib/route'
@@ -15,6 +15,7 @@ import { PAGES, type PageMeta } from './nav'
 import { MobileTopBar, NavDrawer } from './MobileTopBar'
 import { PeriodNav } from './PeriodNav'
 import { QuickAddHost } from './QuickAddHost'
+import { CommandPaletteHost } from '../palette/CommandPalette'
 import { Sidebar } from './Sidebar'
 
 const CONFIG_META: PageMeta = {
@@ -32,6 +33,7 @@ function metaOf(route: Route): PageMeta {
 function useAppShortcuts(period: PageMeta['period']) {
   const setPeriod = useSetAtom(periodAtom)
   const setQuickAdd = useSetAtom(quickAddAtom)
+  const setPalette = useSetAtom(paletteOpenAtom)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const action = resolveShortcut(e, {
@@ -44,11 +46,12 @@ function useAppShortcuts(period: PageMeta['period']) {
       e.preventDefault()
       if (action.kind === 'navigate') navigate(action.route)
       else if (action.kind === 'quick-add') setQuickAdd(true)
+      else if (action.kind === 'palette') setPalette(true)
       else setPeriod((p) => shiftPeriod(p, action.step * (period === 'year' ? 12 : 1)))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [period, setPeriod, setQuickAdd])
+  }, [period, setPeriod, setQuickAdd, setPalette])
 }
 
 // useFocusOnNavigate moves focus to the new screen's heading (announced by
@@ -113,6 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       {drawerOpen && <NavDrawer onClose={() => setDrawerOpen(false)} />}
       <QuickAddHost />
+      <CommandPaletteHost />
       <Toaster />
     </div>
   )

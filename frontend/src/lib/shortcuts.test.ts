@@ -23,6 +23,14 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut(key('1', { metaKey: true }), pc)).toBeNull()
   })
 
+  it('opens the command palette with ⌘K / Ctrl+K, even while typing, never over a dialog', () => {
+    expect(resolveShortcut(key('k', { metaKey: true }), mac)).toEqual({ kind: 'palette' })
+    expect(resolveShortcut(key('K', { ctrlKey: true }), pc)).toEqual({ kind: 'palette' })
+    expect(resolveShortcut(key('k', { metaKey: true }), { ...mac, typing: true })).toEqual({ kind: 'palette' })
+    expect(resolveShortcut(key('k', { metaKey: true }), { ...mac, dialogOpen: true })).toBeNull()
+    expect(resolveShortcut(key('k'), mac)).toBeNull()
+  })
+
   it('opens Configuración with ⌘, / Ctrl+,', () => {
     expect(resolveShortcut(key(',', { metaKey: true }), mac)).toEqual({ kind: 'navigate', route: { page: 'config', section: null } })
     expect(resolveShortcut(key(',', { ctrlKey: true }), pc)).toEqual({ kind: 'navigate', route: { page: 'config', section: null } })

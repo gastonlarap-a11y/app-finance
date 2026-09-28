@@ -43,3 +43,25 @@ export function backupFilename(): string {
   // alike in Files/Drive and neither needs explaining.
   return `app-finance-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.db`
 }
+
+// LAST_EXPORT_KEY remembers, per device, when a web backup last left the app:
+// the data lives only here, so "never" or "months ago" deserves a nudge (the
+// Respaldo screen and the Guía de inicio read it).
+const LAST_EXPORT_KEY = 'app-finance:last-export'
+
+export function lastExport(): Date | null {
+  try {
+    const v = localStorage.getItem(LAST_EXPORT_KEY)
+    return v ? new Date(v) : null
+  } catch {
+    return null // storage blocked: the reminder is a convenience only
+  }
+}
+
+export function rememberExport(): void {
+  try {
+    localStorage.setItem(LAST_EXPORT_KEY, new Date().toISOString())
+  } catch {
+    // storage blocked: the reminder is a convenience only
+  }
+}

@@ -11,6 +11,9 @@ export const periodAtom = atom<string>(currentPeriod())
 // the header button, the N key or the command palette.
 export const quickAddAtom = atom(false)
 
+// The command palette (⌘K / Ctrl+K, or "Ir a…" in the sidebar).
+export const paletteOpenAtom = atom(false)
+
 // Wide screens: the sidebar shows as a narrow icon rail when collapsed.
 // Per device, remembered across launches.
 export const sidebarCollapsedAtom = atomWithStorage('app-finance:sidebar-collapsed', false, undefined, { getOnInit: true })
