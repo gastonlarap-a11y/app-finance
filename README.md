@@ -15,7 +15,8 @@ La navegación es una **barra lateral agrupada** (Resumen, Importar, Buscar · A
 (tarjetas, cuentas, categorías, comercios, reglas, respaldo, perfiles, papelera…) vive en Configuración.
 Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre la última visitada.
 
-- **Resumen del mes**: sueldo mensual, ingresos extra y tabla de movimientos que combina cuotas de tarjeta
+- **Resumen del mes**: sueldo del mes (el sueldo base se repite solo como «esperado» hasta que lo confirmas),
+  ingresos extra y tabla de movimientos que combina cuotas de tarjeta
   de crédito y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?), cupo de
   tarjetas y saldo de cuentas.
 - **Importar**: estados de cuenta de tarjeta en PDF (Itaú, Banco de Chile, Cencosud Scotiabank y CMR
@@ -29,7 +30,7 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
 - **Presupuestos por categoría**: tope mensual por categoría que rige **desde un mes en adelante**
   (igual que los montos de gastos fijos). El mes muestra lo gastado vs. el tope y avisa al excederlo.
 - **Proyección**: próximos 6/12/24 meses con lo ya comprometido (cuotas pendientes + gastos fijos)
-  contra el sueldo (el último conocido si un mes aún no lo tiene) → cuánto queda libre y el saldo
+  contra el sueldo (el base; sin sueldo base, el último conocido) → cuánto queda libre y el saldo
   proyectado.
 - **Buscar**: busca gastos en todo el historial por texto (descripción/comercio), categoría, tarjeta
   y rango de meses.

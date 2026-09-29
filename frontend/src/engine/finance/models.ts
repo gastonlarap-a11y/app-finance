@@ -15,7 +15,6 @@ import type {
   Merchant,
   MerchantRule,
   Transfer,
-  PeriodSalary,
   Reconciliation,
   Receivable,
   Refund,
@@ -382,13 +381,6 @@ export function rowToInstallment(r: SqlRow): Installment {
   }
 }
 
-export function rowToPeriodSalary(r: SqlRow): PeriodSalary {
-  return {
-    userId: asNumber(r.user_id),
-    period: asString(r.period),
-    amount: asString(r.amount),
-  }
-}
 
 export function rowToSettings(r: SqlRow): Settings {
   return {

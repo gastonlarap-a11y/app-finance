@@ -217,6 +217,10 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		t.Fatalf("CreateMerchant: %v", merchant.Error)
 	}
 
+	if r := fin.SetBaseSalary(ctx, "2026-03", "1000000"); r.Error != nil {
+		t.Fatalf("SetBaseSalary: %v", r.Error)
+	}
+
 	if cam := usr.CreateUser(ctx, "Camila"); cam.Error != nil {
 		t.Fatalf("CreateUser: %v", cam.Error)
 	}
@@ -370,6 +374,12 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if r := fin.MonthlySummary(ctx, "2026-02"); r.Error != nil || r.Data.AcumuladoDesde != "" || !r.Data.Acumulado.IsZero() {
 		t.Fatalf("Camila MonthlySummary after Gastón's reconciliation = %+v, want no carried balance", r)
+	}
+	if r := fin.MonthlySummary(ctx, "2026-03"); r.Error != nil || !r.Data.Salary.IsZero() || r.Data.SalaryExpected {
+		t.Fatalf("Camila MonthlySummary with Gastón's base salary = %+v, want no salary", r.Data)
+	}
+	if r := fin.GetBaseSalary(ctx, "2026-03"); r.Error != nil || r.Data != nil {
+		t.Fatalf("Camila GetBaseSalary = %+v, want none", r)
 	}
 	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) != 0 {
 		t.Fatalf("Camila UFMonthsNeeded = %v (err %v), want none (the UF expense is Gastón's)", need, err)

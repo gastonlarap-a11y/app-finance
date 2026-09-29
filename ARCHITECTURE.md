@@ -109,8 +109,14 @@ of step can corrupt it. Tests open DBs through `dbtest.OpenMigrated`, i.e. with 
 
 Values that exist per month are keyed by a `period` (YYYY-MM) `TEXT` column and resolved by **lexical
 string comparison** (zero-padded YYYY-MM sorts correctly), e.g. `period < ?` in
-`cumulativeBalanceBefore` and `period LIKE 'YYYY-%'` in `YearSummary`. `PeriodSalary` keeps one value
-per month. **Fixed expenses** implement carry-forward plus "edit from this month onward":
+`cumulativeBalanceBefore` and `period LIKE 'YYYY-%'` in `YearSummary`. **Salary** (`salary.go`,
+migration `20260929041`): `PeriodSalary` is the salary confirmed for one month; `salary_plans(user_id,
+effective_from, amount, active)` is the base salary, effective-dated like fixed-expense amounts
+(`SetBaseSalary`, `EndBaseSalary` writes `active = 0`). A month without a confirmed salary takes the base
+in effect as *expected* (`PeriodSalary.Expected`, `MonthlySummary.SalaryExpected`), the way Actual
+Budget's schedules add a paycheck until the real one replaces it; `DeleteSalary` goes back to it. Every
+reader goes through `salaryByMonth` — the month, `flowsBetween`, the year, the forecast, the accounts
+and `salary_rest` transfers — so none reads a missing salary as zero. **Fixed expenses** implement carry-forward plus "edit from this month onward":
 `fixed_expense_amounts(fixed_expense_id, effective_from, amount)` is resolved by taking the row with
 the greatest `effective_from <= month`, so editing a month UPSERTs a new override row and leaves
 earlier months untouched; `fixed_expense_payments` records paid/pending sparsely per month. The monthly
@@ -157,7 +163,8 @@ summaries.perf.test.ts` does the same for the web engine (`BENCH=1`). Rules that
   formats share and an index can serve (`julianday(substr(date…))` cannot).
 
 Read-only aggregates built on top: `CommitmentsForecast` (`forecast.go` — future installments + active
-fixed expenses vs. salary, reusing the last known salary for months without one) and `SearchExpenses`
+fixed expenses vs. salary: a month's confirmed or base salary, else — only without a base salary — the
+last confirmed one) and `SearchExpenses`
 (`search.go` — LIKE with escaped wildcards, category/card/period-range filters, paginated with a count).
 `YearSummary.CategoriaMeses` is the category × month breakdown (same pass that builds `PorCategoria`).
 

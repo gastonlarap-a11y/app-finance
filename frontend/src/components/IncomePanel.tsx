@@ -1,13 +1,14 @@
 import { useState, type SubmitEvent } from 'react'
 import { useAtomValue } from 'jotai'
 import { Plus, X } from 'lucide-react'
-import { FinanceService } from '@/services/finance'
+import { FinanceService, type BaseSalary, type OpResult } from '@/services/finance'
 import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { formatCLP } from '@/lib/format'
-import { Button, Callout, Field, IconButton, MoneyInput, Section, inputCls } from './ui'
+import { isZero } from '@/lib/money'
+import { formatCLP, periodLabel } from '@/lib/format'
+import { Badge, Button, Callout, Field, IconButton, Modal, MoneyInput, Section, inputCls } from './ui'
 import { useAccounts } from './Accounts'
 
 export function IncomePanel() {
@@ -18,11 +19,16 @@ export function IncomePanel() {
 
   const key = `${period}:${version}`
   const query = useQuery(key, async () => {
-    const [sal, extras] = await Promise.all([FinanceService.GetSalary(period), FinanceService.ListIncomes(period)])
+    const [sal, extras, base] = await Promise.all([
+      FinanceService.GetSalary(period),
+      FinanceService.ListIncomes(period),
+      FinanceService.GetBaseSalary(period),
+    ])
     // A failed salary read must surface as an error, never as "0": saving that
     // zero would overwrite the real salary.
     if (sal.error || !sal.data) throw new Error(sal.error?.message ?? 'sueldo no disponible')
-    return { salary: sal.data.amount, extras }
+    if (base.error) throw new Error(base.error.message)
+    return { salary: sal.data.amount, expected: sal.data.expected, extras, base: base.data ?? null }
   })
 
   // The salary input's unsaved edit, tied to the load it was typed over so a
@@ -50,17 +56,36 @@ export function IncomePanel() {
     }
   }
 
+  // run performs one salary action and refetches on success.
+  async function run(action: () => Promise<OpResult>) {
+    setBusy(true)
+    try {
+      if (!failed(await action())) reload()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const [editingBase, setEditingBase] = useState(false)
+
+  const [adding, setAdding] = useState(false)
   async function addExtra(e: SubmitEvent) {
     e.preventDefault()
+    if (adding) return
     if (!desc.trim() || !amount) {
       setFormError('Completa la descripción y el monto.')
       return
     }
     setFormError('')
-    if (!failed(await FinanceService.CreateIncome(period, desc, amount))) {
-      setDesc('')
-      setAmount('')
-      reload()
+    setAdding(true)
+    try {
+      if (!failed(await FinanceService.CreateIncome(period, desc, amount))) {
+        setDesc('')
+        setAmount('')
+        reload()
+      }
+    } finally {
+      setAdding(false)
     }
   }
 
@@ -90,7 +115,7 @@ export function IncomePanel() {
         </Callout>
       )}
       <div className="space-y-5">
-        <div>
+        <div className="space-y-2">
           <Field label="Sueldo de este mes">
             <div className="flex gap-2">
               <MoneyInput value={salary} onChange={(v) => setDraft({ key, value: v })} placeholder="0" />
@@ -99,7 +124,58 @@ export function IncomePanel() {
               </Button>
             </div>
           </Field>
-          <p className="mt-1 text-xs text-fg-subtle">Solo para este mes.</p>
+          {loaded?.expected ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+              <Badge tone="info">Esperado</Badge>
+              <span>Es tu sueldo base: confírmalo cuando llegue, o cambia el monto de este mes.</span>
+              <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => FinanceService.SetSalary(period, savedSalary))}>
+                Confirmar
+              </Button>
+            </div>
+          ) : (
+            loaded?.base &&
+            !isZero(savedSalary) && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-fg-subtle">
+                <span>Confirmado para este mes.</span>
+                <Button size="sm" variant="quiet" disabled={busy} onClick={() => void run(() => FinanceService.DeleteSalary(period))}>
+                  Volver al sueldo base
+                </Button>
+              </div>
+            )
+          )}
+          {loaded && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-sunken px-3 py-2 text-xs text-fg-muted ring-1 ring-inset ring-line">
+              {loaded.base ? (
+                <span>
+                  Sueldo base <strong className="tabular-nums text-fg">{formatCLP(loaded.base.amount)}</strong> desde{' '}
+                  {periodLabel(loaded.base.effectiveFrom).toLowerCase()}: se repite cada mes.
+                </span>
+              ) : (
+                <span>Sin sueldo base: cada mes empieza en $0 hasta que anotes el sueldo.</span>
+              )}
+              <span className="flex gap-1.5">
+                {loaded.base ? (
+                  <>
+                    <Button size="sm" variant="quiet" onClick={() => setEditingBase(true)}>
+                      Cambiar
+                    </Button>
+                    <Button size="sm" variant="quiet" disabled={busy} onClick={() => void run(() => FinanceService.EndBaseSalary(period))}>
+                      Terminar desde este mes
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    disabled={busy || isZero(savedSalary || '0')}
+                    onClick={() => void run(() => FinanceService.SetBaseSalary(period, savedSalary))}
+                  >
+                    Repetir este sueldo cada mes
+                  </Button>
+                )}
+              </span>
+            </div>
+          )}
         </div>
 
         <div>
@@ -156,7 +232,7 @@ export function IncomePanel() {
                 placeholder="0"
                 required
               />
-              <Button type="submit" icon={Plus} className="shrink-0 px-3">
+              <Button type="submit" icon={Plus} className="shrink-0 px-3" loading={adding}>
                 <span className="sr-only">Agregar ingreso extra</span>
               </Button>
             </div>
@@ -168,6 +244,66 @@ export function IncomePanel() {
           </form>
         </div>
       </div>
+      {editingBase && loaded?.base && (
+        <BaseSalaryForm base={loaded.base} defaultPeriod={period} onClose={() => setEditingBase(false)} onSaved={reload} />
+      )}
     </Section>
+  )
+}
+
+// BaseSalaryForm changes the base salary from a month on; earlier months keep
+// theirs and a month's confirmed salary always wins.
+function BaseSalaryForm({
+  base,
+  defaultPeriod,
+  onClose,
+  onSaved,
+}: {
+  base: BaseSalary
+  defaultPeriod: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [amount, setAmount] = useState(base.amount)
+  const [from, setFrom] = useState(defaultPeriod)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    try {
+      if (failed(await FinanceService.SetBaseSalary(from, amount))) return
+      onSaved()
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Cambiar sueldo base" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-2 items-start gap-3">
+          <Field label="Sueldo base">
+            <MoneyInput value={amount} onChange={setAmount} required autoFocus />
+          </Field>
+          <Field label="Desde">
+            <input type="month" className={inputCls} value={from} onChange={(e) => setFrom(e.target.value)} required />
+          </Field>
+        </div>
+        <p className="text-xs text-fg-subtle">
+          Se espera cada mes desde ahí. Los meses anteriores y los sueldos que ya confirmaste no cambian.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button type="submit" loading={busy}>
+            Guardar
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }

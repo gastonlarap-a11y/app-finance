@@ -128,23 +128,25 @@ type CardDebt struct {
 }
 
 type MonthlySummary struct {
-	Period       string          `json:"period"`
-	Salary       types.Decimal   `json:"salary"`     // sueldo de este mes
-	Extras       types.Decimal   `json:"extras"`     // bonos / ingresos extra del mes
-	Ingresos     types.Decimal   `json:"ingresos"`   // salary + extras
-	Acumulado    types.Decimal   `json:"acumulado"`  // arrastre de meses previos (puede ser negativo)
-	Disponible   types.Decimal   `json:"disponible"` // acumulado + ingresos
-	Gastos       types.Decimal   `json:"gastos"`
-	Pendiente    types.Decimal   `json:"pendiente"`
-	Pagado       types.Decimal   `json:"pagado"`
-	Ahorro       types.Decimal   `json:"ahorro"`  // aportes a metas del mes (salen del disponible)
-	Balance      types.Decimal   `json:"balance"` // disponible − gastos − ahorro
-	Alcanza      bool            `json:"alcanza"`
-	PorCategoria []CategoryTotal `json:"porCategoria"`
-	PorTarjeta   []CardDebt      `json:"porTarjeta"`
-	Movimientos  []Movimiento    `json:"movimientos"`
-	Incomes      []Income        `json:"incomes"`
-	Presupuestos []BudgetStatus  `json:"presupuestos"` // sólo categorías con tope vigente
+	Period string        `json:"period"`
+	Salary types.Decimal `json:"salary"` // sueldo de este mes (el confirmado, o el base esperado)
+	// SalaryExpected: Salary is the base salary, not yet confirmed for the month.
+	SalaryExpected bool            `json:"salaryExpected"`
+	Extras         types.Decimal   `json:"extras"`     // bonos / ingresos extra del mes
+	Ingresos       types.Decimal   `json:"ingresos"`   // salary + extras
+	Acumulado      types.Decimal   `json:"acumulado"`  // arrastre de meses previos (puede ser negativo)
+	Disponible     types.Decimal   `json:"disponible"` // acumulado + ingresos
+	Gastos         types.Decimal   `json:"gastos"`
+	Pendiente      types.Decimal   `json:"pendiente"`
+	Pagado         types.Decimal   `json:"pagado"`
+	Ahorro         types.Decimal   `json:"ahorro"`  // aportes a metas del mes (salen del disponible)
+	Balance        types.Decimal   `json:"balance"` // disponible − gastos − ahorro
+	Alcanza        bool            `json:"alcanza"`
+	PorCategoria   []CategoryTotal `json:"porCategoria"`
+	PorTarjeta     []CardDebt      `json:"porTarjeta"`
+	Movimientos    []Movimiento    `json:"movimientos"`
+	Incomes        []Income        `json:"incomes"`
+	Presupuestos   []BudgetStatus  `json:"presupuestos"` // sólo categorías con tope vigente
 	// AcumuladoDesde is the reconciled month the carried balance starts from
 	// ("" = it sums the whole history).
 	AcumuladoDesde string `json:"acumuladoDesde"`

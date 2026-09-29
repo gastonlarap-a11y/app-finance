@@ -12,8 +12,9 @@ const maxForecastMonths = 36
 
 // CommitmentsForecast projects `months` months starting at `fromPeriod`: what each
 // one already has committed (installments of existing purchases + active fixed
-// expenses) against its expected income. A month without a salary saved reuses
-// the last known salary and is flagged IngresoEstimado.
+// expenses) against its expected income. A month without a confirmed salary
+// takes the base salary (or, without one, the last confirmed salary) and is
+// flagged IngresoEstimado.
 func (s *FinanceService) CommitmentsForecast(ctx context.Context, fromPeriod string, months int) ForecastResult {
 	if !validPeriod(fromPeriod) {
 		return ForecastResult{Error: invalidPeriod()}
@@ -53,21 +54,28 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 		return nil, err
 	}
 
-	// Every salary up to the horizon: the ones before `from` only seed the
-	// "last known salary" used to estimate months without one.
-	var salaries []PeriodSalary
-	if err := s.db.NewSelect().Model(&salaries).
-		Where("user_id = ? AND period <= ?", uid, to).Order("period ASC").Scan(ctx); err != nil {
+	// Each month's salary: the confirmed one, else the base salary (expected).
+	salaryByMonth, err := s.salaryByMonth(ctx, uid, from, to)
+	if err != nil {
 		return nil, err
 	}
-	salaryByMonth := map[string]types.Decimal{}
+	// Without a base salary, a month with none reuses the last confirmed one
+	// (the ones before `from` seed it); with a base salary, the base decides —
+	// ended means no salary.
+	plans, err := s.salaryPlans(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
 	lastKnown := types.Zero()
-	for _, sal := range salaries {
-		if sal.Period < from {
-			lastKnown = sal.Amount
-			continue
+	if len(plans) == 0 {
+		var before []PeriodSalary
+		if err := s.db.NewSelect().Model(&before).
+			Where("user_id = ? AND period < ?", uid, from).Order("period DESC").Limit(1).Scan(ctx); err != nil {
+			return nil, err
 		}
-		salaryByMonth[sal.Period] = sal.Amount
+		if len(before) > 0 {
+			lastKnown = before[0].Amount
+		}
 	}
 
 	var incomes []Income
@@ -116,11 +124,14 @@ func (s *FinanceService) commitmentsForecast(ctx context.Context, uid int64, fro
 				fijos = fijos.Add(clp)
 			}
 		}
-		salary, known := salaryByMonth[period]
+		ms, ok := salaryByMonth[period]
+		known := ok && !ms.expected // confirmed for the month
+		salary := lastKnown
+		if ok {
+			salary = ms.amount
+		}
 		if known {
 			lastKnown = salary
-		} else {
-			salary = lastKnown
 		}
 		ingresos := salary.Add(extras[period])
 		comprometido := cuotas[period].Add(fijos)

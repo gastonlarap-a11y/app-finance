@@ -22,6 +22,8 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   contribution (`WithdrawSavings`); a goal's balance never goes below zero. A goal that follows a
   savings account holds its balance, and the net transfers into it are the month's Ahorro
   (`goalTransfers`, summed by every savings helper — never read contributions alone).
+- **Salary**: read it only through `salaryByMonth` (Go `salary.go`, TS mirror) — the month's
+  confirmed `period_salaries` row, else the base salary in effect (`salary_plans`) as expected.
 - **Carried balance restarts at a reconciliation**: `cumulativeBalanceBefore` = latest
   `reconciliations` row before the month (real closing balance; the opening balance is one on the
   month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to

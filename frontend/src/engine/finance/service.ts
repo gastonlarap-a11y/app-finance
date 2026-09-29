@@ -5,6 +5,7 @@
 import type {
   AccountsSummary,
   AppError,
+  BaseSalaryResult,
   BudgetStatus,
   Card,
   CardDebt,
@@ -181,7 +182,6 @@ import {
   rowToInstallment,
   rowToMerchant,
   rowToMerchantRule,
-  rowToPeriodSalary,
   rowToReconciliation,
   rowToReceivable,
   rowToRefund,
@@ -210,6 +210,15 @@ const ACCOUNT_KINDS: readonly string[] = ['corriente', 'vista', 'digital', 'efec
 // AccountFlow mirrors Go's accountFlow: what an account received and spent in
 // a month, and what it got from (tin) or passed to (tout) another own account.
 type AccountFlow = { in: Money; out: Money; tin: Money; tout: Money }
+
+// SalaryPlanRow mirrors Go's SalaryPlan: the base salary from effectiveFrom on.
+interface SalaryPlanRow extends EffectiveDated {
+  active: boolean
+}
+
+// MonthSalary mirrors Go's monthSalary: a month's salary and whether it is the
+// expected base one.
+type MonthSalary = { amount: Money; expected: boolean }
 
 // CARD_PAYMENT_LOOKBACK mirrors Go's cardPaymentLookback: card charges billed
 // this many months before a range may be paid inside it.
@@ -937,10 +946,56 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // ---------- internal helpers (ports of the Go private methods) ----------
 
-  function salaryFor(period: string): Money {
-    const rows = db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period = ?', [uid(), period])
-    const row = rows[0]
-    return row ? Money.fromString(rowToPeriodSalary(row).amount) : Money.zero()
+  // salaryPlans mirrors Go: the profile's base salary rows (effective-dated;
+  // an inactive row ends the base salary from its month on).
+  function salaryPlans(): SalaryPlanRow[] {
+    return db
+      .query('SELECT effective_from, amount, active FROM salary_plans WHERE user_id = ?', [uid()])
+      .map((r) => ({ effectiveFrom: asString(r.effective_from), amount: asString(r.amount), active: asNumber(r.active) === 1 }))
+  }
+
+  // baseSalaryAt is the base salary in effect at period, if any.
+  function baseSalaryAt(plans: readonly SalaryPlanRow[], period: string): SalaryPlanRow | undefined {
+    const p = latestAsOf(plans, period)
+    return p?.active ? p : undefined
+  }
+
+  // salaryByMonth mirrors Go: each month's salary in [from, to] ('' from = the
+  // first month there is one) — the one confirmed for the month or, without it,
+  // the base salary in effect (expected). A month with neither is absent.
+  function salaryByMonth(from: string, to: string): Map<string, MonthSalary> {
+    const out = new Map<string, MonthSalary>()
+    for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
+      uid(),
+      from,
+      to,
+    ])) {
+      out.set(asString(r.period), { amount: Money.fromString(asString(r.amount)), expected: false })
+    }
+    const plans = salaryPlans()
+    if (plans.length === 0) return out
+    // No base before the first plan row.
+    const start = plans.reduce((m, p) => (p.effectiveFrom < m ? p.effectiveFrom : m), plans[0]!.effectiveFrom)
+    for (let m = start > from ? start : from; m <= to; m = addMonths(m, 1)) {
+      if (out.has(m)) continue
+      const p = baseSalaryAt(plans, m)
+      if (p) out.set(m, { amount: Money.fromString(p.amount), expected: true })
+    }
+    return out
+  }
+
+  // putSalaryPlan upserts a base salary row (active = false ends it).
+  function putSalaryPlan(fromPeriod: string, amount: string, active: boolean): void {
+    db.exec(
+      `INSERT INTO salary_plans (user_id, effective_from, amount, active) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, effective_from) DO UPDATE SET amount = EXCLUDED.amount, active = EXCLUDED.active`,
+      [uid(), fromPeriod, amount, active ? 1 : 0],
+    )
+  }
+
+  // salaryFor: a period's salary — confirmed, expected (the base) or zero.
+  function salaryFor(period: string): MonthSalary {
+    return salaryByMonth(period, period).get(period) ?? { amount: Money.zero(), expected: false }
   }
 
   function listCardsActive(): Card[] {
@@ -1971,14 +2026,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     const accOf = (r: SqlRow) => (r.account == null ? 0 : asNumber(r.account))
     const cardOf = (r: SqlRow) => (r.card == null ? null : asNumber(r.card))
     const money = (r: SqlRow) => Money.fromString(asString(r.amount))
-    const salaryOf = new Map<string, Money>() // a salary_rest transfer follows it
-    for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
-      uid(),
-      from,
-      to,
-    ])) {
-      add(salaryAcc, asString(r.period), money(r), Money.zero())
-      salaryOf.set(asString(r.period), money(r))
+    // Each month's salary (the confirmed one, else the base salary) lands in the
+    // salary account; a salary_rest transfer follows it.
+    const salaryOf = new Map<string, Money>()
+    for (const [m, ms] of salaryByMonth(from, to)) {
+      add(salaryAcc, m, ms.amount, Money.zero())
+      salaryOf.set(m, ms.amount)
     }
     for (const r of db.query(
       `SELECT period, amount, account_id AS account FROM incomes
@@ -2817,11 +2870,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   // `before`; it reads only amounts (it walks the whole history on every summary).
   function flowsBetween(after: string, before: string): Money {
     const user = uid()
-    let total = sumAmounts('SELECT amount FROM period_salaries WHERE user_id = ? AND period > ? AND period < ?', [
-      user,
-      after,
-      before,
-    ])
+    // Salaries month by month: the base salary fills the months without one (mirrors Go).
+    let total = Money.zero()
+    for (const ms of salaryByMonth(after === '' ? '' : addMonths(after, 1), addMonths(before, -1)).values()) {
+      total = total.add(ms.amount)
+    }
     total = total.add(
       sumAmounts('SELECT amount FROM incomes WHERE user_id = ? AND period > ? AND period < ? AND deleted_at IS NULL', [
         user,
@@ -2904,13 +2957,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     const start = from !== '' ? from : transfers.reduce((m, t) => (t.startPeriod < m ? t.startPeriod : m), transfers[0]!.startPeriod)
     const salaryOf = new Map<string, Money>() // a salary_rest transfer follows the month's salary
     if (transfers.some((t) => t.mode === TransferSalaryRest)) {
-      for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
-        uid(),
-        start,
-        to,
-      ])) {
-        salaryOf.set(asString(r.period), Money.fromString(asString(r.amount)))
-      }
+      for (const [m, ms] of salaryByMonth(start, to)) salaryOf.set(m, ms.amount)
     }
     for (let m = start; m <= to; m = addMonths(m, 1)) {
       for (const t of transfers) {
@@ -3249,9 +3296,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
     // ---------- salary (per month) ----------
 
+    // GetSalary mirrors Go: the confirmed salary, else the expected base one, else zero.
     async GetSalary(period: string): Promise<SalaryResult> {
       if (!validPeriod(period)) return { error: invalidPeriodError() }
-      const data: PeriodSalary = { userId: uid(), period, amount: salaryFor(period).toString() }
+      const ms = salaryFor(period)
+      const data: PeriodSalary = { userId: uid(), period, amount: ms.amount.toString(), expected: ms.expected }
       return { data }
     },
 
@@ -3264,7 +3313,41 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
          ON CONFLICT (user_id, period) DO UPDATE SET amount = EXCLUDED.amount`,
         [uid(), period, parsed.amount.toString()],
       )
-      return { data: { userId: uid(), period, amount: parsed.amount.toString() } }
+      return { data: { userId: uid(), period, amount: parsed.amount.toString(), expected: false } }
+    },
+
+    // DeleteSalary mirrors Go: the month goes back to the base salary, or none.
+    async DeleteSalary(period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      db.exec('DELETE FROM period_salaries WHERE user_id = ? AND period = ?', [uid(), period])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'ese mes no tiene sueldo anotado') }
+      return {}
+    },
+
+    // ---------- base salary (mirror of salary.go) ----------
+
+    async GetBaseSalary(period: string): Promise<BaseSalaryResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const p = baseSalaryAt(salaryPlans(), period)
+      return p ? { data: { effectiveFrom: p.effectiveFrom, amount: p.amount } } : {}
+    },
+
+    async SetBaseSalary(fromPeriod: string, amount: string): Promise<OpResult> {
+      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+      const parsed = amountOrError(amount)
+      if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(amount) }
+      if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el sueldo base debe ser mayor a 0') }
+      putSalaryPlan(fromPeriod, parsed.amount.toString(), true)
+      return {}
+    },
+
+    async EndBaseSalary(fromPeriod: string): Promise<OpResult> {
+      if (!validPeriod(fromPeriod)) return { error: invalidPeriodError() }
+      if (!baseSalaryAt(salaryPlans(), fromPeriod)) {
+        return { error: newError(ErrValidation, 'no hay sueldo base en ' + fromPeriod) }
+      }
+      putSalaryPlan(fromPeriod, '0', false)
+      return {}
     },
 
     // ---------- cards ----------
@@ -4182,7 +4265,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
       let extras = Money.zero()
       for (const inc of incomes) extras = extras.add(Money.fromString(inc.amount))
-      const ingresos = salary.add(extras)
+      const ingresos = salary.amount.add(extras)
       const disponible = acumulado.add(ingresos)
 
       let gastos = Money.zero()
@@ -4280,7 +4363,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
       const data: MonthlySummary = {
         period,
-        salary: salary.toString(),
+        salary: salary.amount.toString(),
+        salaryExpected: salary.expected,
         extras: extras.toString(),
         ingresos: ingresos.toString(),
         acumulado: acumulado.toString(),
@@ -4319,14 +4403,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       // A month reconciled inside the year resets the running balance to the real one.
       const realByMonth = reconciliationsIn(prefix + '01', prefix + '12')
 
-      const salaryByMonth = new Map<string, Money>()
-      for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period LIKE ?', [
-        uid(),
-        prefix + '%',
-      ])) {
-        const ps = rowToPeriodSalary(r)
-        salaryByMonth.set(ps.period, Money.fromString(ps.amount))
-      }
+      const salaries = salaryByMonth(prefix + '01', prefix + '12')
 
       const extrasByMonth = new Map<string, Money>()
       for (const r of db.query(
@@ -4379,7 +4456,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       let totalAhorro = Money.zero()
       for (let m = 1; m <= 12; m++) {
         const period = prefix + String(m).padStart(2, '0')
-        const ingresos = (salaryByMonth.get(period) ?? Money.zero()).add(extrasByMonth.get(period) ?? Money.zero())
+        const ingresos = (salaries.get(period)?.amount ?? Money.zero()).add(extrasByMonth.get(period) ?? Money.zero())
         const gastos = gastosByMonth.get(period) ?? Money.zero()
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
         const balance = ingresos.sub(gastos).sub(ahorro)
@@ -4436,17 +4513,18 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
       const { fixed, amountsByID, uf } = loadFixed(false)
 
-      // Every salary up to the horizon: the ones before `fromPeriod` only seed
-      // the "last known salary" used to estimate months without one.
-      const salaryByMonth = new Map<string, Money>()
+      // Each month's salary: the confirmed one, else the base salary (expected).
+      // Without a base salary, a month with none reuses the last confirmed one
+      // (the ones before `fromPeriod` seed it); with one, the base decides —
+      // ended means no salary (mirrors Go).
+      const salaries = salaryByMonth(fromPeriod, to)
       let lastKnown = Money.zero()
-      for (const r of db.query('SELECT * FROM period_salaries WHERE user_id = ? AND period <= ? ORDER BY period ASC', [
-        uid(),
-        to,
-      ])) {
-        const ps = rowToPeriodSalary(r)
-        if (ps.period < fromPeriod) lastKnown = Money.fromString(ps.amount)
-        else salaryByMonth.set(ps.period, Money.fromString(ps.amount))
+      if (salaryPlans().length === 0) {
+        const before = db.query('SELECT amount FROM period_salaries WHERE user_id = ? AND period < ? ORDER BY period DESC LIMIT 1', [
+          uid(),
+          fromPeriod,
+        ])[0]
+        if (before) lastKnown = Money.fromString(asString(before.amount))
       }
 
       const extras = new Map<string, Money>()
@@ -4472,9 +4550,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           // Future months have no UF value yet: fixedCharge uses the latest known one.
           if (billsIn(fe, period)) fijos = fijos.add(fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, period).clp)
         }
-        const known = salaryByMonth.get(period)
-        if (known) lastKnown = known
-        const ingresos = lastKnown.add(extras.get(period) ?? Money.zero())
+        const ms = salaries.get(period)
+        const known = ms !== undefined && !ms.expected // confirmed for the month
+        const salary = ms?.amount ?? lastKnown
+        if (known) lastKnown = salary
+        const ingresos = salary.add(extras.get(period) ?? Money.zero())
         const cuotasMes = cuotas.get(period) ?? Money.zero()
         const comprometido = cuotasMes.add(fijos)
         const ahorro = ahorroByMonth.get(period) ?? Money.zero()
@@ -4488,7 +4568,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           comprometido: comprometido.toString(),
           ahorro: ahorro.toString(),
           ingresos: ingresos.toString(),
-          ingresoEstimado: known === undefined,
+          ingresoEstimado: !known,
           libre: libre.toString(),
           saldoProyectado: saldo.toString(),
         })
