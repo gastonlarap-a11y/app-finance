@@ -3,8 +3,8 @@ import { atom, useAtomValue, useSetAtom } from 'jotai'
 // Selective refetch, the model of TanStack Query's invalidateQueries: every
 // query folds the versions of the topics it reads into its useQuery key, and a
 // mutation bumps only the topics it changed — so saving an expense refetches
-// the finance views but not the backup state, the profile list or the mail
-// status mounted in the header.
+// the finance views but not the backup state or the profile list mounted in
+// the sidebar.
 //
 // Topics are coarse on purpose: nearly every finance read (summaries, trend,
 // forecast, search, budgets, the inbox's duplicate hints) derives from the
@@ -15,13 +15,12 @@ export type Topic =
   | 'imports' // import inbox, card statements, import rules
   | 'profiles' // the profile list (switching profile invalidates everything)
   | 'settings' // DB folder, Google Drive, backups
-  | 'mail' // mailbox configuration and sync status
 
-export const ALL_TOPICS: readonly Topic[] = ['ledger', 'imports', 'profiles', 'settings', 'mail']
+export const ALL_TOPICS: readonly Topic[] = ['ledger', 'imports', 'profiles', 'settings']
 
 export type Versions = Readonly<Record<Topic, number>>
 
-const initialVersions: Versions = { ledger: 0, imports: 0, profiles: 0, settings: 0, mail: 0 }
+const initialVersions: Versions = { ledger: 0, imports: 0, profiles: 0, settings: 0 }
 
 const versionsAtom = atom<Versions>(initialVersions)
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ALL_TOPICS, bumped, versionKey, type Versions } from './refresh'
 
-const zero: Versions = { ledger: 0, imports: 0, profiles: 0, settings: 0, mail: 0 }
+const zero: Versions = { ledger: 0, imports: 0, profiles: 0, settings: 0 }
 
 describe('selective refetch', () => {
   it('changes the key only of queries reading an invalidated topic', () => {
@@ -22,7 +22,7 @@ describe('selective refetch', () => {
   })
 
   it('does not mutate the previous versions', () => {
-    bumped(zero, ['mail'])
-    expect(zero.mail).toBe(0)
+    bumped(zero, ['settings'])
+    expect(zero.settings).toBe(0)
   })
 })

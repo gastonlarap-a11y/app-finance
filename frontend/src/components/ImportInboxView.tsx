@@ -1,5 +1,5 @@
 import { useState, type ReactNode, type SubmitEvent } from 'react'
-import { CheckCheck, FileText, Inbox, Mail, RefreshCw, TriangleAlert } from 'lucide-react'
+import { CheckCheck, FileText, Inbox, TriangleAlert } from 'lucide-react'
 import {
   FinanceService,
   KIND_CUOTAS,
@@ -14,9 +14,6 @@ import type { ImportTab } from '@/lib/route'
 import { navigate } from '@/lib/useRoute'
 import { CardStatementsSection } from './CardStatements'
 import { Link } from './Link'
-import { MailSyncService } from '@/services/mailsync'
-import { IS_WEB } from '@/lib/platform'
-import { syncStatusText } from './MailSettings'
 import { errMsg, failed } from '@/lib/result'
 import { notify } from '@/lib/notify'
 import { perInstallment } from '@/lib/money'
@@ -51,10 +48,9 @@ const STATUSES = [
 ] as const satisfies readonly { value: ImportStatus; label: string }[]
 
 const EMPTY_TEXT: Record<ImportStatus, string> = {
-  pendiente: IS_WEB
-    ? 'Aparecen aquí al importar un estado de cuenta en PDF.'
-    : 'Aparecen aquí al importar un estado de cuenta en PDF o al revisar tu correo de alertas (Configuración › Correo del banco).',
-  conciliado: 'Aún no hay movimientos conciliados: son los que el banco informó dos veces (alerta de correo y estado de cuenta).',
+  pendiente: 'Aparecen aquí al importar un estado de cuenta en PDF o una cartola.',
+  conciliado:
+    'Aún no hay movimientos conciliados: son los que el banco informó dos veces (el pago de la tarjeta en la cartola y en el estado de cuenta).',
   confirmado: 'Aún no confirmas movimientos. Al confirmarlos se convierten en gastos del mes.',
   descartado: 'No hay movimientos descartados.',
 }
@@ -183,8 +179,7 @@ function InboxPanel() {
           )
         }
       >
-        <div className="mb-5 space-y-3">
-          {!IS_WEB && <MailSyncStatus onSynced={() => invalidate('imports', 'mail')} />}
+        <div className="mb-5">
           <StatementImport onImported={reload} />
         </div>
 
@@ -314,48 +309,6 @@ function IncomeConfirmForm({ item, onClose, onSaved }: { item: ImportItemView; o
         </div>
       </form>
     </Modal>
-  )
-}
-
-// MailSyncStatus shows when the bank's alert emails were last read and lets
-// the user read them now (desktop only; the outcome arrives as an event).
-function MailSyncStatus({ onSynced }: { onSynced: () => void }) {
-  const [requested, setRequested] = useState(false)
-  const version = useVersion('mail')
-  const query = useQuery(version, async () => (await MailSyncService.GetMailState()).data ?? null)
-  const st = query.data
-  if (!st) return null
-  if (!st.configured) {
-    return (
-      <div className="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
-        <Mail aria-hidden="true" className="size-4 text-fg-subtle" />
-        <span>Conecta tu correo para traer las alertas de compra automáticamente.</span>
-        <Button variant="secondary" size="sm" onClick={() => navigate({ page: 'config', section: 'correo' })}>
-          Configurar correo
-        </Button>
-      </div>
-    )
-  }
-
-  async function syncNow() {
-    setRequested(true)
-    try {
-      if (!failed(await MailSyncService.SyncNow())) onSynced()
-    } finally {
-      setRequested(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-3 text-sm">
-      <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void syncNow()} loading={requested || st.syncing}>
-        {st.syncing ? 'Revisando correo…' : 'Revisar correo ahora'}
-      </Button>
-      <span className="text-xs text-fg-subtle">
-        {syncStatusText(st)}
-        {st.lastError && <span className="text-negative-fg"> · Último error: {st.lastError}</span>}
-      </span>
-    </div>
   )
 }
 

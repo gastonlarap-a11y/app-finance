@@ -21,7 +21,7 @@ export const PAGES: Record<MainPage, PageMeta> = {
   importar: {
     label: 'Importar',
     title: 'Importar',
-    subtitle: 'Revisa lo que traen tus estados de cuenta y correos antes de que cuente.',
+    subtitle: 'Revisa lo que traen tus estados de cuenta y cartolas antes de que cuente.',
     icon: Inbox,
   },
   buscar: { label: 'Buscar', title: 'Buscar gastos', subtitle: 'En todo tu historial.', icon: Search },

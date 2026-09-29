@@ -11,7 +11,6 @@ export const CONFIG_SECTIONS = [
   'comercios',
   'reglas',
   'respaldo',
-  'correo',
   'perfiles',
   'papelera',
   'apariencia',
@@ -20,8 +19,8 @@ export const CONFIG_SECTIONS = [
 
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number]
 
-// Sections that only exist on the desktop build (native mail sync, updater).
-export const DESKTOP_ONLY_SECTIONS: ReadonlySet<ConfigSection> = new Set(['correo', 'actualizaciones'])
+// Sections that only exist on the desktop build (the native updater).
+export const DESKTOP_ONLY_SECTIONS: ReadonlySet<ConfigSection> = new Set(['actualizaciones'])
 
 export type ImportTab = 'bandeja' | 'estados'
 

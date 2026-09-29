@@ -1106,66 +1106,6 @@ export interface SettingsServiceContract {
   RestoreBackup(path: string): Promise<RestoreResult>
 }
 
-// ---------- mail sync (desktop-native; the web build answers with WEB_ONLY errors) ----------
-
-// An empty password keeps the one already stored in the OS keychain.
-export interface MailAccountInput {
-  host: string
-  port: number // 0 = 993
-  username: string
-  password: string
-  folder: string // '' = INBOX
-  senderFilter: string // matched against the From header, e.g. "eeccvirtual.cl" (Itaú)
-  startDate: string // YYYY-MM-DD
-  autoSync: boolean
-}
-
-export interface MailState {
-  configured: boolean
-  host: string
-  port: number
-  username: string
-  folder: string
-  senderFilter: string
-  startDate: string
-  autoSync: boolean
-  syncing: boolean
-  lastSyncedAt: string | null // RFC3339
-  lastError: string
-  lastMessages: number
-  lastRecognized: number
-  lastAdded: number
-  issuers: string[] // banks whose alert format is supported
-}
-
-export type MailStateResult = Result<MailState>
-
-export interface SyncSummary {
-  messages: number
-  recognized: number
-  unrecognized: number
-  unreadable: number
-  added: number
-  duplicates: number
-  reconciled: number
-}
-
-// Payload of the "mailsync:done" event emitted after every sync.
-export interface SyncEvent {
-  userId: number
-  summary?: SyncSummary | null
-  error?: string
-}
-
-export interface MailSyncServiceContract {
-  GetMailState(): Promise<MailStateResult>
-  SaveMailAccount(input: MailAccountInput): Promise<OpResult>
-  TestMailConnection(): Promise<OpResult>
-  SyncNow(): Promise<OpResult>
-  ResyncMailFrom(since: string): Promise<OpResult>
-  DisconnectMail(): Promise<OpResult>
-}
-
 // ---------- app updates (desktop-native; the PWA updates itself through its service worker) ----------
 
 export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'restarting'

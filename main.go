@@ -18,7 +18,6 @@ import (
 
 	"github.com/gastonlarap-a11y/app-finance/backend/diagnostics"
 	"github.com/gastonlarap-a11y/app-finance/backend/finance"
-	"github.com/gastonlarap-a11y/app-finance/backend/mailsync"
 	"github.com/gastonlarap-a11y/app-finance/backend/reminders"
 	"github.com/gastonlarap-a11y/app-finance/backend/reports"
 	"github.com/gastonlarap-a11y/app-finance/backend/settings"
@@ -142,12 +141,6 @@ func main() {
 		session.SetActive(users.ResolveActiveID(ctx, bdb, prefs.Load(appName).ActiveUserID))
 	}
 	settingsSvc := settings.NewService(appName, bdb, cfg, driveMgr, backupRunner, afterRestore)
-	// Syncs run in the background and report through a frontend event; the app
-	// exists by the time the first one finishes (it starts after ServiceStartup).
-	mailSvc := mailsync.NewService(bdb, session, mailsync.NewKeychain(appName), mailsync.DefaultParsers(),
-		func(name string, data any) { application.Get().Event.Emit(name, data) })
-	// Purging a profile also forgets its mail password in the keychain.
-	users.AddPurgeHook(usersSvc, mailsync.ForgetUserSecrets(mailSvc))
 
 	version, err := updates.VersionFromConfig(buildConfig)
 	if err != nil {
@@ -176,7 +169,6 @@ func main() {
 		application.NewService(financeSvc),
 		application.NewService(usersSvc),
 		application.NewService(settingsSvc),
-		application.NewService(mailSvc),
 		application.NewService(updatesSvc),
 		// Native due-date notifications; disables itself where they cannot work.
 		application.NewService(reminders.NewService(financeSvc, appName)),
