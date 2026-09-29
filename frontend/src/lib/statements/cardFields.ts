@@ -22,10 +22,12 @@ const LABELISH = /\p{L}{3}/u
 // label; the first row where the label has values wins (the payment slip
 // repeats several labels with their values on another row). A label run may
 // end with the opening parenthesis of a formula ("MONTO TOTAL FACTURADO A
-// PAGAR (" followed by "A + B + … )").
-export function labelValues(rows: readonly Row[], label: string): string[] {
+// PAGAR (" followed by "A + B + … )"). A RegExp label matches labels that
+// carry a value of their own ("COSTO MONETARIO PREPAGO AL 19/06/2026 ****").
+export function labelValues(rows: readonly Row[], label: string | RegExp): string[] {
+  const isLabel = (s: string) => (typeof label === 'string' ? s === label : label.test(s))
   for (const row of rows) {
-    const i = row.runs.findIndex((r) => norm(r.str).replace(/\s*\($/, '') === label)
+    const i = row.runs.findIndex((r) => isLabel(norm(r.str).replace(/\s*\($/, '')))
     if (i < 0) continue
     const values: string[] = []
     for (const run of row.runs.slice(i + 1)) {
@@ -46,6 +48,13 @@ export function parseAnyDate(s: string): string | null {
 
 export function moneys(values: readonly string[]): string[] {
   return values.flatMap((v) => parseClMoney(v) ?? [])
+}
+
+// moneyCells keeps the position of a row's amounts: a "-" printed for a value
+// that does not apply (a cash-advance limit) stays as an empty cell instead of
+// shifting the amounts after it.
+export function moneyCells(values: readonly string[]): string[] {
+  return values.flatMap((v) => (v.trim() === '-' ? [''] : (parseClMoney(v) ?? [])))
 }
 
 export function dates(values: readonly string[]): string[] {
@@ -72,6 +81,14 @@ export function belowLabel(rows: readonly Row[], label: string, parse: (s: strin
 export const MONTHS = [
   'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE',
 ]
+
+// monthNumber reads a month label, whole or abbreviated ("MAYO", "MAY",
+// "SEPT"): 1-12, or 0 when it is not a month.
+export function monthNumber(label: string): number {
+  const t = norm(label)
+  if (t.length < 3) return 0
+  return MONTHS.findIndex((m) => m === t || (t.length <= 4 && m.startsWith(t))) + 1
+}
 
 // periodForMonth is the first period after `after` (YYYY-MM) in month m (1-12).
 export function periodForMonth(after: string, m: number): string {

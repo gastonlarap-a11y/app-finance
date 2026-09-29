@@ -51,9 +51,11 @@ export function hasCurrencySymbol(s: string): boolean {
   return /^(US)?\$/.test(s.trim())
 }
 
-const CL_PERCENT = /^(\d+(?:,\d+)?)\s*%$/
+// A rate never reaches a thousand, so its separator is always the decimal
+// one: a comma for most issuers, a point for some ("2.46%", Cencosud).
+const CL_PERCENT = /^(\d+(?:[.,]\d+)?)\s*%$/
 
-// parseClPercent turns "2,56%" into "2.56" (null when not a percentage).
+// parseClPercent turns "2,56%" (or "2.56%") into "2.56" (null when not a percentage).
 export function parseClPercent(s: string): string | null {
   const m = CL_PERCENT.exec(s.trim())
   return m?.[1] !== undefined ? m[1].replace(',', '.') : null
