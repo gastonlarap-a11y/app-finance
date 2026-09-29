@@ -7,6 +7,7 @@ import type {
   BudgetStatus,
   Card,
   CardDebt,
+  CardOwed,
   CardResult,
   CardStatement,
   CardStatementDetailResult,
@@ -208,6 +209,10 @@ const ACCOUNT_KINDS: readonly string[] = ['corriente', 'vista', 'digital', 'efec
 // AccountFlow mirrors Go's accountFlow: what an account received and spent in
 // a month, and what it got from (tin) or passed to (tout) another own account.
 type AccountFlow = { in: Money; out: Money; tin: Money; tout: Money }
+
+// CARD_PAYMENT_LOOKBACK mirrors Go's cardPaymentLookback: card charges billed
+// this many months before a range may be paid inside it.
+const CARD_PAYMENT_LOOKBACK = 2
 
 // transferActiveIn mirrors Transfer.activeIn: '' end = every month from the start.
 function transferActiveIn(t: Transfer, period: string): boolean {
@@ -1823,9 +1828,54 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return {}
   }
 
+  // cardPayments mirrors Go's loadCardPayments + paymentPeriod: the month each
+  // card's statement of a month is paid in — its imported «pagar hasta» (the
+  // earliest of the month's statements; a date before the month it bills is
+  // ignored), else the card's payment day (the same month when it comes after
+  // the cutoff), else the next month. Trashed cards are included.
+  function cardPayments(): { cards: Map<number, Card>; paymentPeriod: (card: number, period: string) => string } {
+    const cards = new Map<number, Card>()
+    for (const r of db.query('SELECT * FROM cards WHERE user_id = ?', [uid()])) {
+      const c = rowToCard(r)
+      cards.set(c.id, c)
+    }
+    const key = (card: number, period: string) => `${card}|${period}`
+    const earliest = new Map<string, { period: string; date: string }>()
+    for (const r of db.query(
+      `SELECT card_id, period, due_date FROM card_statements
+       WHERE user_id = ? AND card_id IS NOT NULL AND due_date <> ''`,
+      [uid()],
+    )) {
+      const k = key(asNumber(r.card_id), asString(r.period))
+      const date = asString(r.due_date)
+      const prev = earliest.get(k)
+      if (!prev || date < prev.date) earliest.set(k, { period: asString(r.period), date })
+    }
+    const due = new Map<string, string>()
+    for (const [k, { period, date }] of earliest) {
+      if (date.length >= 7 && date.slice(0, 7) >= period) due.set(k, date.slice(0, 7))
+    }
+    return {
+      cards,
+      paymentPeriod(card, period) {
+        const d = due.get(key(card, period))
+        if (d !== undefined) return d
+        const c = cards.get(card)
+        if (c?.paymentDay != null && c.paymentDay > c.billingDay) return period
+        return addMonths(period, 1)
+      },
+    }
+  }
+
   // accountFlows mirrors Go: per account (0 = none) and month in [from, to],
   // what came in and went out, and what moved to or from another own account.
-  function accountFlows(accs: Account[], from: string, to: string): Map<number, Map<string, AccountFlow>> {
+  // What went on a card leaves its account in the month the card's statement
+  // is paid, so it also returns what each card still owed at the close of `to`.
+  function accountFlows(
+    accs: Account[],
+    from: string,
+    to: string,
+  ): { flows: Map<number, Map<string, AccountFlow>>; owed: Map<number, CardOwed> } {
     const out = new Map<number, Map<string, AccountFlow>>()
     const flow = (acc: number, period: string): AccountFlow => {
       const byPeriod = out.get(acc) ?? new Map<string, AccountFlow>()
@@ -1842,8 +1892,31 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const g = flow(toAcc, period)
       out.get(toAcc)!.set(period, { ...g, tin: g.tin.add(amt) })
     }
+    const payments = cardPayments()
+    const owed = new Map<number, CardOwed>()
+    // charge books money going out of acc (negative: coming back) for a movement
+    // of `period`: in that month, or in the month its card's statement is paid;
+    // a card's charge not paid by the close of `to` is owed.
+    const charge = (acc: number, card: number | null, period: string, amt: Money) => {
+      let paid = period
+      if (card !== null) {
+        paid = payments.paymentPeriod(card, period)
+        if (period <= to && paid > to) {
+          const o = owed.get(card) ?? { cardId: card, name: payments.cards.get(card)?.name ?? '', owed: '0', paymentPeriod: paid }
+          owed.set(card, {
+            ...o,
+            owed: Money.fromString(o.owed).add(amt).toString(),
+            paymentPeriod: paid < o.paymentPeriod ? paid : o.paymentPeriod,
+          })
+        }
+      }
+      if (from <= paid && paid <= to) add(acc, paid, Money.zero(), amt)
+    }
+    // Card charges billed a little before `from` are paid inside it.
+    const billedFrom = addMonths(from, -CARD_PAYMENT_LOOKBACK)
     const salaryAcc = accs.find((a) => a.receivesSalary)?.id ?? 0
     const accOf = (r: SqlRow) => (r.account == null ? 0 : asNumber(r.account))
+    const cardOf = (r: SqlRow) => (r.card == null ? null : asNumber(r.card))
     const money = (r: SqlRow) => Money.fromString(asString(r.amount))
     const salaryOf = new Map<string, Money>() // a salary_rest transfer follows it
     for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
@@ -1862,41 +1935,41 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       add(accOf(r), asString(r.period), money(r), Money.zero())
     }
     for (const r of db.query(
-      `SELECT inst.period AS period, inst.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+      `SELECT inst.period AS period, inst.amount AS amount,
+       COALESCE(ex.account_id, c.account_id) AS account, ex.card_id AS card
        FROM installments AS inst JOIN expenses AS ex ON ex.id = inst.expense_id AND ex.deleted_at IS NULL
        LEFT JOIN cards AS c ON c.id = ex.card_id
        WHERE inst.user_id = ? AND inst.period >= ? AND inst.period <= ?`,
-      [uid(), from, to],
+      [uid(), billedFrom, to],
     )) {
-      add(accOf(r), asString(r.period), Money.zero(), money(r))
+      charge(accOf(r), cardOf(r), asString(r.period), money(r))
     }
     for (const r of db.query(
-      `SELECT rf.period AS period, rf.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+      `SELECT rf.period AS period, rf.amount AS amount,
+       COALESCE(ex.account_id, c.account_id) AS account, ex.card_id AS card
        FROM refunds AS rf JOIN expenses AS ex ON ex.id = rf.expense_id AND ex.deleted_at IS NULL
        LEFT JOIN cards AS c ON c.id = ex.card_id
        WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ?`,
-      [uid(), from, to],
+      [uid(), billedFrom, to],
     )) {
-      add(accOf(r), asString(r.period), Money.zero(), Money.zero().sub(money(r)))
-    }
-    const cardAcc = new Map<number, number>()
-    for (const c of db.query('SELECT id, account_id FROM cards WHERE user_id = ?', [uid()])) {
-      if (c.account_id != null) cardAcc.set(asNumber(c.id), asNumber(c.account_id))
+      charge(accOf(r), cardOf(r), asString(r.period), Money.zero().sub(money(r)))
     }
     const { fixed, amountsByID, uf } = loadFixed(false)
-    const transfers = db.query('SELECT * FROM transfers WHERE user_id = ?', [uid()]).map(rowToTransfer)
-    for (let m = from; m <= to; m = addMonths(m, 1)) {
+    for (let m = billedFrom; m <= to; m = addMonths(m, 1)) {
       for (const fe of fixed) {
         if (!billsIn(fe, m)) continue
         // Its own account wins over its card's (mirrors Go).
-        const acc = fe.accountId ?? (fe.cardId != null ? (cardAcc.get(fe.cardId) ?? 0) : 0)
-        add(acc, m, Money.zero(), fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
+        const acc = fe.accountId ?? (fe.cardId != null ? (payments.cards.get(fe.cardId)?.accountId ?? 0) : 0)
+        charge(acc, fe.cardId, m, fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
       }
+    }
+    const transfers = db.query('SELECT * FROM transfers WHERE user_id = ?', [uid()]).map(rowToTransfer)
+    for (let m = from; m <= to; m = addMonths(m, 1)) {
       for (const t of transfers) {
         if (transferActiveIn(t, m)) move(t.fromAccountId, t.toAccountId, m, transferMoved(t, salaryOf.get(m) ?? Money.zero()))
       }
     }
-    return out
+    return { flows: out, owed }
   }
 
   // recordItemCurrency mirrors Go: a confirmed foreign item keeps its original
@@ -3496,7 +3569,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(period)) return { error: invalidPeriodError() }
       const accs = db.query('SELECT * FROM accounts WHERE user_id = ? ORDER BY name ASC', [uid()]).map(rowToAccount)
       const from = accs.reduce((m, a) => (a.openingPeriod < m ? a.openingPeriod : m), period)
-      const flows = accountFlows(accs, from, period)
+      const { flows, owed } = accountFlows(accs, from, period)
       const flowOf = (id: number, m: string): AccountFlow =>
         flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero(), tin: Money.zero(), tout: Money.zero() }
       const recs = new Map<number, { period: string; balance: string }[]>()
@@ -3537,7 +3610,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
       })
       const none = flowOf(0, period)
-      return { data: { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString() } }
+      const cards = [...owed.values()]
+        .filter((o) => !Money.fromString(o.owed).isZero())
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.cardId - b.cardId))
+      return {
+        data: { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString(), cards },
+      }
     },
 
     async CreateAccount(
@@ -3606,6 +3684,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
     async SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult> {
       return setAccountOf('cards', cardID, accountID, 'tarjeta no encontrada')
+    },
+
+    // SetCardPaymentDay mirrors Go (cardpayment.go): 1–31, null = the month after its cutoff.
+    async SetCardPaymentDay(cardID: number, day: number | null): Promise<OpResult> {
+      if (day !== null && (!Number.isInteger(day) || day < 1 || day > 31)) {
+        return { error: newError(ErrValidation, 'el día de pago debe estar entre 1 y 31') }
+      }
+      db.exec('UPDATE cards SET payment_day = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [day, cardID, uid()])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
+      return {}
     },
 
     async SetFixedExpenseAccount(fixedExpenseID: number, accountID: number | null): Promise<OpResult> {

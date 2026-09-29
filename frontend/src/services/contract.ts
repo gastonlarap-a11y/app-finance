@@ -30,6 +30,7 @@ export interface Card {
   billingDay: number
   lastDigits: string // last 4 digits, '' = not informed
   accountId: number | null // the account it is paid from
+  paymentDay: number | null // day of the month its statement is paid; null = the month after its cutoff
   color: string // looks.json color key, '' = automatic
   createdAt: string
   deletedAt?: string | null
@@ -92,10 +93,21 @@ export interface CatalogSummary {
 
 export type CatalogResult = Result<CatalogSummary>
 
+// What a card's statements billed up to a month and had not been paid by its
+// close: a liability of the account that pays the card (its purchases leave
+// that account in the month the statement is paid).
+export interface CardOwed {
+  cardId: number
+  name: string
+  owed: string
+  paymentPeriod: string // YYYY-MM the earliest of it is paid
+}
+
 export interface AccountsSummary {
   accounts: AccountView[]
   unassignedIngresos: string // the month's income no account claims
   unassignedGastos: string
+  cards: CardOwed[] // cards with something billed and not yet paid, by name
 }
 
 export interface AccountResult {
@@ -933,6 +945,7 @@ export interface FinanceServiceContract {
   SetExpenseAccount(expenseID: number, accountID: number | null): Promise<OpResult>
   SetIncomeAccount(incomeID: number, accountID: number | null): Promise<OpResult>
   SetCardAccount(cardID: number, accountID: number | null): Promise<OpResult>
+  SetCardPaymentDay(cardID: number, day: number | null): Promise<OpResult>
   SetFixedExpenseAccount(fixedExpenseID: number, accountID: number | null): Promise<OpResult>
   ListTransfers(): Promise<Transfer[]>
   CreateTransfer(
