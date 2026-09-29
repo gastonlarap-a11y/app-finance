@@ -32,9 +32,9 @@ func TestTransfersMoveBalancesNotTotals(t *testing.T) {
 		mustOK(t, "salary "+p, s.SetSalary(ctx, p, "2000000").Error)
 	}
 
-	salaryMove := s.CreateTransfer(ctx, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", "1500000", "2026-08", true)
+	salaryMove := s.CreateTransfer(ctx, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", TransferFixed, "1500000", "2026-08", true)
 	mustOK(t, "monthly", salaryMove.Error)
-	once := s.CreateTransfer(ctx, itau.Data.ID, mp.Data.ID, "Carga", "50000", "2026-09", false)
+	once := s.CreateTransfer(ctx, itau.Data.ID, mp.Data.ID, "Carga", TransferFixed, "50000", "2026-09", false)
 	mustOK(t, "once", once.Error)
 	if once.Data.EndPeriod != "2026-09" || salaryMove.Data.EndPeriod != "" {
 		t.Fatalf("end periods = %q / %q, want 2026-09 / \"\"", once.Data.EndPeriod, salaryMove.Data.EndPeriod)
@@ -70,7 +70,7 @@ func TestTransfersMoveBalancesNotTotals(t *testing.T) {
 		t.Fatalf("ending before its start: %v, want not found", r.Error)
 	}
 
-	mustOK(t, "UpdateTransfer", s.UpdateTransfer(ctx, once.Data.ID, itau.Data.ID, mp.Data.ID, "Carga MP", "80000").Error)
+	mustOK(t, "UpdateTransfer", s.UpdateTransfer(ctx, once.Data.ID, itau.Data.ID, mp.Data.ID, "Carga MP", TransferFixed, "80000").Error)
 	wantMoney(t, "mp after update", accountByName(t, s, "2026-09", "Mercado Pago").Balance, "80000")
 
 	mustOK(t, "DeleteTransfer", s.DeleteTransfer(ctx, once.Data.ID).Error)
@@ -92,25 +92,32 @@ func TestTransferValidation(t *testing.T) {
 	mustOK(t, "a", a.Error)
 	b := s.CreateAccount(ctx, "B", "vista", "0", "2026-09", false)
 	mustOK(t, "b", b.Error)
+	salary := s.CreateAccount(ctx, "Sueldo", "corriente", "0", "2026-09", true)
+	mustOK(t, "salary account", salary.Error)
 
 	tests := []struct {
 		name     string
 		from, to int64
+		mode     string
 		amount   string
 		period   string
 		wantCode string
 	}{
-		{"same account", a.Data.ID, a.Data.ID, "1000", "2026-09", shared.ErrValidation},
-		{"zero amount", a.Data.ID, b.Data.ID, "0", "2026-09", shared.ErrValidation},
-		{"negative amount", a.Data.ID, b.Data.ID, "-5", "2026-09", shared.ErrValidation},
-		{"not a number", a.Data.ID, b.Data.ID, "mucho", "2026-09", shared.ErrValidation},
-		{"bad period", a.Data.ID, b.Data.ID, "1000", "2026-13", shared.ErrValidation},
-		{"unknown account", a.Data.ID, 9999, "1000", "2026-09", shared.ErrNotFound},
-		{"valid", a.Data.ID, b.Data.ID, "1000", "2026-09", ""},
+		{"same account", a.Data.ID, a.Data.ID, TransferFixed, "1000", "2026-09", shared.ErrValidation},
+		{"zero amount", a.Data.ID, b.Data.ID, TransferFixed, "0", "2026-09", shared.ErrValidation},
+		{"negative amount", a.Data.ID, b.Data.ID, TransferFixed, "-5", "2026-09", shared.ErrValidation},
+		{"not a number", a.Data.ID, b.Data.ID, TransferFixed, "mucho", "2026-09", shared.ErrValidation},
+		{"bad period", a.Data.ID, b.Data.ID, TransferFixed, "1000", "2026-13", shared.ErrValidation},
+		{"unknown account", a.Data.ID, 9999, TransferFixed, "1000", "2026-09", shared.ErrNotFound},
+		{"unknown mode", a.Data.ID, b.Data.ID, "percent", "1000", "2026-09", shared.ErrValidation},
+		{"salary rest not from the salary account", a.Data.ID, b.Data.ID, TransferSalaryRest, "1000", "2026-09", shared.ErrValidation},
+		{"salary rest keeping a negative amount", salary.Data.ID, b.Data.ID, TransferSalaryRest, "-1", "2026-09", shared.ErrValidation},
+		{"salary rest keeping nothing", salary.Data.ID, b.Data.ID, TransferSalaryRest, "0", "2026-09", ""},
+		{"valid", a.Data.ID, b.Data.ID, TransferFixed, "1000", "2026-09", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res := s.CreateTransfer(ctx, tc.from, tc.to, "", tc.amount, tc.period, false)
+			res := s.CreateTransfer(ctx, tc.from, tc.to, "", tc.mode, tc.amount, tc.period, false)
 			if tc.wantCode == "" {
 				mustOK(t, "CreateTransfer", res.Error)
 				return
@@ -120,6 +127,47 @@ func TestTransferValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The salary lands in Banco de Chile and all of it but the mortgage goes on to
+// Itaú, whatever the salary is each month.
+func TestSalaryRestTransferFollowsTheSalary(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	chile := s.CreateAccount(ctx, "Banco de Chile", "corriente", "0", "2026-09", true)
+	mustOK(t, "chile", chile.Error)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "0", "2026-09", false)
+	mustOK(t, "itau", itau.Error)
+	mustOK(t, "september salary", s.SetSalary(ctx, "2026-09", "2300000").Error)
+	mustOK(t, "october salary", s.SetSalary(ctx, "2026-10", "2550000").Error)
+	mustOK(t, "tiny salary", s.SetSalary(ctx, "2026-12", "300000").Error)
+
+	rest := s.CreateTransfer(ctx, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", TransferSalaryRest, "470000", "2026-09", true)
+	mustOK(t, "salary rest", rest.Error)
+	if rest.Data.Mode != TransferSalaryRest {
+		t.Fatalf("mode = %q, want %q", rest.Data.Mode, TransferSalaryRest)
+	}
+
+	tests := []struct {
+		period, moved, chileBalance string
+	}{
+		{"2026-09", "1830000", "470000"},
+		{"2026-10", "2080000", "940000"},
+		{"2026-11", "0", "940000"},  // no salary yet: nothing moves
+		{"2026-12", "0", "1240000"}, // a salary below what stays: nothing moves, never less
+	}
+	for _, tc := range tests {
+		t.Run(tc.period, func(t *testing.T) {
+			wantMoney(t, "itau in", accountByName(t, s, tc.period, "Itaú").TransferIn, tc.moved)
+			c := accountByName(t, s, tc.period, "Banco de Chile")
+			wantMoney(t, "chile out", c.TransferOut, tc.moved)
+			wantMoney(t, "chile balance", c.Balance, tc.chileBalance)
+		})
+	}
+
+	// Back to a fixed amount.
+	mustOK(t, "UpdateTransfer", s.UpdateTransfer(ctx, rest.Data.ID, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", TransferFixed, "2000000").Error)
+	wantMoney(t, "fixed again", accountByName(t, s, "2026-11", "Itaú").TransferIn, "2000000")
 }
 
 func TestDigitalAccountKind(t *testing.T) {

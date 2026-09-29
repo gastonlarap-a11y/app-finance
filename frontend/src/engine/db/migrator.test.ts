@@ -51,6 +51,7 @@ describe('migrationFiles', () => {
       '20260927034',
       '20260927035',
       '20260928036',
+      '20260929038',
     ])
   })
 
@@ -76,7 +77,9 @@ describe('runMigrations', () => {
   it('rechaza sin escribir una base de una versión más nueva, e ignora migraciones retiradas', async () => {
     const db = await createTestDb()
     // Retiradas (template) o sólo de escritorio: anteriores a la última conocida.
-    db.exec("INSERT INTO bun_migrations (name, group_id) VALUES ('20260628001', 1), ('20260924017', 1)")
+    // 20260929037 borra la tabla del correo en escritorio: tiene que ordenar antes
+    // que la última migración de finanzas, o el iPad rechazaría cada base de escritorio.
+    db.exec("INSERT INTO bun_migrations (name, group_id) VALUES ('20260628001', 1), ('20260924017', 1), ('20260929037', 1)")
     expect(runMigrations(db)).toBe(0)
 
     db.exec("INSERT INTO bun_migrations (name, group_id) VALUES ('99991231999', 99)")

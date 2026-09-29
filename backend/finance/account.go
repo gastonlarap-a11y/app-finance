@@ -38,13 +38,16 @@ var accountKinds = []string{"corriente", "vista", "digital", "efectivo", "ahorro
 // AccountView is an account at the close of a month: its balance and what
 // came in and went out that month. Transfers between own accounts are apart
 // from ingresos/gastos: they move the balance, not what was earned or spent.
+// Balance is always the computed one; Conciliacion compares it with the real
+// balance when the month is reconciled for this account (nil otherwise).
 type AccountView struct {
 	Account
-	Balance     types.Decimal `json:"balance"`
-	Ingresos    types.Decimal `json:"ingresos"`
-	Gastos      types.Decimal `json:"gastos"`
-	TransferIn  types.Decimal `json:"transferIn"`
-	TransferOut types.Decimal `json:"transferOut"`
+	Balance      types.Decimal         `json:"balance"`
+	Ingresos     types.Decimal         `json:"ingresos"`
+	Gastos       types.Decimal         `json:"gastos"`
+	TransferIn   types.Decimal         `json:"transferIn"`
+	TransferOut  types.Decimal         `json:"transferOut"`
+	Conciliacion *ReconciliationStatus `json:"conciliacion"`
 }
 
 // AccountsSummary is every account at a month plus the month's movements no
@@ -215,15 +218,23 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	if err != nil {
 		return AccountsResult{Error: internalErr(err)}
 	}
+	recs, err := s.accountReconciliationsUpTo(ctx, uid, period)
+	if err != nil {
+		return AccountsResult{Error: internalErr(err)}
+	}
 	out := &AccountsSummary{Accounts: make([]AccountView, 0, len(accs))}
 	for _, a := range accs {
 		v := AccountView{Account: a, Balance: types.Zero(), Ingresos: types.Zero(), Gastos: types.Zero(),
 			TransferIn: types.Zero(), TransferOut: types.Zero()}
 		if a.OpeningPeriod <= period {
-			v.Balance = a.OpeningBalance
-			for m := a.OpeningPeriod; m <= period; m = addMonths(m, 1) {
+			start, balance, here := accountStart(a, recs[a.ID], period)
+			for m := start; m <= period; m = addMonths(m, 1) {
 				f := flows[a.ID][m]
-				v.Balance = v.Balance.Add(f.in).Sub(f.out).Add(f.tin).Sub(f.tout)
+				balance = balance.Add(f.in).Sub(f.out).Add(f.tin).Sub(f.tout)
+			}
+			v.Balance = balance
+			if here != nil {
+				v.Conciliacion = &ReconciliationStatus{SaldoReal: here.Balance, Calculado: balance, Diferencia: here.Balance.Sub(balance)}
 			}
 		}
 		f := flows[a.ID][period]
@@ -292,8 +303,10 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 	if err != nil {
 		return nil, err
 	}
+	salaryOf := make(map[string]types.Decimal, len(salaries)) // a salary_rest transfer follows it
 	for _, r := range salaries {
 		add(salaryAcc, r.Period, r.Amount, types.Zero())
+		salaryOf[r.Period] = r.Amount
 	}
 	incomes, err := scan("incomes", `SELECT period, amount, account_id AS account FROM incomes
 		WHERE user_id = ? AND deleted_at IS NULL AND period >= ? AND period <= ?`, uid, from, to)
@@ -363,7 +376,7 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 		}
 		for _, t := range transfers {
 			if t.activeIn(m) {
-				move(t.FromAccountID, t.ToAccountID, m, t.Amount)
+				move(t.FromAccountID, t.ToAccountID, m, t.moved(salaryOf[m]))
 			}
 		}
 	}

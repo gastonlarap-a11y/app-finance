@@ -11,6 +11,12 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
 
+// How much a transfer moves each month.
+const (
+	TransferFixed      = "fixed"       // Amount, every month the transfer covers
+	TransferSalaryRest = "salary_rest" // the month's salary minus Amount, which stays in the source account
+)
+
 // Transfer moves money between two of the profile's own accounts (the salary
 // passed on to the everyday account, topping up a digital wallet). It is
 // neither an expense nor an income: the app's total balance and every month's
@@ -24,7 +30,8 @@ type Transfer struct {
 	FromAccountID int64         `bun:"from_account_id,notnull" json:"fromAccountId"`
 	ToAccountID   int64         `bun:"to_account_id,notnull" json:"toAccountId"`
 	Description   string        `bun:"description,notnull" json:"description"`
-	Amount        types.Decimal `bun:"amount,notnull" json:"amount"`
+	Mode          string        `bun:"mode,notnull" json:"mode"`                // TransferFixed | TransferSalaryRest
+	Amount        types.Decimal `bun:"amount,notnull" json:"amount"`            // salary_rest: what stays behind
 	StartPeriod   string        `bun:"start_period,notnull" json:"startPeriod"` // YYYY-MM
 	EndPeriod     string        `bun:"end_period,notnull" json:"endPeriod"`     // YYYY-MM last month; "" = every month
 	CreatedAt     time.Time     `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
@@ -35,29 +42,60 @@ func (t Transfer) activeIn(period string) bool {
 	return period >= t.StartPeriod && (t.EndPeriod == "" || period <= t.EndPeriod)
 }
 
+// moved is what the transfer moves in a month whose salary is `salary`: a
+// salary_rest transfer never moves less than nothing (a month without salary
+// yet moves 0).
+func (t Transfer) moved(salary types.Decimal) types.Decimal {
+	if t.Mode != TransferSalaryRest {
+		return t.Amount
+	}
+	rest := salary.Sub(t.Amount)
+	if rest.IsNegative() {
+		return types.Zero()
+	}
+	return rest
+}
+
 type TransferResult struct {
 	Data  *Transfer        `json:"data,omitempty"`
 	Error *shared.AppError `json:"error,omitempty"`
 }
 
-// validTransfer checks what a transfer needs besides account ownership.
-func validTransfer(from, to int64, description, amount string) (string, types.Decimal, *shared.AppError) {
+// validTransfer checks what a transfer needs besides account ownership. A
+// fixed transfer moves a positive amount; a salary_rest one may keep nothing
+// behind (it then passes the whole salary on).
+func validTransfer(from, to int64, description, mode, amount string) (string, types.Decimal, *shared.AppError) {
 	if from == to {
 		return "", types.Zero(), shared.NewError(shared.ErrValidation, "la cuenta de origen y la de destino deben ser distintas")
 	}
+	if mode != TransferFixed && mode != TransferSalaryRest {
+		return "", types.Zero(), shared.NewError(shared.ErrValidation, "tipo de transferencia inválido: "+mode)
+	}
 	amt, err := types.New(strings.TrimSpace(amount))
-	if err != nil || !amt.IsPositive() {
+	if err != nil || amt.IsNegative() || (mode == TransferFixed && amt.IsZero()) {
 		return "", types.Zero(), shared.NewError(shared.ErrValidation, "monto inválido: "+amount)
 	}
 	return strings.TrimSpace(description), amt, nil
 }
 
-// ownAccounts proves both ends of a transfer are uid's accounts.
-func ownAccounts(ctx context.Context, idb bun.IDB, uid, from, to int64) *shared.AppError {
+// ownAccounts proves both ends of a transfer are uid's accounts and, for a
+// salary_rest transfer, that it leaves from the account the salary lands in.
+func ownAccounts(ctx context.Context, idb bun.IDB, uid, from, to int64, mode string) *shared.AppError {
 	for _, id := range []int64{from, to} {
 		if aerr := ownAccount(ctx, idb, uid, &id); aerr != nil {
 			return aerr
 		}
+	}
+	if mode != TransferSalaryRest {
+		return nil
+	}
+	salary, err := idb.NewSelect().Model((*Account)(nil)).
+		Where("id = ? AND user_id = ? AND receives_salary = 1", from, uid).Exists(ctx)
+	if err != nil {
+		return internalErr(err)
+	}
+	if !salary {
+		return shared.NewError(shared.ErrValidation, "para pasar el resto del sueldo, la cuenta de origen debe ser la que recibe el sueldo")
 	}
 	return nil
 }
@@ -70,11 +108,12 @@ func (s *FinanceService) ListTransfers(ctx context.Context) ([]Transfer, error) 
 }
 
 // CreateTransfer records money moved between two own accounts in startPeriod,
-// and in every month after it when monthly.
+// and in every month after it when monthly. `mode` says whether `amount` moves
+// as is (fixed) or stays behind while the rest of the month's salary moves.
 func (s *FinanceService) CreateTransfer(
-	ctx context.Context, fromAccountID, toAccountID int64, description, amount, startPeriod string, monthly bool,
+	ctx context.Context, fromAccountID, toAccountID int64, description, mode, amount, startPeriod string, monthly bool,
 ) TransferResult {
-	desc, amt, aerr := validTransfer(fromAccountID, toAccountID, description, amount)
+	desc, amt, aerr := validTransfer(fromAccountID, toAccountID, description, mode, amount)
 	if aerr != nil {
 		return TransferResult{Error: aerr}
 	}
@@ -82,7 +121,7 @@ func (s *FinanceService) CreateTransfer(
 		return TransferResult{Error: invalidPeriod()}
 	}
 	uid := s.uid()
-	if aerr := ownAccounts(ctx, s.db, uid, fromAccountID, toAccountID); aerr != nil {
+	if aerr := ownAccounts(ctx, s.db, uid, fromAccountID, toAccountID, mode); aerr != nil {
 		return TransferResult{Error: aerr}
 	}
 	end := startPeriod
@@ -90,29 +129,32 @@ func (s *FinanceService) CreateTransfer(
 		end = ""
 	}
 	tr := &Transfer{UserID: uid, FromAccountID: fromAccountID, ToAccountID: toAccountID, Description: desc,
-		Amount: amt, StartPeriod: startPeriod, EndPeriod: end}
+		Mode: mode, Amount: amt, StartPeriod: startPeriod, EndPeriod: end}
 	if _, err := s.db.NewInsert().Model(tr).Returning("*").Exec(ctx); err != nil {
 		return TransferResult{Error: internalErr(err)}
 	}
 	return TransferResult{Data: tr}
 }
 
-// UpdateTransfer changes a transfer's accounts, description and amount for
-// every month it covers (to change it from a month on, end it and create a new one).
-func (s *FinanceService) UpdateTransfer(ctx context.Context, id, fromAccountID, toAccountID int64, description, amount string) TransferResult {
-	desc, amt, aerr := validTransfer(fromAccountID, toAccountID, description, amount)
+// UpdateTransfer changes a transfer's accounts, description, mode and amount
+// for every month it covers (to change it from a month on, end it and create a
+// new one).
+func (s *FinanceService) UpdateTransfer(
+	ctx context.Context, id, fromAccountID, toAccountID int64, description, mode, amount string,
+) TransferResult {
+	desc, amt, aerr := validTransfer(fromAccountID, toAccountID, description, mode, amount)
 	if aerr != nil {
 		return TransferResult{Error: aerr}
 	}
 	uid := s.uid()
 	tr := new(Transfer)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if aerr := ownAccounts(ctx, tx, uid, fromAccountID, toAccountID); aerr != nil {
+		if aerr := ownAccounts(ctx, tx, uid, fromAccountID, toAccountID, mode); aerr != nil {
 			return aerr
 		}
 		res, err := tx.NewUpdate().Model((*Transfer)(nil)).
 			Set("from_account_id = ?", fromAccountID).Set("to_account_id = ?", toAccountID).
-			Set("description = ?", desc).Set("amount = ?", amt).
+			Set("description = ?", desc).Set("mode = ?", mode).Set("amount = ?", amt).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
 		if aerr := requireOne(res, err, "transferencia no encontrada"); aerr != nil {
 			return aerr

@@ -46,6 +46,10 @@ export const ImportSourceEmail = 'email'
 export const ImportSourcePDFAccount = 'pdf_account'
 export const ImportSourcePDFCard = 'pdf_card'
 export const ImportSourceCSV = 'csv' // a cartola exported to CSV by any bank (lib/statements/csv.ts)
+
+// Transfer modes (mirror backend/finance/transfer.go).
+export const TransferFixed = 'fixed'
+export const TransferSalaryRest = 'salary_rest'
 export const ImportPendiente = 'pendiente'
 export const ImportConfirmado = 'confirmado'
 export const ImportDescartado = 'descartado'
@@ -221,6 +225,7 @@ export function rowToTransfer(r: SqlRow): Transfer {
     fromAccountId: asNumber(r.from_account_id),
     toAccountId: asNumber(r.to_account_id),
     description: asString(r.description),
+    mode: asString(r.mode),
     amount: asString(r.amount),
     startPeriod: asString(r.start_period),
     endPeriod: asString(r.end_period),

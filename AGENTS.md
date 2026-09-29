@@ -152,7 +152,8 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   which finds every `user_id` table at run time); children go by `ON DELETE CASCADE`.
 - **Views over the ledger, never a second ledger**: accounts (`account.go`) and due dates
   (`dues.go`) only attribute or read existing flows; transfers between own accounts
-  (`transfer.go`) only move account balances. A receivable settles as a refund (`insertRefund`), a
+  (`transfer.go`, fixed or `salary_rest`) only move account balances, and an account
+  reconciliation (`accountreconciliation.go`) only restarts one account's balance. A receivable settles as a refund (`insertRefund`), a
   foreign-currency purchase keeps its pesos in `installment_amount`. None of them adds a monthly
   flow to `flowsBetween`.
 - **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —

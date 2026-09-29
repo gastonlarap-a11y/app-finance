@@ -199,9 +199,18 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if savingsAcct.Error != nil {
 		t.Fatalf("CreateAccount savings: %v", savingsAcct.Error)
 	}
-	transfer := fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "Ahorro mensual", "1000", period, true)
+	transfer := fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "Ahorro mensual", finance.TransferFixed, "1000", period, true)
 	if transfer.Error != nil {
 		t.Fatalf("CreateTransfer: %v", transfer.Error)
+	}
+	// A month already closed, so it can be reconciled (period is in the future).
+	const closed = "2026-01"
+	pastAcct := fin.CreateAccount(ctx, "Vista", "vista", "0", closed, false)
+	if pastAcct.Error != nil {
+		t.Fatalf("CreateAccount vista: %v", pastAcct.Error)
+	}
+	if r := fin.SetAccountReconciliation(ctx, pastAcct.Data.ID, closed, "1000"); r.Error != nil {
+		t.Fatalf("SetAccountReconciliation: %v", r.Error)
 	}
 	merchant := fin.CreateMerchant(ctx, "Farmacia del barrio")
 	if merchant.Error != nil {
@@ -279,11 +288,13 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetCardColor", func() finance.OpResult { return fin.SetCardColor(ctx, card.Data.ID, "blue") }},
 		{"SetSavingsGoalIcon", func() finance.OpResult { return fin.SetSavingsGoalIcon(ctx, goal.Data.ID, "car") }},
 		{"CreateTransfer", func() finance.OpResult {
-			return finance.OpResult{Error: fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "x", "1", period, false).Error}
+			return finance.OpResult{Error: fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "x", finance.TransferFixed, "1", period, false).Error}
 		}},
 		{"UpdateTransfer", func() finance.OpResult {
-			return finance.OpResult{Error: fin.UpdateTransfer(ctx, transfer.Data.ID, acct.Data.ID, savingsAcct.Data.ID, "x", "1").Error}
+			return finance.OpResult{Error: fin.UpdateTransfer(ctx, transfer.Data.ID, acct.Data.ID, savingsAcct.Data.ID, "x", finance.TransferFixed, "1").Error}
 		}},
+		{"SetAccountReconciliation", func() finance.OpResult { return fin.SetAccountReconciliation(ctx, pastAcct.Data.ID, closed, "5") }},
+		{"DeleteAccountReconciliation", func() finance.OpResult { return fin.DeleteAccountReconciliation(ctx, pastAcct.Data.ID, closed) }},
 		{"EndTransfer", func() finance.OpResult { return fin.EndTransfer(ctx, transfer.Data.ID, period) }},
 		{"DeleteTransfer", func() finance.OpResult { return fin.DeleteTransfer(ctx, transfer.Data.ID) }},
 		{"SetFixedExpenseAccount", func() finance.OpResult { return fin.SetFixedExpenseAccount(ctx, fe.Data.ID, nil) }},
@@ -417,6 +428,17 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	}
 	if trs, err := fin.ListTransfers(ctx); err != nil || len(trs) != 1 || trs[0].EndPeriod != "" {
 		t.Fatalf("Gastón's transfers after Camila = %+v (err %v), want his open monthly one", trs, err)
+	}
+	var vista *finance.AccountView
+	if r := fin.ListAccounts(ctx, closed); r.Error == nil {
+		for i := range r.Data.Accounts {
+			if r.Data.Accounts[i].ID == pastAcct.Data.ID {
+				vista = &r.Data.Accounts[i]
+			}
+		}
+	}
+	if vista == nil || vista.Conciliacion == nil || vista.Conciliacion.SaldoReal.String() != "1000" {
+		t.Fatalf("Gastón's account reconciliation after Camila = %+v, want his 1000", vista)
 	}
 }
 
