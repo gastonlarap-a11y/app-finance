@@ -18,6 +18,7 @@ const account = (id: number, name: string, receivesSalary = false): AccountView 
   gastos: '0',
   transferIn: '0',
   transferOut: '0',
+  conciliacion: null,
 })
 
 const state = vi.hoisted(() => ({
@@ -60,13 +61,24 @@ describe('TransfersSection', () => {
     await userEvent.fill(page.getByRole('textbox', { name: 'Monto' }), '1500000')
     await userEvent.fill(page.getByRole('textbox', { name: /Descripción/ }), 'Sueldo a Itaú')
     await page.getByRole('button', { name: 'Guardar' }).click()
-    await expect.poll(() => state.created).toEqual([[2, 1, 'Sueldo a Itaú', '1500000', '2026-09', true]])
+    await expect.poll(() => state.created).toEqual([[2, 1, 'Sueldo a Itaú', 'fixed', '1500000', '2026-09', true]])
   })
 
   it('lists a transfer with its accounts, amount and span', async () => {
     state.accounts = [account(1, 'Itaú'), account(2, 'Banco de Chile', true)]
     state.transfers = [
-      { id: 7, userId: 1, fromAccountId: 2, toAccountId: 1, description: 'Sueldo', amount: '1500000', startPeriod: '2026-08', endPeriod: '', createdAt: '' },
+      {
+        id: 7,
+        userId: 1,
+        fromAccountId: 2,
+        toAccountId: 1,
+        description: 'Sueldo',
+        mode: 'fixed',
+        amount: '1500000',
+        startPeriod: '2026-08',
+        endPeriod: '',
+        createdAt: '',
+      },
     ]
     await render(<TransfersSection period="2026-09" />)
     await expect.element(page.getByText('Mensual')).toBeVisible()

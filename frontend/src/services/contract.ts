@@ -49,12 +49,21 @@ export interface Account {
 }
 
 export interface AccountView extends Account {
-  balance: string // at the close of the month asked for
+  balance: string // at the close of the month asked for (always the computed one)
   ingresos: string // that month
   gastos: string // that month
   transferIn: string // that month, from other own accounts (not income)
   transferOut: string // that month, to other own accounts (not spending)
+  // The account's real balance at that month's close against the computed
+  // one; null until the account is reconciled that month. From the next month
+  // on, the balance starts from the real one.
+  conciliacion: ReconciliationStatus | null
 }
+
+// How much a transfer moves each month: 'fixed' moves its amount;
+// 'salary_rest' moves the month's salary minus its amount, which stays in the
+// source account (the account the salary lands in).
+export type TransferMode = 'fixed' | 'salary_rest'
 
 // Money moved between two own accounts: neither spending nor income, so only
 // the two accounts' balances move. One-off when endPeriod === startPeriod;
@@ -65,7 +74,8 @@ export interface Transfer {
   fromAccountId: number
   toAccountId: number
   description: string
-  amount: string
+  mode: string // TransferMode (Go serializes a plain string)
+  amount: string // salary_rest: what stays in the source account
   startPeriod: string // YYYY-MM
   endPeriod: string // YYYY-MM last month; '' = every month
   createdAt: string
@@ -929,13 +939,23 @@ export interface FinanceServiceContract {
     fromAccountID: number,
     toAccountID: number,
     description: string,
+    mode: string,
     amount: string,
     startPeriod: string,
     monthly: boolean,
   ): Promise<TransferResult>
-  UpdateTransfer(id: number, fromAccountID: number, toAccountID: number, description: string, amount: string): Promise<TransferResult>
+  UpdateTransfer(
+    id: number,
+    fromAccountID: number,
+    toAccountID: number,
+    description: string,
+    mode: string,
+    amount: string,
+  ): Promise<TransferResult>
   EndTransfer(id: number, lastPeriod: string): Promise<OpResult>
   DeleteTransfer(id: number): Promise<OpResult>
+  SetAccountReconciliation(accountID: number, period: string, balance: string): Promise<OpResult>
+  DeleteAccountReconciliation(accountID: number, period: string): Promise<OpResult>
   LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>

@@ -168,8 +168,8 @@ function TransferForm({
     setBusy(true)
     try {
       const res = transfer
-        ? await FinanceService.UpdateTransfer(transfer.id, from, to, description, amount)
-        : await FinanceService.CreateTransfer(from, to, description, amount, startPeriod, monthly)
+        ? await FinanceService.UpdateTransfer(transfer.id, from, to, description, 'fixed', amount)
+        : await FinanceService.CreateTransfer(from, to, description, 'fixed', amount, startPeriod, monthly)
       if (failed(res)) return
       onSaved()
       onClose()

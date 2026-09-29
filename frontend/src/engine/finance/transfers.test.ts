@@ -1,11 +1,12 @@
-// Mirror of backend/finance/transfer_test.go and catalog_test.go: same
-// scenarios, same numbers.
+// Mirror of backend/finance/transfer_test.go, accountreconciliation_test.go and
+// catalog_test.go: same scenarios, same numbers.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb } from '@/engine/testing/db'
 import { createFinanceService } from '@/engine/finance/service'
 import { createSession } from '@/engine/users/service'
 import { CATALOG } from '@/engine/finance/catalog'
 import { LOOK_COLORS, LOOK_ICONS } from '@/engine/finance/looks'
+import { addMonths, currentPeriod } from '@/engine/finance/period'
 import type { FinanceServiceContract, ImportCandidate } from '@/services/contract'
 
 let finance: FinanceServiceContract
@@ -33,8 +34,8 @@ describe('transfers', () => {
     const mp = ok(await finance.CreateAccount('Mercado Pago', 'digital', '0', '2026-07', false)).data!
     for (const p of ['2026-07', '2026-08', '2026-09']) ok(await finance.SetSalary(p, '2000000'))
 
-    const salaryMove = ok(await finance.CreateTransfer(chile.id, itau.id, 'Sueldo a Itaú', '1500000', '2026-08', true)).data!
-    const once = ok(await finance.CreateTransfer(itau.id, mp.id, 'Carga', '50000', '2026-09', false)).data!
+    const salaryMove = ok(await finance.CreateTransfer(chile.id, itau.id, 'Sueldo a Itaú', 'fixed', '1500000', '2026-08', true)).data!
+    const once = ok(await finance.CreateTransfer(itau.id, mp.id, 'Carga', 'fixed', '50000', '2026-09', false)).data!
     expect([once.endPeriod, salaryMove.endPeriod]).toEqual(['2026-09', ''])
 
     const cases: Array<[string, string, string, string, string]> = [
@@ -55,7 +56,7 @@ describe('transfers', () => {
     expect((await account('2026-09', 'Itaú')).balance).toBe('1450000')
     expect((await finance.EndTransfer(salaryMove.id, '2026-07')).error?.code).toBe('NOT_FOUND')
 
-    ok(await finance.UpdateTransfer(once.id, itau.id, mp.id, 'Carga MP', '80000'))
+    ok(await finance.UpdateTransfer(once.id, itau.id, mp.id, 'Carga MP', 'fixed', '80000'))
     expect((await account('2026-09', 'Mercado Pago')).balance).toBe('80000')
 
     ok(await finance.DeleteTransfer(once.id))
@@ -67,20 +68,50 @@ describe('transfers', () => {
   it('validate like Go', async () => {
     const a = ok(await finance.CreateAccount('A', 'corriente', '0', '2026-09', false)).data!
     const b = ok(await finance.CreateAccount('B', 'vista', '0', '2026-09', false)).data!
-    const cases: Array<[string, number, number, string, string, string | undefined]> = [
-      ['same account', a.id, a.id, '1000', '2026-09', 'VALIDATION_ERROR'],
-      ['zero amount', a.id, b.id, '0', '2026-09', 'VALIDATION_ERROR'],
-      ['negative amount', a.id, b.id, '-5', '2026-09', 'VALIDATION_ERROR'],
-      ['not a number', a.id, b.id, 'mucho', '2026-09', 'VALIDATION_ERROR'],
-      ['bad period', a.id, b.id, '1000', '2026-13', 'VALIDATION_ERROR'],
-      ['unknown account', a.id, 9999, '1000', '2026-09', 'NOT_FOUND'],
-      ['valid', a.id, b.id, '1000', '2026-09', undefined],
+    const salary = ok(await finance.CreateAccount('Sueldo', 'corriente', '0', '2026-09', true)).data!
+    const cases: Array<[string, number, number, string, string, string, string | undefined]> = [
+      ['same account', a.id, a.id, 'fixed', '1000', '2026-09', 'VALIDATION_ERROR'],
+      ['zero amount', a.id, b.id, 'fixed', '0', '2026-09', 'VALIDATION_ERROR'],
+      ['negative amount', a.id, b.id, 'fixed', '-5', '2026-09', 'VALIDATION_ERROR'],
+      ['not a number', a.id, b.id, 'fixed', 'mucho', '2026-09', 'VALIDATION_ERROR'],
+      ['bad period', a.id, b.id, 'fixed', '1000', '2026-13', 'VALIDATION_ERROR'],
+      ['unknown account', a.id, 9999, 'fixed', '1000', '2026-09', 'NOT_FOUND'],
+      ['unknown mode', a.id, b.id, 'percent', '1000', '2026-09', 'VALIDATION_ERROR'],
+      ['salary rest not from the salary account', a.id, b.id, 'salary_rest', '1000', '2026-09', 'VALIDATION_ERROR'],
+      ['salary rest keeping a negative amount', salary.id, b.id, 'salary_rest', '-1', '2026-09', 'VALIDATION_ERROR'],
+      ['salary rest keeping nothing', salary.id, b.id, 'salary_rest', '0', '2026-09', undefined],
+      ['valid', a.id, b.id, 'fixed', '1000', '2026-09', undefined],
     ]
-    for (const [name, from, to, amount, period, code] of cases) {
-      expect((await finance.CreateTransfer(from, to, '', amount, period, false)).error?.code, name).toBe(code)
+    for (const [name, from, to, mode, amount, period, code] of cases) {
+      expect((await finance.CreateTransfer(from, to, '', mode, amount, period, false)).error?.code, name).toBe(code)
     }
     ok(await finance.CreateAccount('Mercado Pago', 'digital', '0', '2026-09', false))
     expect((await finance.CreateAccount('X', 'prepago', '0', '2026-09', false)).error?.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('salary_rest passes on the salary minus what stays, whatever the salary', async () => {
+    const chile = ok(await finance.CreateAccount('Banco de Chile', 'corriente', '0', '2026-09', true)).data!
+    const itau = ok(await finance.CreateAccount('Itaú', 'corriente', '0', '2026-09', false)).data!
+    ok(await finance.SetSalary('2026-09', '2300000'))
+    ok(await finance.SetSalary('2026-10', '2550000'))
+    ok(await finance.SetSalary('2026-12', '300000'))
+    const rest = ok(await finance.CreateTransfer(chile.id, itau.id, 'Sueldo a Itaú', 'salary_rest', '470000', '2026-09', true)).data!
+    expect(rest.mode).toBe('salary_rest')
+
+    const cases: Array<[string, string, string]> = [
+      ['2026-09', '1830000', '470000'],
+      ['2026-10', '2080000', '940000'],
+      ['2026-11', '0', '940000'], // no salary yet: nothing moves
+      ['2026-12', '0', '1240000'], // a salary below what stays: nothing moves, never less
+    ]
+    for (const [period, moved, chileBalance] of cases) {
+      expect((await account(period, 'Itaú')).transferIn, period).toBe(moved)
+      const c = await account(period, 'Banco de Chile')
+      expect([c.transferOut, c.balance], period).toEqual([moved, chileBalance])
+    }
+
+    ok(await finance.UpdateTransfer(rest.id, chile.id, itau.id, 'Sueldo a Itaú', 'fixed', '2000000'))
+    expect((await account('2026-11', 'Itaú')).transferIn).toBe('2000000')
   })
 
   it("a fixed expense's own account wins over its card's", async () => {
@@ -99,6 +130,51 @@ describe('transfers', () => {
     ok(await finance.UpdateFixedExpense(mortgage.id, 'Dividendo casa', 'Vivienda', null))
     expect((await account('2026-09', 'Banco de Chile')).gastos).toBe('609000')
     expect((await finance.SetFixedExpenseAccount(mortgage.id, 9999)).error?.code).toBe('NOT_FOUND')
+  })
+})
+
+describe('account reconciliations', () => {
+  it('restart the balance from the real close, as a view', async () => {
+    const itau = ok(await finance.CreateAccount('Itaú', 'corriente', '100000', '2026-07', true)).data!
+    ok(await finance.CreateAccount('Otra', 'vista', '5000', '2026-07', false))
+    for (const p of ['2026-07', '2026-08', '2026-09']) ok(await finance.SetSalary(p, '1000000'))
+    const monthSummary = ok(await finance.MonthlySummary('2026-09')).data!.balance
+
+    expect((await account('2026-09', 'Itaú')).balance).toBe('3100000')
+    ok(await finance.SetAccountReconciliation(itau.id, '2026-08', '1950000'))
+    const aug = await account('2026-08', 'Itaú')
+    expect(aug.balance).toBe('2100000')
+    expect(aug.conciliacion).toEqual({ saldoReal: '1950000', calculado: '2100000', diferencia: '-150000' })
+    const sep = await account('2026-09', 'Itaú')
+    expect([sep.balance, sep.conciliacion]).toEqual(['2950000', null])
+    expect((await account('2026-09', 'Otra')).balance).toBe('5000')
+    expect(ok(await finance.MonthlySummary('2026-09')).data!.balance).toBe(monthSummary)
+
+    ok(await finance.SetAccountReconciliation(itau.id, '2026-08', '2000000'))
+    expect((await account('2026-09', 'Itaú')).balance).toBe('3000000')
+    ok(await finance.DeleteAccountReconciliation(itau.id, '2026-08'))
+    expect((await account('2026-09', 'Itaú')).balance).toBe('3100000')
+    expect((await finance.DeleteAccountReconciliation(itau.id, '2026-08')).error?.code).toBe('NOT_FOUND')
+
+    ok(await finance.SetAccountReconciliation(itau.id, '2026-07', '0'))
+    ok(await finance.UpdateAccount(itau.id, 'Itaú', 'corriente', '500000', '2026-09', true))
+    expect((await account('2026-09', 'Itaú')).balance).toBe('1500000')
+  })
+
+  it('validate like Go', async () => {
+    const acc = ok(await finance.CreateAccount('Itaú', 'corriente', '0', '2026-07', false)).data!
+    const future = addMonths(currentPeriod(), 1)
+    const cases: Array<[string, number, string, string, string | undefined]> = [
+      ['bad period', acc.id, '2026-13', '1000', 'VALIDATION_ERROR'],
+      ['future month', acc.id, future, '1000', 'VALIDATION_ERROR'],
+      ['before the opening', acc.id, '2026-06', '1000', 'VALIDATION_ERROR'],
+      ['not a number', acc.id, '2026-08', 'mucho', 'VALIDATION_ERROR'],
+      ['unknown account', 9999, '2026-08', '1000', 'NOT_FOUND'],
+      ['overdraft', acc.id, '2026-08', '-25000', undefined],
+    ]
+    for (const [name, id, period, balance, code] of cases) {
+      expect((await finance.SetAccountReconciliation(id, period, balance)).error?.code, name).toBe(code)
+    }
   })
 })
 

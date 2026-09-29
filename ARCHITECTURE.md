@@ -256,7 +256,19 @@ it lands in to the everyday one, topping up a digital wallet): one-off (`end_per
 start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). They are neither spending
 nor income, so they never enter `flowsBetween` or a month's summary; they only move the two
 accounts' balances (`AccountView.TransferIn/Out`). Deleting an account deletes its transfers
-(`ON DELETE CASCADE`).
+(`ON DELETE CASCADE`). A transfer's `mode` (migration `20260929038`) says what it moves each month:
+`fixed` moves `amount`; `salary_rest` moves that month's salary minus `amount`, which stays behind
+(the salary lands in one bank, the mortgage is debited there, the rest goes on to the everyday
+account). It never moves less than nothing, and a month without a salary yet moves 0. Only the
+account that receives the salary can be its source (`ownAccounts`).
+
+**Account reconciliations** (`accountreconciliation.go`, migration `20260929038`) are the monthly
+reconciliation per account: the real balance at a month's close, as the bank shows it. From the
+next month on, `ListAccounts` starts the account's balance there instead of adding every flow since
+the opening (`accountStart`), so an unrecorded fee stops skewing it; the opening balance is set once.
+The reconciled month keeps its computed balance and shows `AccountView.Conciliacion`
+(real/computed/difference). A reconciliation before the account's opening is ignored. Like the
+accounts, they are a view: the month's summary never changes.
 
 **Due dates and reminders** (`dues.go`, migration `20260927034`; `backend/reminders`).
 `UpcomingDues(today, days)` lists what is still unpaid and falls due from `today` to `days` later,

@@ -236,7 +236,11 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     const card = ok(await finance.CreateCard('Visa', '1000000', 24, '')).data!
     const goal = ok(await finance.CreateSavingsGoal('Viaje', '500000', '')).data!
     const savingsAcct = ok(await finance.CreateAccount('Ahorro', 'ahorro', '0', period, false)).data!
-    const transfer = ok(await finance.CreateTransfer(acct.id, savingsAcct.id, 'Ahorro mensual', '1000', period, true)).data!
+    const transfer = ok(await finance.CreateTransfer(acct.id, savingsAcct.id, 'Ahorro mensual', 'fixed', '1000', period, true)).data!
+    // A month already closed, so it can be reconciled (period is in the future).
+    const closed = '2026-01'
+    const pastAcct = ok(await finance.CreateAccount('Vista', 'vista', '0', closed, false)).data!
+    ok(await finance.SetAccountReconciliation(pastAcct.id, closed, '1000'))
     const merchant = ok(await finance.CreateMerchant('Farmacia del barrio')).data!
 
     ok(await users.CreateUser('Camila'))
@@ -274,8 +278,10 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetCategoryLook(cat.data!.id, 'tag', 'blue'),
       () => finance.SetCardColor(card.id, 'blue'),
       () => finance.SetSavingsGoalIcon(goal.id, 'car'),
-      () => finance.CreateTransfer(acct.id, savingsAcct.id, 'x', '1', period, false),
-      () => finance.UpdateTransfer(transfer.id, acct.id, savingsAcct.id, 'x', '1'),
+      () => finance.CreateTransfer(acct.id, savingsAcct.id, 'x', 'fixed', '1', period, false),
+      () => finance.UpdateTransfer(transfer.id, acct.id, savingsAcct.id, 'x', 'fixed', '1'),
+      () => finance.SetAccountReconciliation(pastAcct.id, closed, '5'),
+      () => finance.DeleteAccountReconciliation(pastAcct.id, closed),
       () => finance.EndTransfer(transfer.id, period),
       () => finance.DeleteTransfer(transfer.id),
       () => finance.SetFixedExpenseAccount(fe.data!.id, null),
@@ -311,6 +317,8 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await users.SwitchUser(1))
     expect(await finance.ListMerchants()).toHaveLength(1)
     expect((await finance.ListTransfers()).map((t) => t.endPeriod)).toEqual([''])
+    const vista = ok(await finance.ListAccounts(closed)).data!.accounts.find((a) => a.id === pastAcct.id)
+    expect(vista?.conciliacion?.saldoReal).toBe('1000')
     expect(ok(await finance.MonthlySummary('2026-02')).data!.acumuladoDesde).toBe(reconciled)
     const mv = ok(await finance.MonthlySummary(period)).data!.movimientos.find((m) => m.fixedId === fe.data!.id)
     expect(mv).toMatchObject({ amount: '8000', status: 'pendiente' })

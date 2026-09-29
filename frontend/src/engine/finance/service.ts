@@ -163,6 +163,8 @@ import {
   StatementNational,
   StatusPagado,
   StatusPendiente,
+  TransferFixed,
+  TransferSalaryRest,
   rowToAccount,
   rowToCard,
   rowToCardStatement,
@@ -212,15 +214,29 @@ function transferActiveIn(t: Transfer, period: string): boolean {
   return period >= t.startPeriod && (t.endPeriod === '' || period <= t.endPeriod)
 }
 
-// validTransfer mirrors Go: distinct accounts and a positive amount.
+// transferMoved mirrors Transfer.moved: a salary_rest transfer moves the
+// month's salary minus its amount, never less than nothing.
+function transferMoved(t: Transfer, salary: Money): Money {
+  const amount = Money.fromString(t.amount)
+  if (t.mode !== TransferSalaryRest) return amount
+  const rest = salary.sub(amount)
+  return rest.isNegative() ? Money.zero() : rest
+}
+
+// validTransfer mirrors Go: distinct accounts, a known mode, and a positive
+// amount (salary_rest may keep nothing behind).
 function validTransfer(
   from: number,
   to: number,
   description: string,
+  mode: string,
   amount: string,
 ): { description: string; amount: string; error?: ReturnType<typeof newError> } {
   if (from === to) {
     return { description: '', amount: '', error: newError(ErrValidation, 'la cuenta de origen y la de destino deben ser distintas') }
+  }
+  if (mode !== TransferFixed && mode !== TransferSalaryRest) {
+    return { description: '', amount: '', error: newError(ErrValidation, 'tipo de transferencia inválido: ' + mode) }
   }
   let amt: Money
   try {
@@ -228,7 +244,9 @@ function validTransfer(
   } catch {
     return { description: '', amount: '', error: newError(ErrValidation, 'monto inválido: ' + amount) }
   }
-  if (!amt.gt(Money.zero())) return { description: '', amount: '', error: newError(ErrValidation, 'monto inválido: ' + amount) }
+  if (amt.isNegative() || (mode === TransferFixed && amt.isZero())) {
+    return { description: '', amount: '', error: newError(ErrValidation, 'monto inválido: ' + amount) }
+  }
   return { description: description.trim(), amount: amt.toString() }
 }
 
@@ -1721,13 +1739,40 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   }
 
   // ownAccounts mirrors Go: both ends of a transfer are the profile's accounts.
-  function ownAccounts(from: number, to: number): ReturnType<typeof newError> | undefined {
+  function ownAccounts(from: number, to: number, mode: string): ReturnType<typeof newError> | undefined {
     for (const id of [from, to]) {
       if (db.query('SELECT 1 FROM accounts WHERE id = ? AND user_id = ?', [id, uid()]).length === 0) {
         return newError(ErrNotFound, 'cuenta no encontrada')
       }
     }
+    if (mode !== TransferSalaryRest) return undefined
+    if (db.query('SELECT 1 FROM accounts WHERE id = ? AND user_id = ? AND receives_salary = 1', [from, uid()]).length === 0) {
+      return newError(ErrValidation, 'para pasar el resto del sueldo, la cuenta de origen debe ser la que recibe el sueldo')
+    }
     return undefined
+  }
+
+  // accountStart mirrors Go: an account's balance at `period` starts from its
+  // latest reconciliation before it (from the month after) or its opening; a
+  // reconciliation before the opening is ignored. `here` is `period`'s own.
+  function accountStart(
+    a: Account,
+    recs: readonly { period: string; balance: string }[],
+    period: string,
+  ): { from: string; balance: Money; here: Money | null } {
+    let from = a.openingPeriod
+    let balance = Money.fromString(a.openingBalance)
+    let here: Money | null = null
+    for (const r of recs) {
+      if (r.period < a.openingPeriod) continue
+      if (r.period < period) {
+        from = addMonths(r.period, 1)
+        balance = Money.fromString(r.balance)
+      } else if (r.period === period) {
+        here = Money.fromString(r.balance)
+      }
+    }
+    return { from, balance, here }
   }
 
   // setAccountOf mirrors Go: names the account (null = none) of one row.
@@ -1762,12 +1807,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     const salaryAcc = accs.find((a) => a.receivesSalary)?.id ?? 0
     const accOf = (r: SqlRow) => (r.account == null ? 0 : asNumber(r.account))
     const money = (r: SqlRow) => Money.fromString(asString(r.amount))
+    const salaryOf = new Map<string, Money>() // a salary_rest transfer follows it
     for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
       uid(),
       from,
       to,
     ])) {
       add(salaryAcc, asString(r.period), money(r), Money.zero())
+      salaryOf.set(asString(r.period), money(r))
     }
     for (const r of db.query(
       `SELECT period, amount, account_id AS account FROM incomes
@@ -1808,7 +1855,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         add(acc, m, Money.zero(), fixedCharge(fe, amountsByID.get(fe.id) ?? [], uf, m).clp)
       }
       for (const t of transfers) {
-        if (transferActiveIn(t, m)) move(t.fromAccountId, t.toAccountId, m, Money.fromString(t.amount))
+        if (transferActiveIn(t, m)) move(t.fromAccountId, t.toAccountId, m, transferMoved(t, salaryOf.get(m) ?? Money.zero()))
       }
     }
     return out
@@ -3413,13 +3460,30 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const flows = accountFlows(accs, from, period)
       const flowOf = (id: number, m: string): AccountFlow =>
         flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero(), tin: Money.zero(), tout: Money.zero() }
+      const recs = new Map<number, { period: string; balance: string }[]>()
+      for (const r of db.query(
+        'SELECT account_id, period, balance FROM account_reconciliations WHERE user_id = ? AND period <= ? ORDER BY period ASC',
+        [uid(), period],
+      )) {
+        const id = asNumber(r.account_id)
+        recs.set(id, [...(recs.get(id) ?? []), { period: asString(r.period), balance: asString(r.balance) }])
+      }
       const views: AccountView[] = accs.map((a) => {
         let balance = Money.zero()
+        let conciliacion: AccountView['conciliacion'] = null
         if (a.openingPeriod <= period) {
-          balance = Money.fromString(a.openingBalance)
-          for (let m = a.openingPeriod; m <= period; m = addMonths(m, 1)) {
+          const start = accountStart(a, recs.get(a.id) ?? [], period)
+          balance = start.balance
+          for (let m = start.from; m <= period; m = addMonths(m, 1)) {
             const f = flowOf(a.id, m)
             balance = balance.add(f.in).sub(f.out).add(f.tin).sub(f.tout)
+          }
+          if (start.here) {
+            conciliacion = {
+              saldoReal: start.here.toString(),
+              calculado: balance.toString(),
+              diferencia: start.here.sub(balance).toString(),
+            }
           }
         }
         const f = flowOf(a.id, period)
@@ -3430,6 +3494,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           gastos: f.out.toString(),
           transferIn: f.tin.toString(),
           transferOut: f.tout.toString(),
+          conciliacion,
         }
       })
       const none = flowOf(0, period)
@@ -3515,19 +3580,20 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       fromAccountID: number,
       toAccountID: number,
       description: string,
+      mode: string,
       amount: string,
       startPeriod: string,
       monthly: boolean,
     ): Promise<TransferResult> {
-      const v = validTransfer(fromAccountID, toAccountID, description, amount)
+      const v = validTransfer(fromAccountID, toAccountID, description, mode, amount)
       if (v.error) return { error: v.error }
       if (!validPeriod(startPeriod)) return { error: invalidPeriodError() }
-      const owned = ownAccounts(fromAccountID, toAccountID)
+      const owned = ownAccounts(fromAccountID, toAccountID, mode)
       if (owned) return { error: owned }
       const row = db.query(
-        `INSERT INTO transfers (user_id, from_account_id, to_account_id, description, amount, start_period, end_period, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-        [uid(), fromAccountID, toAccountID, v.description, v.amount, startPeriod, monthly ? '' : startPeriod, nowIso()],
+        `INSERT INTO transfers (user_id, from_account_id, to_account_id, description, mode, amount, start_period, end_period, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        [uid(), fromAccountID, toAccountID, v.description, mode, v.amount, startPeriod, monthly ? '' : startPeriod, nowIso()],
       )[0]
       if (!row) throw new Error('INSERT transfers RETURNING produced no row')
       return { data: rowToTransfer(row) }
@@ -3538,16 +3604,17 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       fromAccountID: number,
       toAccountID: number,
       description: string,
+      mode: string,
       amount: string,
     ): Promise<TransferResult> {
-      const v = validTransfer(fromAccountID, toAccountID, description, amount)
+      const v = validTransfer(fromAccountID, toAccountID, description, mode, amount)
       if (v.error) return { error: v.error }
-      const owned = ownAccounts(fromAccountID, toAccountID)
+      const owned = ownAccounts(fromAccountID, toAccountID, mode)
       if (owned) return { error: owned }
       db.exec(
-        `UPDATE transfers SET from_account_id = ?, to_account_id = ?, description = ?, amount = ?
+        `UPDATE transfers SET from_account_id = ?, to_account_id = ?, description = ?, mode = ?, amount = ?
          WHERE id = ? AND user_id = ?`,
-        [fromAccountID, toAccountID, v.description, v.amount, id, uid()],
+        [fromAccountID, toAccountID, v.description, mode, v.amount, id, uid()],
       )
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'transferencia no encontrada') }
       return { data: rowToTransfer(db.query('SELECT * FROM transfers WHERE id = ?', [id])[0]!) }
@@ -4334,6 +4401,40 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(period)) return { error: invalidPeriodError() }
       db.exec('DELETE FROM reconciliations WHERE user_id = ? AND period = ?', [uid(), period])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'no hay conciliación para ese mes') }
+      return {}
+    },
+
+    // Mirrors accountreconciliation.go: one account's real close of a month.
+    async SetAccountReconciliation(accountID: number, period: string, balance: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      if (period > currentPeriod()) {
+        return { error: newError(ErrValidation, 'no se puede conciliar un mes que aún no empieza') }
+      }
+      let real: Money
+      try {
+        real = Money.fromString(balance.trim())
+      } catch {
+        return { error: newError(ErrValidation, 'saldo inválido: ' + balance) }
+      }
+      const acc = db.query('SELECT opening_period FROM accounts WHERE id = ? AND user_id = ?', [accountID, uid()])[0]
+      if (!acc) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+      const opening = asString(acc.opening_period)
+      if (period < opening) {
+        return { error: newError(ErrValidation, 'la cuenta empieza en ' + opening + ': concilia desde ese mes') }
+      }
+      const now = nowIso()
+      db.exec(
+        `INSERT INTO account_reconciliations (user_id, account_id, period, balance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (account_id, period) DO UPDATE SET balance = EXCLUDED.balance, updated_at = EXCLUDED.updated_at`,
+        [uid(), accountID, period, real.toString(), now, now],
+      )
+      return {}
+    },
+
+    async DeleteAccountReconciliation(accountID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      db.exec('DELETE FROM account_reconciliations WHERE user_id = ? AND account_id = ? AND period = ?', [uid(), accountID, period])
+      if (db.changes() === 0) return { error: newError(ErrNotFound, 'esa cuenta no tiene conciliación en ese mes') }
       return {}
     },
 
