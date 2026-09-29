@@ -317,6 +317,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     // Gastón's base salary is his only.
     expect(ok(await finance.MonthlySummary('2026-03')).data).toMatchObject({ salary: '0', salaryExpected: false })
     expect(ok(await finance.GetBaseSalary('2026-03')).data).toBeUndefined()
+    expect(ok(await finance.AccountsClosing('2026-01')).data).toMatchObject({ complete: false, missing: [], accounts: '0' })
     expect(await finance.UFMonthsNeeded()).toEqual([])
     expect(await finance.ListTransfers()).toEqual([])
     // The catalog lands in Camila's own profile, never in Gastón's (checked below).

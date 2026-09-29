@@ -64,6 +64,54 @@ func TestAccountReconciliationRestartsTheBalance(t *testing.T) {
 	}
 }
 
+// The accounts' real closing balances, minus what the cards owed then, are the
+// app's balance per the bank — once every account that counts is reconciled.
+// A savings goal's account stays apart: its money is already Ahorro.
+func TestAccountsClosing(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "1000000", "2026-08", false)
+	mustOK(t, "itau", itau.Error)
+	mp := s.CreateAccount(ctx, "Mercado Pago", "digital", "0", "2026-08", false)
+	mustOK(t, "mp", mp.Error)
+	ahorro := s.CreateAccount(ctx, "Cuenta de ahorro", "ahorro", "2000000", "2026-08", false)
+	mustOK(t, "ahorro", ahorro.Error)
+	later := s.CreateAccount(ctx, "Cuenta nueva", "vista", "0", "2026-10", false)
+	mustOK(t, "later", later.Error)
+	goal := s.CreateSavingsGoal(ctx, "Pie departamento", "9000000", "")
+	mustOK(t, "goal", goal.Error)
+	mustOK(t, "SetSavingsGoalAccount", s.SetSavingsGoalAccount(ctx, goal.Data.ID, &ahorro.Data.ID).Error)
+	card := s.CreateCard(ctx, "Visa", "2000000", 24, "")
+	mustOK(t, "card", card.Error)
+	mustOK(t, "SetCardAccount", s.SetCardAccount(ctx, card.Data.ID, &itau.Data.ID).Error)
+	mustOK(t, "card purchase", s.CreateExpense(ctx, "2026-08-10", "Zapatillas", "", "", &card.Data.ID, KindUnico, "100000", 1).Error)
+
+	closing := func() *AccountsClosing {
+		t.Helper()
+		r := s.AccountsClosing(ctx, "2026-08")
+		mustOK(t, "AccountsClosing", r.Error)
+		return r.Data
+	}
+	// The savings account and the one opened later do not count.
+	if c := closing(); c.Complete || len(c.Missing) != 2 || c.Missing[0] != "Itaú" || c.Missing[1] != "Mercado Pago" {
+		t.Fatalf("before reconciling = %+v, want Itaú and Mercado Pago missing", c)
+	}
+	mustOK(t, "itau close", s.SetAccountReconciliation(ctx, itau.Data.ID, "2026-08", "990000").Error)
+	mustOK(t, "mp close", s.SetAccountReconciliation(ctx, mp.Data.ID, "2026-08", "20000").Error)
+
+	c := closing()
+	if !c.Complete || len(c.Missing) != 0 {
+		t.Fatalf("after reconciling = %+v, want complete", c)
+	}
+	wantMoney(t, "accounts", c.Accounts, "1010000")
+	wantMoney(t, "cards owed (August's statement, paid in September)", c.CardsOwed, "100000")
+	wantMoney(t, "total", c.Total, "910000")
+	wantMoney(t, "saved apart", c.Saved, "2000000")
+
+	wantCode(t, "a month that has not started", s.AccountsClosing(ctx, addMonths(currentPeriod(), 1)).Error, shared.ErrValidation)
+	wantCode(t, "a bad period", s.AccountsClosing(ctx, "2026-13").Error, shared.ErrValidation)
+}
+
 func TestAccountReconciliationValidation(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

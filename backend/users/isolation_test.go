@@ -384,6 +384,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 	if r := fin.GetBaseSalary(ctx, "2026-03"); r.Error != nil || r.Data != nil {
 		t.Fatalf("Camila GetBaseSalary = %+v, want none", r)
 	}
+	if r := fin.AccountsClosing(ctx, "2026-01"); r.Error != nil || r.Data.Complete || len(r.Data.Missing) != 0 || !r.Data.Accounts.IsZero() {
+		t.Fatalf("Camila AccountsClosing = %+v, want none of Gastón's accounts", r.Data)
+	}
 	if need, err := fin.UFMonthsNeeded(ctx); err != nil || len(need) != 0 {
 		t.Fatalf("Camila UFMonthsNeeded = %v (err %v), want none (the UF expense is Gastón's)", need, err)
 	}
