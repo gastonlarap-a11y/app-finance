@@ -245,10 +245,18 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	if !validPeriod(period) {
 		return AccountsResult{Error: invalidPeriod()}
 	}
-	uid := s.uid()
+	out, err := s.accountsSummary(ctx, s.uid(), period)
+	if err != nil {
+		return AccountsResult{Error: internalErr(err)}
+	}
+	return AccountsResult{Data: out}
+}
+
+// accountsSummary is ListAccounts for uid at the close of period.
+func (s *FinanceService) accountsSummary(ctx context.Context, uid int64, period string) (*AccountsSummary, error) {
 	var accs []Account
 	if err := s.db.NewSelect().Model(&accs).Where("user_id = ?", uid).Order("name ASC").Scan(ctx); err != nil {
-		return AccountsResult{Error: internalErr(err)}
+		return nil, fmt.Errorf("listing accounts: %w", err)
 	}
 	from := period
 	for _, a := range accs {
@@ -256,11 +264,11 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	}
 	flows, owed, err := s.accountFlows(ctx, uid, accs, from, period)
 	if err != nil {
-		return AccountsResult{Error: internalErr(err)}
+		return nil, err
 	}
 	recs, err := s.accountReconciliationsUpTo(ctx, uid, period)
 	if err != nil {
-		return AccountsResult{Error: internalErr(err)}
+		return nil, err
 	}
 	out := &AccountsSummary{Accounts: make([]AccountView, 0, len(accs)), Cards: make([]CardOwed, 0, len(owed))}
 	for _, o := range owed {
@@ -292,7 +300,7 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	}
 	none := flows[0][period]
 	out.UnassignedIngreso, out.UnassignedGastos = types.Zero().Add(none.in), types.Zero().Add(none.out)
-	return AccountsResult{Data: out}
+	return out, nil
 }
 
 // accountFlows sums, per account (0 = none) and month in [from, to], the same

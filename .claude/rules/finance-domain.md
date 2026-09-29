@@ -19,7 +19,9 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
   (`liveGoalContributions`), like installments of a deleted expense. A withdrawal is a negative
-  contribution (`WithdrawSavings`); a goal's balance never goes below zero.
+  contribution (`WithdrawSavings`); a goal's balance never goes below zero. A goal that follows a
+  savings account holds its balance, and the net transfers into it are the month's Ahorro
+  (`goalTransfers`, summed by every savings helper — never read contributions alone).
 - **Carried balance restarts at a reconciliation**: `cumulativeBalanceBefore` = latest
   `reconciliations` row before the month (real closing balance; the opening balance is one on the
   month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to

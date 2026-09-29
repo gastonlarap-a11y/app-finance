@@ -3,6 +3,7 @@
 // (sqlite-wasm) instead of the Go backend. Every query filters by the active
 // user id (session.active()), mirroring the desktop invariant.
 import type {
+  AccountsSummary,
   AppError,
   BudgetStatus,
   Card,
@@ -1828,6 +1829,58 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return {}
   }
 
+  // accountsSummary mirrors Go: every account at the close of `period`, the
+  // month's movements no account claims, and what each card still owed.
+  function accountsSummary(period: string): AccountsSummary {
+    const accs = db.query('SELECT * FROM accounts WHERE user_id = ? ORDER BY name ASC', [uid()]).map(rowToAccount)
+    const from = accs.reduce((m, a) => (a.openingPeriod < m ? a.openingPeriod : m), period)
+    const { flows, owed } = accountFlows(accs, from, period)
+    const flowOf = (id: number, m: string): AccountFlow =>
+      flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero(), tin: Money.zero(), tout: Money.zero() }
+    const recs = new Map<number, { period: string; balance: string }[]>()
+    for (const r of db.query(
+      'SELECT account_id, period, balance FROM account_reconciliations WHERE user_id = ? AND period <= ? ORDER BY period ASC',
+      [uid(), period],
+    )) {
+      const id = asNumber(r.account_id)
+      recs.set(id, [...(recs.get(id) ?? []), { period: asString(r.period), balance: asString(r.balance) }])
+    }
+    const views: AccountView[] = accs.map((a) => {
+      let balance = Money.zero()
+      let conciliacion: AccountView['conciliacion'] = null
+      if (a.openingPeriod <= period) {
+        const start = accountStart(a, recs.get(a.id) ?? [], period)
+        balance = start.balance
+        for (let m = start.from; m <= period; m = addMonths(m, 1)) {
+          const f = flowOf(a.id, m)
+          balance = balance.add(f.in).sub(f.out).add(f.tin).sub(f.tout)
+        }
+        if (start.here) {
+          conciliacion = {
+            saldoReal: start.here.toString(),
+            calculado: balance.toString(),
+            diferencia: start.here.sub(balance).toString(),
+          }
+        }
+      }
+      const f = flowOf(a.id, period)
+      return {
+        ...a,
+        balance: balance.toString(),
+        ingresos: f.in.toString(),
+        gastos: f.out.toString(),
+        transferIn: f.tin.toString(),
+        transferOut: f.tout.toString(),
+        conciliacion,
+      }
+    })
+    const none = flowOf(0, period)
+    const cards = [...owed.values()]
+      .filter((o) => !Money.fromString(o.owed).isZero())
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.cardId - b.cardId))
+    return { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString(), cards }
+  }
+
   // cardPayments mirrors Go's loadCardPayments + paymentPeriod: the month each
   // card's statement of a month is paid in — its imported «pagar hasta» (the
   // earliest of the month's statements; a date before the month it bills is
@@ -2786,7 +2839,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     // Savings contributions left the account too; refunds came back into it.
     return total
       .sub(sumFixedBetween(after, before))
-      .sub(sumContributions('period > ? AND period < ?', [after, before]))
+      .sub(savingsBetween(after, before))
       .add(refundsBetween(after, before))
   }
 
@@ -2806,12 +2859,81 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     return contributionRows(where, params).reduce((acc, c) => acc.add(Money.fromString(c.amount)), Money.zero())
   }
 
+  // A month's Ahorro mirrors Go: contributions by hand to live goals plus the
+  // money transferred into (net of out of) the accounts live goals follow.
+
+  // savingsIn: what live goals received in one month.
+  function savingsIn(period: string): Money {
+    return savingsByMonth(period, period).get(period) ?? Money.zero()
+  }
+
+  // savingsBetween: what live goals received in every month strictly between
+  // `after` ('' = from the start) and `before`.
+  function savingsBetween(after: string, before: string): Money {
+    let total = sumContributions('period > ? AND period < ?', [after, before])
+    for (const amt of goalTransfers(after === '' ? '' : addMonths(after, 1), addMonths(before, -1)).values()) {
+      total = total.add(amt)
+    }
+    return total
+  }
+
   function savingsByMonth(from: string, to: string): Map<string, Money> {
-    const out = new Map<string, Money>()
+    const out = goalTransfers(from, to)
     for (const c of contributionRows('period >= ? AND period <= ?', [from, to])) {
       out.set(c.period, (out.get(c.period) ?? Money.zero()).add(Money.fromString(c.amount)))
     }
     return out
+  }
+
+  // goalTransfers mirrors Go: per month in [from, to] ('' from = the first
+  // transfer), what transfers moved into the accounts live goals follow, net of
+  // what they moved out of them (a transfer between two such accounts nets zero).
+  function goalTransfers(from: string, to: string): Map<string, Money> {
+    const out = new Map<string, Money>()
+    const backing = new Set(
+      db
+        .query('SELECT account_id FROM savings_goals WHERE user_id = ? AND account_id IS NOT NULL AND deleted_at IS NULL', [uid()])
+        .map((r) => asNumber(r.account_id)),
+    )
+    if (backing.size === 0) return out
+    const transfers = db
+      .query('SELECT * FROM transfers WHERE user_id = ?', [uid()])
+      .map(rowToTransfer)
+      .filter((t) => backing.has(t.toAccountId) || backing.has(t.fromAccountId))
+    if (transfers.length === 0) return out
+    const start = from !== '' ? from : transfers.reduce((m, t) => (t.startPeriod < m ? t.startPeriod : m), transfers[0]!.startPeriod)
+    const salaryOf = new Map<string, Money>() // a salary_rest transfer follows the month's salary
+    if (transfers.some((t) => t.mode === TransferSalaryRest)) {
+      for (const r of db.query('SELECT period, amount FROM period_salaries WHERE user_id = ? AND period >= ? AND period <= ?', [
+        uid(),
+        start,
+        to,
+      ])) {
+        salaryOf.set(asString(r.period), Money.fromString(asString(r.amount)))
+      }
+    }
+    for (let m = start; m <= to; m = addMonths(m, 1)) {
+      for (const t of transfers) {
+        if (!transferActiveIn(t, m) || backing.has(t.toAccountId) === backing.has(t.fromAccountId)) continue
+        const moved = transferMoved(t, salaryOf.get(m) ?? Money.zero())
+        out.set(m, (out.get(m) ?? Money.zero()).add(backing.has(t.fromAccountId) ? Money.zero().sub(moved) : moved))
+      }
+    }
+    return out
+  }
+
+  // handGoalError mirrors Go's handGoal: a live goal of the profile that takes
+  // contributions by hand (one following an account is fed by transfers).
+  function handGoalError(goalID: number): ReturnType<typeof newError> | undefined {
+    const row = db.query('SELECT account_id FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
+      goalID,
+      uid(),
+    ])[0]
+    if (!row) return newError(ErrNotFound, 'meta no encontrada')
+    if (row.account_id != null) {
+      return newError(ErrValidation, 'la meta sigue el saldo de su cuenta: transfiere a esa cuenta en vez de anotar un aporte')
+    }
+    return undefined
   }
 
   // listSavingsGoals mirrors the Go helper; `now` is injected for testability.
@@ -2831,9 +2953,17 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       list.push(c)
       byGoal.set(c.goalId, list)
     }
+    // A goal that follows an account holds that account's balance this month.
+    const balances = new Map<number, Money>()
+    if (goals.some((g) => g.accountId !== null)) {
+      for (const a of accountsSummary(now).accounts) balances.set(a.id, Money.fromString(a.balance))
+    }
     return goals.map((g) => {
       const contributions = byGoal.get(g.id) ?? []
-      const saved = contributions.reduce((acc, c) => acc.add(Money.fromString(c.amount)), Money.zero())
+      const saved =
+        g.accountId !== null
+          ? (balances.get(g.accountId) ?? Money.zero())
+          : contributions.reduce((acc, c) => acc.add(Money.fromString(c.amount)), Money.zero())
       const target = Money.fromString(g.targetAmount)
       const remaining = target.gt(saved) ? target.sub(saved) : Money.zero()
       let monthsLeft = 0
@@ -3567,55 +3697,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
     async ListAccounts(period: string): Promise<AccountsResult> {
       if (!validPeriod(period)) return { error: invalidPeriodError() }
-      const accs = db.query('SELECT * FROM accounts WHERE user_id = ? ORDER BY name ASC', [uid()]).map(rowToAccount)
-      const from = accs.reduce((m, a) => (a.openingPeriod < m ? a.openingPeriod : m), period)
-      const { flows, owed } = accountFlows(accs, from, period)
-      const flowOf = (id: number, m: string): AccountFlow =>
-        flows.get(id)?.get(m) ?? { in: Money.zero(), out: Money.zero(), tin: Money.zero(), tout: Money.zero() }
-      const recs = new Map<number, { period: string; balance: string }[]>()
-      for (const r of db.query(
-        'SELECT account_id, period, balance FROM account_reconciliations WHERE user_id = ? AND period <= ? ORDER BY period ASC',
-        [uid(), period],
-      )) {
-        const id = asNumber(r.account_id)
-        recs.set(id, [...(recs.get(id) ?? []), { period: asString(r.period), balance: asString(r.balance) }])
-      }
-      const views: AccountView[] = accs.map((a) => {
-        let balance = Money.zero()
-        let conciliacion: AccountView['conciliacion'] = null
-        if (a.openingPeriod <= period) {
-          const start = accountStart(a, recs.get(a.id) ?? [], period)
-          balance = start.balance
-          for (let m = start.from; m <= period; m = addMonths(m, 1)) {
-            const f = flowOf(a.id, m)
-            balance = balance.add(f.in).sub(f.out).add(f.tin).sub(f.tout)
-          }
-          if (start.here) {
-            conciliacion = {
-              saldoReal: start.here.toString(),
-              calculado: balance.toString(),
-              diferencia: start.here.sub(balance).toString(),
-            }
-          }
-        }
-        const f = flowOf(a.id, period)
-        return {
-          ...a,
-          balance: balance.toString(),
-          ingresos: f.in.toString(),
-          gastos: f.out.toString(),
-          transferIn: f.tin.toString(),
-          transferOut: f.tout.toString(),
-          conciliacion,
-        }
-      })
-      const none = flowOf(0, period)
-      const cards = [...owed.values()]
-        .filter((o) => !Money.fromString(o.owed).isZero())
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.cardId - b.cardId))
-      return {
-        data: { accounts: views, unassignedIngresos: none.in.toString(), unassignedGastos: none.out.toString(), cards },
-      }
+      return { data: accountsSummary(period) }
     },
 
     async CreateAccount(
@@ -4182,7 +4264,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         catTotals.set(cat, (catTotals.get(cat) ?? Money.zero()).add(amount))
       }
 
-      const ahorro = sumContributions('period = ?', [period])
+      const ahorro = savingsIn(period)
       const balance = disponible.sub(gastos).sub(ahorro)
       // Cupo usado per card = all PENDING installments across every period.
       const cupoUsado = pendingByCard()
@@ -4625,6 +4707,34 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return {}
     },
 
+    // SetSavingsGoalAccount mirrors Go (savings.go): a goal follows a savings
+    // account (null = back to contributions by hand); not one with contributions
+    // by hand, and an account backs one live goal at most.
+    async SetSavingsGoalAccount(goalID: number, accountID: number | null): Promise<OpResult> {
+      const user = uid()
+      return db.transaction((): OpResult => {
+        const live = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [goalID, user])
+        if (live.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        if (accountID !== null) {
+          if (db.query('SELECT 1 FROM accounts WHERE id = ? AND user_id = ?', [accountID, user]).length === 0) {
+            return { error: newError(ErrNotFound, 'cuenta no encontrada') }
+          }
+          if (db.query('SELECT 1 FROM savings_contributions WHERE goal_id = ? LIMIT 1', [goalID]).length > 0) {
+            return {
+              error: newError(ErrConflict, 'la meta tiene aportes anotados a mano: elimínalos antes de que siga a una cuenta'),
+            }
+          }
+          const other = db.query(
+            `SELECT name FROM savings_goals WHERE user_id = ? AND account_id = ? AND id <> ? AND deleted_at IS NULL LIMIT 1`,
+            [user, accountID, goalID],
+          )[0]
+          if (other) return { error: newError(ErrConflict, `esa cuenta ya respalda la meta «${asString(other.name)}»`) }
+        }
+        db.exec('UPDATE savings_goals SET account_id = ? WHERE id = ? AND user_id = ?', [accountID, goalID, user])
+        return {}
+      })
+    },
+
     // ---------- search ----------
 
     async SearchExpenses(f: ExpenseFilter): Promise<ExpenseSearchResult> {
@@ -4807,7 +4917,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     },
 
     async RestoreSavingsGoal(id: number): Promise<OpResult> {
-      return restoreRow('savings_goals', id, 'meta no encontrada')
+      try {
+        return restoreRow('savings_goals', id, 'meta no encontrada')
+      } catch (err) {
+        // Another live goal now follows this goal's account (mirrors Go).
+        if (isUniqueViolation(err)) return { error: newError(ErrConflict, 'otra meta ya sigue la cuenta de esta meta') }
+        throw err
+      }
     },
 
     async AddSavingsContribution(goalID: number, period: string, amount: string): Promise<SavingsContributionResult> {
@@ -4817,11 +4933,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el aporte debe ser mayor a 0') }
       const value = parsed.amount.toString()
       return db.transaction((): SavingsContributionResult => {
-        const owned = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
-          goalID,
-          uid(),
-        ])
-        if (owned.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        const notByHand = handGoalError(goalID)
+        if (notByHand) return { error: notByHand }
         const row = db.query(
           `INSERT INTO savings_contributions (user_id, goal_id, period, amount, created_at)
            VALUES (?, ?, ?, ?, ?) RETURNING *`,
@@ -4841,11 +4954,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.amount.isZero()) return { error: newError(ErrValidation, 'el retiro debe ser mayor a 0') }
       const amt = parsed.amount
       return db.transaction((): SavingsContributionResult => {
-        const owned = db.query('SELECT 1 FROM savings_goals WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [
-          goalID,
-          uid(),
-        ])
-        if (owned.length === 0) return { error: newError(ErrNotFound, 'meta no encontrada') }
+        const notByHand = handGoalError(goalID)
+        if (notByHand) return { error: notByHand }
         const saved = goalBalance(goalID)
         if (amt.gt(saved)) {
           return { error: newError(ErrValidation, `no puedes retirar más de lo ahorrado en la meta (${saved.toString()})`) }

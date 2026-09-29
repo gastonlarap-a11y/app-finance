@@ -305,6 +305,7 @@ export function rowToSavingsGoal(r: SqlRow): SavingsGoal {
     targetAmount: asString(r.target_amount),
     targetPeriod: asString(r.target_period),
     icon: asString(r.icon),
+    accountId: asNullableNumber(r.account_id),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
   }

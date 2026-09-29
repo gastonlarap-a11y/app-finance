@@ -288,6 +288,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetCardColor", func() finance.OpResult { return fin.SetCardColor(ctx, card.Data.ID, "blue") }},
 		{"SetCardPaymentDay", func() finance.OpResult { return fin.SetCardPaymentDay(ctx, card.Data.ID, nil) }},
 		{"SetSavingsGoalIcon", func() finance.OpResult { return fin.SetSavingsGoalIcon(ctx, goal.Data.ID, "car") }},
+		{"SetSavingsGoalAccount", func() finance.OpResult { return fin.SetSavingsGoalAccount(ctx, goal.Data.ID, nil) }},
 		{"CreateTransfer", func() finance.OpResult {
 			return finance.OpResult{Error: fin.CreateTransfer(ctx, acct.Data.ID, savingsAcct.Data.ID, "x", finance.TransferFixed, "1", period, false).Error}
 		}},

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,11 @@ import (
 // SavingsGoal is a target amount the user saves towards, optionally by a month.
 // Soft-deleted into the Papelera like the other user entities; its
 // contributions ride along (they have no deleted_at of their own).
+//
+// A goal either keeps contributions entered by hand or follows a real savings
+// account (AccountID), the way Monarch and Copilot link goals to accounts:
+// then what it holds is that account's balance, and the money transferred into
+// the account each month is that month's Ahorro (goalTransfers).
 type SavingsGoal struct {
 	bun.BaseModel `bun:"table:savings_goals,alias:sg"`
 
@@ -26,6 +32,7 @@ type SavingsGoal struct {
 	TargetAmount types.Decimal `bun:"target_amount,notnull" json:"targetAmount"`
 	TargetPeriod string        `bun:"target_period,notnull" json:"targetPeriod"` // YYYY-MM; "" = sin fecha
 	Icon         string        `bun:"icon,notnull" json:"icon"`                  // clave de ícono de looks.json; "" = automático
+	AccountID    *int64        `bun:"account_id" json:"accountId"`               // cuenta de ahorro que sigue; nil = aportes a mano
 	CreatedAt    time.Time     `bun:"created_at,nullzero,default:current_timestamp" json:"createdAt"`
 	DeletedAt    *time.Time    `bun:",soft_delete" json:"deletedAt,omitempty"`
 }
@@ -104,8 +111,78 @@ func (s *FinanceService) DeleteSavingsGoal(ctx context.Context, id int64) OpResu
 	return s.softDelete(ctx, (*SavingsGoal)(nil), id, "meta no encontrada")
 }
 
+// RestoreSavingsGoal undoes a soft delete. Fails with ErrConflict when another
+// live goal now follows the account this one followed.
 func (s *FinanceService) RestoreSavingsGoal(ctx context.Context, id int64) OpResult {
-	return s.restore(ctx, (*SavingsGoal)(nil), id, "meta no encontrada", "")
+	return s.restore(ctx, (*SavingsGoal)(nil), id, "meta no encontrada", "otra meta ya sigue la cuenta de esta meta")
+}
+
+// SetSavingsGoalAccount makes a live goal follow a savings account of the
+// profile (nil = back to contributions by hand). A goal with contributions
+// entered by hand cannot follow an account (both would count as Ahorro), and
+// an account backs one live goal at most.
+func (s *FinanceService) SetSavingsGoalAccount(ctx context.Context, goalID int64, accountID *int64) OpResult {
+	uid := s.uid()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := liveGoal(ctx, tx, uid, goalID); err != nil {
+			return err
+		}
+		if accountID != nil {
+			if aerr := ownAccount(ctx, tx, uid, accountID); aerr != nil {
+				return aerr
+			}
+			saved, err := tx.NewSelect().Model((*SavingsContribution)(nil)).Where("goal_id = ?", goalID).Exists(ctx)
+			if err != nil {
+				return fmt.Errorf("checking contributions: %w", err)
+			}
+			if saved {
+				return shared.NewError(shared.ErrConflict,
+					"la meta tiene aportes anotados a mano: elimínalos antes de que siga a una cuenta")
+			}
+			var other []SavingsGoal
+			if err := tx.NewSelect().Model(&other).Column("name").
+				Where("user_id = ? AND account_id = ? AND id <> ?", uid, *accountID, goalID).Limit(1).Scan(ctx); err != nil {
+				return fmt.Errorf("checking the account's goal: %w", err)
+			}
+			if len(other) > 0 {
+				return shared.NewError(shared.ErrConflict, "esa cuenta ya respalda la meta «"+other[0].Name+"»")
+			}
+		}
+		_, err := tx.NewUpdate().Model((*SavingsGoal)(nil)).Set("account_id = ?", accountID).
+			Where("id = ? AND user_id = ?", goalID, uid).Exec(ctx)
+		return err
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
+}
+
+// liveGoal loads uid's goal `id` (not in the trash), or fails with NotFound.
+func liveGoal(ctx context.Context, idb bun.IDB, uid, id int64) (*SavingsGoal, error) {
+	goal := new(SavingsGoal)
+	err := idb.NewSelect().Model(goal).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, shared.NewError(shared.ErrNotFound, "meta no encontrada")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("loading goal: %w", err)
+	}
+	return goal, nil
+}
+
+// handGoal loads a goal that takes contributions by hand: a goal following an
+// account is fed by transfers into it.
+func handGoal(ctx context.Context, idb bun.IDB, uid, id int64) error {
+	goal, err := liveGoal(ctx, idb, uid, id)
+	if err != nil {
+		return err
+	}
+	if goal.AccountID != nil {
+		return shared.NewError(shared.ErrValidation,
+			"la meta sigue el saldo de su cuenta: transfiere a esa cuenta en vez de anotar un aporte")
+	}
+	return nil
 }
 
 // AddSavingsContribution records money put towards a (live, own) goal in `period`.
@@ -123,14 +200,10 @@ func (s *FinanceService) AddSavingsContribution(ctx context.Context, goalID int6
 	uid := s.uid()
 	c := &SavingsContribution{UserID: uid, GoalID: goalID, Period: period, Amount: amt}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		ok, err := tx.NewSelect().Model((*SavingsGoal)(nil)).Where("id = ? AND user_id = ?", goalID, uid).Exists(ctx)
-		if err != nil {
+		if err := handGoal(ctx, tx, uid, goalID); err != nil {
 			return err
 		}
-		if !ok {
-			return shared.NewError(shared.ErrNotFound, "meta no encontrada")
-		}
-		_, err = tx.NewInsert().Model(c).Returning("*").Exec(ctx)
+		_, err := tx.NewInsert().Model(c).Returning("*").Exec(ctx)
 		return err
 	})
 	if err != nil {
@@ -157,12 +230,8 @@ func (s *FinanceService) WithdrawSavings(ctx context.Context, goalID int64, peri
 	uid := s.uid()
 	c := &SavingsContribution{UserID: uid, GoalID: goalID, Period: period, Amount: types.Zero().Sub(amt)}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		ok, err := tx.NewSelect().Model((*SavingsGoal)(nil)).Where("id = ? AND user_id = ?", goalID, uid).Exists(ctx)
-		if err != nil {
+		if err := handGoal(ctx, tx, uid, goalID); err != nil {
 			return err
-		}
-		if !ok {
-			return shared.NewError(shared.ErrNotFound, "meta no encontrada")
 		}
 		saved, err := goalBalance(ctx, tx, goalID)
 		if err != nil {
@@ -244,6 +313,17 @@ func (s *FinanceService) listSavingsGoals(ctx context.Context, uid int64, now st
 	for _, c := range contribs {
 		byGoal[c.GoalID] = append(byGoal[c.GoalID], c)
 	}
+	// A goal that follows an account holds that account's balance this month.
+	balances := map[int64]types.Decimal{}
+	if slices.ContainsFunc(goals, func(g SavingsGoal) bool { return g.AccountID != nil }) {
+		sum, err := s.accountsSummary(ctx, uid, now)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range sum.Accounts {
+			balances[a.ID] = a.Balance
+		}
+	}
 
 	out := make([]SavingsGoalView, 0, len(goals))
 	for _, g := range goals {
@@ -253,6 +333,9 @@ func (s *FinanceService) listSavingsGoals(ctx context.Context, uid int64, now st
 		}
 		for _, c := range v.Contributions {
 			v.Saved = v.Saved.Add(c.Amount)
+		}
+		if g.AccountID != nil {
+			v.Saved = types.Zero().Add(balances[*g.AccountID])
 		}
 		v.Remaining = types.Zero()
 		if g.TargetAmount.GT(v.Saved) {
@@ -270,32 +353,112 @@ func (s *FinanceService) listSavingsGoals(ctx context.Context, uid int64, now st
 	return out, nil
 }
 
-// savingsIn sums the contributions of live goals for one month.
+// A month's Ahorro is what live goals received that month: contributions by
+// hand, plus the money transferred into (net of out of) the accounts that live
+// goals follow. Every savings sum below adds both, so the month, the carried
+// balance, the year and the forecast agree.
+
+// savingsIn sums what live goals received in one month.
 func (s *FinanceService) savingsIn(ctx context.Context, uid int64, period string) (types.Decimal, error) {
-	return s.sumContributions(ctx, uid, "period = ?", period)
+	byMonth, err := s.savingsByMonth(ctx, uid, period, period)
+	if err != nil {
+		return types.Zero(), err
+	}
+	return types.Zero().Add(byMonth[period]), nil
 }
 
-// savingsBetween sums the contributions of live goals for every month strictly
+// savingsBetween sums what live goals received in every month strictly
 // between `after` ("" = from the start) and `before`.
 func (s *FinanceService) savingsBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
-	return s.sumContributions(ctx, uid, "period > ? AND period < ?", after, before)
+	total, err := sumAmounts(ctx, s.db.NewSelect().Model((*SavingsContribution)(nil)).
+		Where("user_id = ?", uid).Where(liveGoalContributions).Where("period > ? AND period < ?", after, before))
+	if err != nil {
+		return types.Zero(), err
+	}
+	from := ""
+	if after != "" {
+		from = addMonths(after, 1)
+	}
+	moved, err := s.goalTransfers(ctx, uid, from, addMonths(before, -1))
+	if err != nil {
+		return types.Zero(), err
+	}
+	for _, amt := range moved {
+		total = total.Add(amt)
+	}
+	return total, nil
 }
 
-func (s *FinanceService) sumContributions(ctx context.Context, uid int64, where string, args ...any) (types.Decimal, error) {
-	return sumAmounts(ctx, s.db.NewSelect().Model((*SavingsContribution)(nil)).
-		Where("user_id = ?", uid).Where(liveGoalContributions).Where(where, args...))
-}
-
-// savingsByMonth sums live-goal contributions per month in [from, to].
+// savingsByMonth sums what live goals received per month in [from, to].
 func (s *FinanceService) savingsByMonth(ctx context.Context, uid int64, from, to string) (map[string]types.Decimal, error) {
 	var contribs []SavingsContribution
 	if err := s.db.NewSelect().Model(&contribs).
 		Where("user_id = ? AND period >= ? AND period <= ?", uid, from, to).Where(liveGoalContributions).Scan(ctx); err != nil {
 		return nil, err
 	}
-	out := map[string]types.Decimal{}
+	out, err := s.goalTransfers(ctx, uid, from, to)
+	if err != nil {
+		return nil, err
+	}
 	for _, c := range contribs {
 		out[c.Period] = out[c.Period].Add(c.Amount)
+	}
+	return out, nil
+}
+
+// goalTransfers is, per month in [from, to] ("" from = the first transfer),
+// the money transfers moved into the accounts live goals follow, net of what
+// they moved out of them; a transfer between two such accounts nets zero.
+func (s *FinanceService) goalTransfers(ctx context.Context, uid int64, from, to string) (map[string]types.Decimal, error) {
+	out := map[string]types.Decimal{}
+	var backing []int64
+	if err := s.db.NewSelect().Model((*SavingsGoal)(nil)).Column("account_id").
+		Where("user_id = ? AND account_id IS NOT NULL", uid).Scan(ctx, &backing); err != nil {
+		return nil, fmt.Errorf("goal accounts: %w", err)
+	}
+	if len(backing) == 0 {
+		return out, nil
+	}
+	var transfers []Transfer
+	if err := s.db.NewSelect().Model(&transfers).Where("user_id = ?", uid).
+		Where("(to_account_id IN (?) OR from_account_id IN (?))", bun.List(backing), bun.List(backing)).Scan(ctx); err != nil {
+		return nil, fmt.Errorf("goal transfers: %w", err)
+	}
+	if len(transfers) == 0 {
+		return out, nil
+	}
+	if from == "" {
+		from = transfers[0].StartPeriod
+		for _, t := range transfers {
+			from = min(from, t.StartPeriod)
+		}
+	}
+	salaryOf := map[string]types.Decimal{} // a salary_rest transfer follows the month's salary
+	if slices.ContainsFunc(transfers, func(t Transfer) bool { return t.Mode == TransferSalaryRest }) {
+		var salaries []PeriodSalary
+		if err := s.db.NewSelect().Model(&salaries).
+			Where("user_id = ? AND period >= ? AND period <= ?", uid, from, to).Scan(ctx); err != nil {
+			return nil, fmt.Errorf("salaries: %w", err)
+		}
+		for _, sal := range salaries {
+			salaryOf[sal.Period] = sal.Amount
+		}
+	}
+	isBacking := make(map[int64]bool, len(backing))
+	for _, id := range backing {
+		isBacking[id] = true
+	}
+	for m := from; m <= to; m = addMonths(m, 1) {
+		for _, t := range transfers {
+			if !t.activeIn(m) || isBacking[t.ToAccountID] == isBacking[t.FromAccountID] {
+				continue
+			}
+			amt := t.moved(salaryOf[m])
+			if isBacking[t.FromAccountID] {
+				amt = types.Zero().Sub(amt)
+			}
+			out[m] = out[m].Add(amt)
+		}
 	}
 	return out, nil
 }

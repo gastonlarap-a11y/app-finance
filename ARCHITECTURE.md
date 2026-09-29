@@ -168,7 +168,13 @@ outflow of their month: `MonthlySummary.Ahorro`, `Balance = Disponible − Gasto
 year view and the forecast. A withdrawal (`WithdrawSavings`) is a negative contribution: the same sums
 give the money back to its month, and a goal never goes below zero (withdrawing more than it holds, or
 deleting a contribution a withdrawal relies on, is refused). A goal past its target month and still
-short is `Overdue`, flagged in the Ahorro view. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
+short is `Overdue`, flagged in the Ahorro view. A goal may instead **follow a savings account**
+(`savings_goals.account_id`, migration `20260929040`, `SetSavingsGoalAccount`; one live goal per
+account), as Monarch and Copilot link goals to accounts: it holds that account's balance at the
+current month (`accountsSummary`), and the money transfers move into the account, net of what they
+move out of it, is that month's Ahorro (`goalTransfers`, added by `savingsIn`/`savingsBetween`/
+`savingsByMonth`, so the month, the carried balance, the year and the forecast agree). Such a goal
+takes no contributions by hand, and one with contributions cannot follow an account. `SpendingTrend` (`trend.go`) compares a month with the previous one and the
 average of the earlier months of a 2–24-month window, overall and per category (`spendingByMonth`).
 `DetectRecurring` (`recurring.go`) groups one-off expenses of the last 6 months by merchant (or
 description), keeps amounts within ±15 % of the group median and suggests those seen in ≥ 3 months
