@@ -1063,14 +1063,17 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
 
   // replanInstallments mirrors the Go helper: an edited expense's cuotas are
   // adapted in place, matched by number, instead of regenerated. Ids stay stable
-  // (card statement lines link to them) and a paid cuota is never rewritten:
-  // the new amount reaches pending cuotas only, and an edit that would drop a
-  // paid cuota or move the plan to other months is refused. It checks before
-  // writing anything, so a refusal leaves the plan untouched.
+  // (card statement lines link to them) and a paid cuota is never rewritten; an
+  // edit that would drop a paid cuota or move the plan to other months is
+  // refused. A pending cuota takes the new amount only when amountChanged and is
+  // re-placed only when the plan moved (a prepayment, the bank's rounded last
+  // cuota stay); cuotas added to a plan that did not move follow its last one.
+  // It checks before writing anything, so a refusal leaves the plan untouched.
   function replanInstallments(
     expenseId: number,
     ex: ValidatedExpense,
     placement: PlacementChange,
+    amountChanged: boolean,
   ): ReturnType<typeof newError> | null {
     const insts = db
       .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [expenseId, uid()])
@@ -1085,8 +1088,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         `la cuota ${lastPaid} ya está pagada: desmárcala antes de dejar el gasto en ${total} cuota(s)`,
       )
     }
+    const moved = placement.before !== placement.after
     const current = byNumber.get(1)
-    const first = current && placement.before === placement.after ? current.period : placement.after
+    const first = current && !moved ? current.period : placement.after
     if (lastPaid > 0 && current && first !== current.period) {
       return newError(
         ErrValidation,
@@ -1095,9 +1099,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
 
     const amount = ex.installmentAmount.toString()
+    let previous = '' // the month of cuota n-1 once placed
     for (let n = 1; n <= total; n++) {
-      const period = addMonths(first, n - 1)
       const inst = byNumber.get(n)
+      let period = addMonths(first, n - 1)
+      if (inst && !moved) period = inst.period
+      else if (!inst && !moved && previous !== '') period = addMonths(previous, 1)
+      previous = period
       if (!inst) {
         db.exec(
           `INSERT INTO installments (user_id, expense_id, number, total, period, amount, status, paid_at)
@@ -1110,7 +1118,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         db.exec('UPDATE installments SET total = ?, period = ?, amount = ? WHERE id = ?', [
           total,
           period,
-          amount,
+          amountChanged ? amount : inst.amount,
           inst.id,
         ])
       }
@@ -1654,12 +1662,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       .map(rowToInstallment)
     let first = item.firstPeriod
     if (first === '' || total !== item.installmentsTotal) first = cutoffPeriodOf(cutoff, date.parts)
+    let placement: PlacementChange = { before: '', after: first } // the bank's month wins
     if (!replannable(insts, total, first)) {
       kind = ex.kind
       amount = Money.fromString(ex.installmentAmount)
       total = ex.installmentsTotal
       bankPlan = false
       first = insts[0]?.period ?? first
+      placement = { before: first, after: first } // the plan stays exactly as the user has it
     }
     db.exec(
       `UPDATE expenses SET date = ?, bank_description = ?, kind = ?, installment_amount = ?, installments_total = ?
@@ -1670,7 +1680,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       date, description: ex.description, category: ex.category, merchant: ex.merchant, cardId: ex.cardId,
       kind, installmentAmount: amount, installmentsTotal: total,
     }
-    const refused = replanInstallments(ex.id, merged, { before: '', after: first })
+    const refused = replanInstallments(ex.id, merged, placement, bankPlan)
     if (refused) throw new TxAbort(refused)
     if (bankPlan && bankRounded(item, total, amount)) settleLastCuota(ex.id, Money.fromString(item.amount))
     // The statement's cuota n means cuotas 1..n-1 were already billed.
@@ -1696,6 +1706,12 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     }
     const bank = amountOrError(item.installmentAmount).amount
     return bank !== undefined && bank.cmp(cuota) === 0
+  }
+
+  // expenseCost mirrors Go: what an expense really costs, the sum of its cuotas
+  // (not cuota × N once the bank rounded the last one or one was set by hand).
+  function expenseCost(expenseId: number): Money {
+    return sumAmounts('SELECT amount FROM installments WHERE expense_id = ? AND user_id = ?', [expenseId, uid()])
   }
 
   // settleLastCuota mirrors Go: the pending last cuota takes the bank's
@@ -1736,6 +1752,28 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   // keepOneSalaryAccount mirrors Go: the salary lands in one account only.
   function keepOneSalaryAccount(acc: Account): void {
     if (acc.receivesSalary) db.exec('UPDATE accounts SET receives_salary = 0 WHERE user_id = ? AND id <> ?', [uid(), acc.id])
+  }
+
+  // keepSalaryRestSource mirrors Go: saving account `id` (0 = a new one) is
+  // refused when a live salary_rest transfer (open-ended, or ending this month
+  // or later) would leave from an account the salary no longer lands in.
+  function keepSalaryRestSource(id: number, receivesSalary: boolean): ReturnType<typeof newError> | undefined {
+    let salaryAcc = id
+    if (!receivesSalary) {
+      const other = db.query('SELECT id FROM accounts WHERE user_id = ? AND receives_salary = 1 AND id <> ?', [uid(), id])[0]
+      salaryAcc = other ? asNumber(other.id) : 0
+    }
+    const stranded = db.query(
+      `SELECT description FROM transfers WHERE user_id = ? AND mode = ? AND from_account_id <> ?
+       AND (end_period = '' OR end_period >= ?) LIMIT 1`,
+      [uid(), TransferSalaryRest, salaryAcc, currentPeriod()],
+    )[0]
+    if (!stranded) return undefined
+    const label = asString(stranded.description) || 'resto del sueldo'
+    return newError(
+      ErrConflict,
+      `la transferencia «${label}» pasa el resto del sueldo desde otra cuenta: termínala antes de cambiar dónde cae el sueldo`,
+    )
   }
 
   // ownAccounts mirrors Go: both ends of a transfer are the profile's accounts.
@@ -2323,7 +2361,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
     const ex = rowToExpense(row)
     const refunded = sumAmounts('SELECT amount FROM refunds WHERE expense_id = ?', [expenseID])
-    const total = Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal)
+    const total = expenseCost(expenseID)
     if (refunded.add(parsed.amount).gt(total)) {
       return {
         error: newError(ErrValidation, `el reembolso supera lo que queda por devolver de ese gasto (${total.sub(refunded).toString()})`),
@@ -3416,7 +3454,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return db.transaction((): ExpenseResult => {
         // A returned error still commits here (only a throw rolls back), so the
         // replan refuses before writing anything and runs before the UPDATE.
-        const refused = replanInstallments(id, ex, placement)
+        const amountChanged = Money.fromString(old.installmentAmount).cmp(ex.installmentAmount) !== 0
+        const refused = replanInstallments(id, ex, placement, amountChanged)
         if (refused) return { error: refused }
         db.exec(
           `UPDATE expenses SET date = ?, description = ?, category = ?, merchant = ?, card_id = ?, kind = ?,
@@ -3511,6 +3550,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const v = validAccount(name, kind, openingBalance, openingPeriod)
       if (v.error) return { error: v.error }
       return db.transaction((): AccountResult => {
+        const stranded = keepSalaryRestSource(0, receivesSalary)
+        if (stranded) return { error: stranded }
         const row = db.query(
           `INSERT INTO accounts (user_id, name, kind, opening_balance, opening_period, receives_salary, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
@@ -3534,6 +3575,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const v = validAccount(name, kind, openingBalance, openingPeriod)
       if (v.error) return { error: v.error }
       return db.transaction((): AccountResult => {
+        // Checked before writing: a returned error still commits here.
+        const stranded = keepSalaryRestSource(id, receivesSalary)
+        if (stranded) return { error: stranded }
         db.exec(
           `UPDATE accounts SET name = ?, kind = ?, opening_balance = ?, opening_period = ?, receives_salary = ?
            WHERE id = ? AND user_id = ?`,
@@ -4306,9 +4350,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return db.transaction((): ReceivableResult => {
         const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
         if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
-        const ex = rowToExpense(row)
         const owed = sumAmounts('SELECT amount FROM receivables WHERE expense_id = ? AND user_id = ?', [expenseID, uid()])
-        const total = Money.fromString(ex.installmentAmount).mulInt(Math.max(ex.installmentsTotal, 1))
+        const total = expenseCost(expenseID)
         if (owed.add(amt).gt(total)) {
           return {
             error: newError(ErrValidation, `lo que te deben supera lo que costó el gasto (quedan ${total.sub(owed).toString()})`),
@@ -5008,7 +5051,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (taken.length > 0) {
           return { error: newError(ErrConflict, 'ese mes del gasto fijo ya está enlazado a otro movimiento del banco') }
         }
-        if (item.currency === 'CLP') applyMonthAmount(fe, period, Money.fromString(item.amount))
+        // A fixed expense in UF keeps its UF amounts: a peso charge is not an amount in UF (mirrors Go).
+        if (item.currency === CurrencyCLP && fe.currency !== CurrencyUF) applyMonthAmount(fe, period, Money.fromString(item.amount))
         db.exec(
           `INSERT INTO fixed_expense_payments (fixed_expense_id, period, paid_at) VALUES (?, ?, ?)
            ON CONFLICT (fixed_expense_id, period) DO UPDATE SET paid_at = EXCLUDED.paid_at`,

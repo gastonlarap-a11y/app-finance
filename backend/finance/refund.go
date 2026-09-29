@@ -77,7 +77,10 @@ func insertRefund(ctx context.Context, tx bun.Tx, uid, expenseID int64, period, 
 	if err != nil {
 		return nil, fmt.Errorf("summing refunds: %w", err)
 	}
-	total := ex.InstallmentAmount.MulInt(int64(ex.InstallmentsTotal))
+	total, err := expenseCost(ctx, tx, uid, expenseID)
+	if err != nil {
+		return nil, err
+	}
 	if refunded.Add(amt).GT(total) {
 		return nil, shared.NewError(shared.ErrValidation,
 			fmt.Sprintf("el reembolso supera lo que queda por devolver de ese gasto (%s)", total.Sub(refunded)))

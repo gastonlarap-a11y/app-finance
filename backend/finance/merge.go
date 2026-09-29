@@ -111,12 +111,14 @@ func mergeIntoExpense(ctx context.Context, tx bun.Tx, uid int64, item *ImportIte
 	if first == "" || merged.InstallmentsTotal != item.InstallmentsTotal {
 		first = cutoff.periodOf(date)
 	}
+	placement := placementChange{after: first} // the bank's month wins
 	if !replannable(insts, merged.InstallmentsTotal, first) {
 		merged.Kind, merged.InstallmentAmount, merged.InstallmentsTotal = ex.Kind, ex.InstallmentAmount, ex.InstallmentsTotal
 		bankPlan = false
 		if len(insts) > 0 {
 			first = insts[0].Period
 		}
+		placement = placementChange{before: first, after: first} // the plan stays exactly as the user has it
 	}
 
 	if _, err := tx.NewUpdate().Model(&merged).
@@ -124,7 +126,7 @@ func mergeIntoExpense(ctx context.Context, tx bun.Tx, uid int64, item *ImportIte
 		WherePK().Where("user_id = ?", uid).Exec(ctx); err != nil {
 		return fmt.Errorf("merging expense: %w", err)
 	}
-	if err := replanInstallments(ctx, tx, &merged, placementChange{after: first}); err != nil {
+	if err := replanInstallments(ctx, tx, &merged, placement, bankPlan); err != nil {
 		return err
 	}
 	if bankPlan && bankRounded(item, &merged) {

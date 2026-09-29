@@ -1,6 +1,7 @@
 package finance
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -96,6 +97,9 @@ func (s *FinanceService) CreateAccount(ctx context.Context, name, kind, openingB
 	uid := s.uid()
 	acc := &Account{UserID: uid, Name: name, Kind: kind, OpeningBalance: bal, OpeningPeriod: openingPeriod, ReceivesSalary: receivesSalary}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := keepSalaryRestSource(ctx, tx, uid, acc); err != nil {
+			return err
+		}
 		if _, err := tx.NewInsert().Model(acc).Returning("*").Exec(ctx); err != nil {
 			return err
 		}
@@ -116,6 +120,9 @@ func (s *FinanceService) UpdateAccount(ctx context.Context, id int64, name, kind
 	uid := s.uid()
 	acc := &Account{ID: id, UserID: uid, Name: name, Kind: kind, OpeningBalance: bal, OpeningPeriod: openingPeriod, ReceivesSalary: receivesSalary}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := keepSalaryRestSource(ctx, tx, uid, acc); err != nil {
+			return err
+		}
 		res, err := tx.NewUpdate().Model(acc).
 			Column("name", "kind", "opening_balance", "opening_period", "receives_salary").
 			WherePK().Where("user_id = ?", uid).Exec(ctx)
@@ -138,6 +145,38 @@ func (s *FinanceService) keepOneSalaryAccount(ctx context.Context, tx bun.Tx, ui
 	_, err := tx.NewUpdate().Model((*Account)(nil)).Set("receives_salary = ?", false).
 		Where("user_id = ? AND id <> ?", uid, acc.ID).Exec(ctx)
 	return err
+}
+
+// keepSalaryRestSource refuses saving acc when a live salary_rest transfer
+// (open-ended, or ending this month or later) would leave from an account the
+// salary no longer lands in: it would keep passing on a salary that lands
+// elsewhere. The transfer has to end first. acc.ID is 0 for a new account.
+func keepSalaryRestSource(ctx context.Context, idb bun.IDB, uid int64, acc *Account) error {
+	salaryAcc := acc.ID
+	if !acc.ReceivesSalary {
+		var others []int64
+		if err := idb.NewSelect().Model((*Account)(nil)).Column("id").
+			Where("user_id = ? AND receives_salary = 1 AND id <> ?", uid, acc.ID).Scan(ctx, &others); err != nil {
+			return fmt.Errorf("finding the salary account: %w", err)
+		}
+		salaryAcc = 0
+		if len(others) > 0 {
+			salaryAcc = others[0]
+		}
+	}
+	var stranded []Transfer
+	if err := idb.NewSelect().Model(&stranded).
+		Where("user_id = ? AND mode = ? AND from_account_id <> ?", uid, TransferSalaryRest, salaryAcc).
+		Where("(end_period = '' OR end_period >= ?)", currentPeriod()).
+		Limit(1).Scan(ctx); err != nil {
+		return fmt.Errorf("finding salary_rest transfers: %w", err)
+	}
+	if len(stranded) == 0 {
+		return nil
+	}
+	label := cmp.Or(stranded[0].Description, "resto del sueldo")
+	return shared.NewError(shared.ErrConflict, fmt.Sprintf(
+		"la transferencia «%s» pasa el resto del sueldo desde otra cuenta: termínala antes de cambiar dónde cae el sueldo", label))
 }
 
 // DeleteAccount removes an account; what named it is left without one.

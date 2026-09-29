@@ -36,6 +36,72 @@ func TestConfirmSettlesTheBanksRoundingInTheLastCuota(t *testing.T) {
 	}
 }
 
+// Editing a statement purchase's words keeps the bank's rounded last cuota:
+// the plan must still add up to what the bank charges.
+func TestEditKeepsTheBanksRoundedLastCuota(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	card := s.CreateCard(ctx, "Itaú", "1000000", 26, "4321")
+	mustOK(t, "CreateCard", card.Error)
+	importStatement(t, s, nationalStatement())
+	dos := pendingByDescription(t, s)["TIENDA DOS"]
+	ex := s.ConfirmImportItem(ctx, dos.ID, dos.Date, "Tienda dos", "", "", &card.Data.ID, KindCuotas, dos.InstallmentAmount, 6, "")
+	mustOK(t, "ConfirmImportItem", ex.Error)
+	periods := installmentPeriods(t, s, ex.Data.ID)
+
+	mustOK(t, "UpdateExpense", s.UpdateExpense(ctx, ex.Data.ID, dos.Date, "Tienda dos", "Hogar", "", &card.Data.ID,
+		KindCuotas, dos.InstallmentAmount, 6).Error)
+	want := []string{"10000", "10000", "10000", "10000", "10000", "10001"}
+	if got := cuotaAmounts(t, s, ex.Data.ID); !slices.Equal(got, want) {
+		t.Fatalf("cuotas after a category edit = %v, want %v", got, want)
+	}
+	if got := installmentPeriods(t, s, ex.Data.ID); !slices.Equal(got, periods) {
+		t.Fatalf("periods after a category edit = %v, want %v", got, periods)
+	}
+}
+
+// Editing a plan keeps what was done to it: a prepayment's months and a cuota
+// set by hand stay; a new cuota amount still reaches every pending cuota, and
+// a longer plan grows after its last cuota.
+func TestEditKeepsPrepaidMonthsAndUnevenCuotas(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	ex := s.CreateExpense(ctx, "2030-01-10", "Notebook", "", "", nil, KindCuotas, "100000", 4)
+	mustOK(t, "CreateExpense", ex.Error)
+	id := ex.Data.ID
+	plan := cuotas(t, s, id)
+	mustOK(t, "SetInstallmentPaid", s.SetInstallmentPaid(ctx, plan[0].ID, true).Error)
+	mustOK(t, "SetInstallmentAmount", s.SetInstallmentAmount(ctx, plan[3].ID, "100001").Error)
+	mustOK(t, "PrepayExpense", s.PrepayExpense(ctx, id, "2030-02").Error)
+	prepaid := []string{"2030-01", "2030-02", "2030-02", "2030-02"}
+
+	edit := func(amount string, total int) {
+		t.Helper()
+		mustOK(t, "UpdateExpense", s.UpdateExpense(ctx, id, "2030-01-10", "Notebook gamer", "Tecnología", "", nil,
+			KindCuotas, amount, total).Error)
+	}
+	edit("100000", 4)
+	if got := installmentPeriods(t, s, id); !slices.Equal(got, prepaid) {
+		t.Fatalf("periods after a words edit = %v, want the prepayment %v kept", got, prepaid)
+	}
+	if got := cuotaAmounts(t, s, id); !slices.Equal(got, []string{"100000", "100000", "100000", "100001"}) {
+		t.Fatalf("cuotas after a words edit = %v, want the cuota set by hand kept", got)
+	}
+
+	edit("90000", 4)
+	if got := cuotaAmounts(t, s, id); !slices.Equal(got, []string{"100000", "90000", "90000", "90000"}) {
+		t.Fatalf("cuotas after a new amount = %v, want it on every pending cuota", got)
+	}
+	if got := installmentPeriods(t, s, id); !slices.Equal(got, prepaid) {
+		t.Fatalf("periods after a new amount = %v, want %v", got, prepaid)
+	}
+
+	edit("90000", 5)
+	if got := installmentPeriods(t, s, id); !slices.Equal(got, append(prepaid, "2030-03")) {
+		t.Fatalf("periods after growing = %v, want a fifth cuota after the last one", got)
+	}
+}
+
 func TestSetInstallmentAmountOnlyOnPendingCuotas(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

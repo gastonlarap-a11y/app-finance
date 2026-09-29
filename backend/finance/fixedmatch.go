@@ -145,7 +145,8 @@ func matchTokens(s string) []string {
 // expense. As with a schedule matched in YNAB or Actual Budget, the bank's real
 // amount replaces the estimate — for that month only: when a CLP charge differs
 // from the planned amount, the month gets the real one and the next month
-// keeps the previous plan.
+// keeps the previous plan. A fixed expense in UF keeps its UF amounts (the
+// month's UF value prices it): a peso charge is not an amount in UF.
 func (s *FinanceService) LinkImportItemToFixed(ctx context.Context, id, fixedID int64, period string) OpResult {
 	if !validPeriod(period) {
 		return OpResult{Error: invalidPeriod()}
@@ -174,7 +175,7 @@ func (s *FinanceService) LinkImportItemToFixed(ctx context.Context, id, fixedID 
 		if taken {
 			return shared.NewError(shared.ErrConflict, "ese mes del gasto fijo ya está enlazado a otro movimiento del banco")
 		}
-		if item.Currency == "CLP" {
+		if item.Currency == CurrencyCLP && fe.Currency != CurrencyUF {
 			if err := applyMonthAmount(ctx, tx, fe, period, item.Amount); err != nil {
 				return err
 			}

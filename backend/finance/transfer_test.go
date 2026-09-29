@@ -170,6 +170,39 @@ func TestSalaryRestTransferFollowsTheSalary(t *testing.T) {
 	wantMoney(t, "fixed again", accountByName(t, s, "2026-11", "Itaú").TransferIn, "2000000")
 }
 
+// A live salary_rest transfer pins where the salary lands: moving or clearing
+// «recibe el sueldo» would leave it passing on a salary that lands elsewhere.
+func TestSalaryAccountStaysUnderALiveSalaryRestTransfer(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	chile := s.CreateAccount(ctx, "Banco de Chile", "corriente", "0", "2020-01", true)
+	mustOK(t, "chile", chile.Error)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "0", "2020-01", false)
+	mustOK(t, "itau", itau.Error)
+	rest := s.CreateTransfer(ctx, chile.Data.ID, itau.Data.ID, "Sueldo a Itaú", TransferSalaryRest, "470000", "2020-01", true)
+	mustOK(t, "salary rest", rest.Error)
+
+	wantCode(t, "salary moved to Itaú",
+		s.UpdateAccount(ctx, itau.Data.ID, "Itaú", "corriente", "0", "2020-01", true).Error, shared.ErrConflict)
+	wantCode(t, "salary cleared",
+		s.UpdateAccount(ctx, chile.Data.ID, "Banco de Chile", "corriente", "0", "2020-01", false).Error, shared.ErrConflict)
+	wantCode(t, "a new salary account",
+		s.CreateAccount(ctx, "Cuenta RUT", "vista", "0", "2020-01", true).Error, shared.ErrConflict)
+	mustOK(t, "rename keeping the salary",
+		s.UpdateAccount(ctx, chile.Data.ID, "Chile", "corriente", "0", "2020-01", true).Error)
+	if a := accountByName(t, s, "2020-01", "Chile"); !a.ReceivesSalary {
+		t.Fatal("a refused edit moved the salary")
+	}
+
+	// Once the transfer has ended, the salary may land elsewhere.
+	mustOK(t, "EndTransfer", s.EndTransfer(ctx, rest.Data.ID, "2020-06").Error)
+	mustOK(t, "salary moved to Itaú",
+		s.UpdateAccount(ctx, itau.Data.ID, "Itaú", "corriente", "0", "2020-01", true).Error)
+	if a := accountByName(t, s, "2020-01", "Chile"); a.ReceivesSalary {
+		t.Fatal("two accounts receive the salary")
+	}
+}
+
 func TestDigitalAccountKind(t *testing.T) {
 	s := newTestService(t)
 	mustOK(t, "digital", s.CreateAccount(t.Context(), "Mercado Pago", "digital", "0", "2026-09", false).Error)
