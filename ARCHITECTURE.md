@@ -26,8 +26,6 @@ Stack:
   the in-memory active-user `Session`, and soft-delete/restore of profiles.
 - **`settings`** (`backend/settings/`) — DB-folder selection, Google Drive connect/disconnect, OAuth
   client config, backup-on-close, and `BackupNow`. Drives Configuración › Respaldo y Google Drive.
-- **`mailsync`** (`backend/mailsync/`, desktop only) — reads the bank's purchase-alert emails over
-  IMAP and stages them in the finance import inbox (see §18). Drives Configuración › Correo del banco.
 - **`updates`** (`backend/updates/`, desktop only) — in-app updates from GitHub Releases (see §19).
 - **`reminders`** (`backend/reminders/`, desktop only, no bound methods) — native due-date
   notifications (see "Due dates and reminders" in §4).
@@ -352,19 +350,10 @@ row, e.g. `DELETE FROM app_settings WHERE key = 'window_state';`.
 into a service and start/stop it from `ServiceStartup`/`ServiceShutdown`, then
 enqueue work with `worker.Enqueue(func(ctx) error { ... })`. Bound methods must
 not block the call handler — hand heavy work to the worker and stream results via
-emitted events. `mailsync` is the reference user: a single-concurrency worker runs mailbox syncs
-(queued by `SyncNow` and by an auto-sync loop owned by the service) and reports each outcome with
-`application.Get().Event.Emit("mailsync:done", SyncEvent)`, which the frontend receives through
-`onMailSyncDone` (`services/mailsync.ts`, `Events.On` from `@wailsio/runtime`). The finance methods
-are fast DB calls and don't use it. A task that panics is recovered into a logged error (`runTask`):
-tasks read untrusted input (bank emails through MIME/HTML parsing), and an unrecovered panic would
-kill the app on every launch with the first auto-sync.
-
-Mailbox syncs are bounded: `open` ties the connection to the context right after dialing, so a
-server that stalls after the TLS handshake cannot hang LOGIN/SELECT (and with them the test button,
-the worker and shutdown). After 3 consecutive rejected logins an account leaves auto-sync (repeated
-failed logins can lock a mailbox or trip provider alerts) until the user saves new settings, syncs
-by hand or restarts; mailboxes of profiles in the trash are never read.
+emitted events (`application.Get().Event.Emit`, received with `Events.On` from `@wailsio/runtime`).
+No service needs it today: the mail sync that used it was removed, and the finance methods are fast
+DB calls. A task that panics is recovered into a logged error (`runTask`), so a task reading
+untrusted input cannot kill the app.
 
 Startup (`main.go`): `application.New` runs before the database is opened, with `SingleInstance`
 (a second launch focuses the running window and exits before touching the DB), `Logger:
@@ -464,9 +453,8 @@ active row. See migrations `011` (finance) and `012` (users).
 **Deleting for good** is a second step, done from the trash only. `PurgeTrashItem` and `EmptyTrash`
 hard-delete trashed rows; their children go by `ON DELETE CASCADE`. `users.PurgeUser` erases a
 trashed profile from every table that has a `user_id` column. It finds those tables at run time
-(`sqlite_master` × `pragma_table_info`), so a new table is covered without code changes. Purge hooks
-(`users.AddPurgeHook`) clean up what lives outside the DB, such as the profile's mail password in the
-keychain (`mailsync.ForgetUserSecrets`).
+(`sqlite_master` × `pragma_table_info`), so a new table is covered without code changes. A profile
+keeps nothing outside the DB.
 
 ## 16. Merchants
 
@@ -547,7 +535,7 @@ Besides the Wails desktop app, the same frontend ships as an **installable PWA**
   deploy no longer serves) turns into an error with a reload button, not an endless spinner.
   `Fatal` screens always offer «Recargar»: an installed PWA has no browser reload.
 
-## 18. Import inbox (bank emails & statements)
+## 18. Import inbox (statements and cartolas)
 
 Movements detected by the bank reach the app through **one reviewed inbox** — nothing becomes an
 expense until the user confirms it:
@@ -557,19 +545,19 @@ expense until the user confirms it:
   of a parser per layout the user maps the columns once (fecha, descripción, and a signed monto, a
   column of card charges, or separate cargos/abonos). The reader detects the delimiter (`;` `,` tab)
   and the encoding (UTF-8, else Windows-1252), reads es-CL dates and amounts, skips title/total rows,
-  and stages the rows with source `csv` (statement family: it reconciles with alert emails and
-  re-importing adds nothing). A new bank-specific PDF or email parser still needs a real sample of
-  that bank's document, turned into an anonymized fixture.
+  and stages the rows with source `csv` (statement family: re-importing adds nothing). A new
+  bank-specific PDF parser still needs a real sample of that bank's document, turned into an
+  anonymized fixture.
 
 - **Inbox** (`backend/finance/importitem.go` + `imports.go`, mirrored in the TS engine):
   `import_items` rows move `pendiente → confirmado` (new expense via `ConfirmImportItem`, or an
   existing one via `LinkImportItem`) or `→ descartado`. `StageCandidates(ctx, idb, uid, batch)` is
-  the single entry point (bound `StageImport` for statements; `mailsync` passes its own tx). It
-  rejects a batch whole if any candidate is invalid, dedupes by a per-user `external_key` built from
-  the candidate's stable fields + its ordinal among identical ones (re-importing adds nothing), and
-  **reconciles** across source families: a statement line matching an unmatched alert email (same
-  amount/currency, compatible last digits, ±1 day) is stored `conciliado` so a purchase is never
-  reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
+  the single entry point (bound `StageImport`). It rejects a batch whole if any candidate is
+  invalid, dedupes by a per-user `external_key` built from the candidate's stable fields + its
+  ordinal among identical ones (re-importing adds nothing), and **reconciles** across source
+  families: a statement line matching an unmatched item of the other family (the `email` items
+  staged before the mail sync was removed: same amount/currency, compatible last digits, ±1 day) is
+  stored `conciliado` so a purchase is never reviewed twice. `ListImportItems` suggests the card (by `cards.last_digits`), the learned
   `merchant_rules` (longest word-prefix of the normalized descriptor, `descriptor.go`), a live
   expense that looks like the same purchase (±10 days, cuota or total), and a fixed expense whose
   unpaid month the charge looks like the bill of (`fixedmatch.go`, Actual Budget's schedule model:
@@ -626,15 +614,10 @@ expense until the user confirms it:
 - **Real cutoffs** (`cutoff.go`, `engine/finance/cutoff.ts`): banks move the cutoff with weekends and holidays.
   - A card expense entered by hand is placed by the windows its card's statements printed: first each statement's billed period, then the next period it announced. The card's billing day covers only the dates no statement reached.
   - Statements link to the one live card holding their last digits. Saving a card's digits relinks them (`relinkStatements`), so the national and international statements land on the same card.
-- **Alert emails (desktop only)** — `backend/mailsync`: IMAP (`go-imap/v2`, read-only `EXAMINE`,
-  `BODY.PEEK[]` so nothing is marked read), MIME/charsets via `go-message`, HTML reduced to text.
-  Incremental by **UIDVALIDITY + last UID** per account; the server filters by sender (`FROM`), and
-  each fetched chunk's items and watermark commit in one transaction. The password lives in the OS
-  keychain (`go-keyring`), never in the DB or prefs. Email parsers implement `EmailParser`
-  (`parsers.go` registry); emails nobody recognizes are counted and reported, not guessed.
-  An item's reference is the email's Message-ID; an email without one falls back to
-  `imap:<uidvalidity>:<uid>` (`messageRef`), so two identical purchases alerted by header-less
-  emails stay two items instead of collapsing into one.
+- **No mail sync**: the IMAP reader of bank alert emails was removed; the user uploads each statement.
+  Its migrations stay (`backend/mailsync/migrations`, desktop only: `017` created `mail_accounts`,
+  `037` drops it). The finance domain still knows the `email` source, so items staged by it before
+  the removal keep showing and reconciling.
 
 ## 19. In-app updates (desktop)
 

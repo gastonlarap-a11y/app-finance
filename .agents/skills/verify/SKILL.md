@@ -21,7 +21,7 @@ This is a Wails v3 desktop app — "verify" means the app actually builds, binds
      imported from a file the desktop also loads), and the window stays blank.
 3. **Exercise the changed surface** in the window — the sidebar screens (Resumen, Importar, Buscar,
    Año, Proyección, Gastos fijos, Ahorro) or the Configuración section involved (Tarjetas, Cuentas,
-   Categorías y presupuestos, Etiquetas, Comercios, Reglas, Respaldo, Correo, Perfiles, Papelera,
+   Categorías y presupuestos, Etiquetas, Comercios, Reglas, Respaldo, Perfiles, Papelera,
    Apariencia, Actualizaciones); each has a URL (`#/config/tarjetas`) — and, for backend changes,
    confirm the expected data/behavior. For user-scoping changes, switch profiles (sidebar footer)
    and confirm each profile sees only its own data.

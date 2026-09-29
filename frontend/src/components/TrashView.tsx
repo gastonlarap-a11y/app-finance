@@ -148,8 +148,7 @@ export function TrashView() {
               ))}
             </ul>
             <p className="mt-3 text-xs text-fg-subtle">
-              Eliminar un perfil para siempre borra todos sus datos (y, en el escritorio, la contraseña de su correo guardada en el
-              llavero). Ya no viajará en tus respaldos.
+              Eliminar un perfil para siempre borra todos sus datos. Ya no viajará en tus respaldos.
             </p>
           </>
         )}

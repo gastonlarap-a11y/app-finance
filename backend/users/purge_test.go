@@ -1,7 +1,6 @@
 package users_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/uptrace/bun"
@@ -36,8 +35,6 @@ func TestPurgeUserDeletesTheProfileForGood(t *testing.T) {
 	session := users.NewSession()
 	fin := finance.NewFinanceService(bdb, session)
 	usr := users.NewService(bdb, session, "test-app-finance-purge")
-	var hooked int64
-	users.AddPurgeHook(usr, func(_ context.Context, _ bun.Tx, id int64) error { hooked = id; return nil })
 
 	// Gastón (1) keeps his data; Camila gets some and is purged.
 	mustExpense := func(desc string) {
@@ -68,9 +65,6 @@ func TestPurgeUserDeletesTheProfileForGood(t *testing.T) {
 	}
 	if r := usr.PurgeUser(ctx, id); r.Error != nil {
 		t.Fatalf("PurgeUser: %v", r.Error)
-	}
-	if hooked != id {
-		t.Fatalf("purge hook ran for %d, want %d", hooked, id)
 	}
 	for _, table := range []string{"expenses", "installments", "categories"} {
 		if n := rowsOf(t, bdb, table, id); n != 0 {

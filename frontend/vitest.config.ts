@@ -9,7 +9,7 @@ const srcAlias = { find: '@', replacement: src('.') }
 // The browser project resolves the services like the web build (vite --mode
 // web): the desktop wrappers import the wails3-generated bindings, which CI's
 // web job never generates. Tests mock whatever data they render (vi.mock).
-const WEB_SERVICES = ['finance', 'users', 'settings', 'diagnostics', 'reports', 'mailsync', 'updates']
+const WEB_SERVICES = ['finance', 'users', 'settings', 'diagnostics', 'reports', 'updates']
 const webServiceAliases = WEB_SERVICES.map((s) => ({ find: `@/services/${s}`, replacement: src(`services/web/${s}.ts`) }))
 
 // Two projects, kept separate from vite.config.ts so the mode-conditional app

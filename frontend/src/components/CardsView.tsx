@@ -159,7 +159,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
         >
           <Input type="number" min="1" max="28" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
         </Field>
-        <Field label="Últimos 4 dígitos (opcional)" hint="Permiten asociar a esta tarjeta los movimientos importados de correos y estados de cuenta.">
+        <Field label="Últimos 4 dígitos (opcional)" hint="Permiten asociar a esta tarjeta los movimientos importados de estados de cuenta y cartolas.">
           <Input
             inputMode="numeric"
             pattern="[0-9]{4}"

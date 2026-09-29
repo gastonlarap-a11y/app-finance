@@ -142,7 +142,6 @@ export default defineConfig(({ mode }) => {
               { find: '@/services/settings', replacement: path.resolve(__dirname, './src/services/web/settings.ts') },
               { find: '@/services/diagnostics', replacement: path.resolve(__dirname, './src/services/web/diagnostics.ts') },
               { find: '@/services/reports', replacement: path.resolve(__dirname, './src/services/web/reports.ts') },
-              { find: '@/services/mailsync', replacement: path.resolve(__dirname, './src/services/web/mailsync.ts') },
               { find: '@/services/updates', replacement: path.resolve(__dirname, './src/services/web/updates.ts') },
             ]
           : []),

@@ -59,7 +59,7 @@ async function importParsed(parsed: DetectedStatement, data: ArrayBuffer): Promi
   if (parsed.kind === 'batch') {
     const res = await FinanceService.StageImport(parsed.batch)
     if (res.error || !res.data) return { error: res.error?.message ?? 'No se pudo importar.' }
-    return { results: [`${parsed.format}: ${stagedText(res.data, 'alertas de correo')}.`] }
+    return { results: [`${parsed.format}: ${stagedText(res.data, 'otras fuentes')}.`] }
   }
   const hash = await fileHash(data)
   const results: string[] = []
@@ -160,7 +160,7 @@ export function StatementImport({ onImported }: { onImported: () => void }) {
               kind: 'done',
               file: csv.file,
               format: 'CSV',
-              results: [`CSV: ${stagedText(summary, 'alertas de correo')}.`],
+              results: [`CSV: ${stagedText(summary, 'otras fuentes')}.`],
               notes: skipped > 0 ? [`${skipped} filas omitidas (títulos, totales o saldos).`] : [],
               warnings: [],
             })

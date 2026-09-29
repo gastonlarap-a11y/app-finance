@@ -78,9 +78,9 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `exitWithDialog` (native error dialog), never a bare `os.Exit`.
 - **One Service per domain**: plain struct + `application.NewService(...)`; exported methods
   auto-bind to TS. Reference: `backend/finance/service.go`. Current services: `finance`, `users`,
-  `settings`, `mailsync` (desktop only), `updates` (desktop only), `reminders` (desktop only, native
-  due-date notifications, no bound methods), `diagnostics`, `reports`. Every exported method of a
-  service becomes a binding: cross-service hooks are package functions (`users.AddPurgeHook`).
+  `settings`, `updates` (desktop only), `reminders` (desktop only, native due-date notifications, no
+  bound methods), `diagnostics`, `reports`. Every exported method of a service becomes a binding:
+  anything one service must offer another is a package function, never a method.
 - **`finance`** (`backend/finance/`) is the core domain — one file per entity plus `period.go`
   (YYYY-MM math), `result.go` (view models) and `service.go` (bound methods + summaries).
   Per-month values resolve by lexical `period` string comparison; fixed expenses use
@@ -102,7 +102,7 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   `reconciliations` row before the month (real closing balance; the opening balance is one on the
   month before the first) + `flowsBetween` it and the month. Any new monthly flow must be added to
   `flowsBetween` (Go and TS) and to the year/forecast loops, which reset at a reconciled close.
-- **Import inbox (invariant)**: bank movements (statement PDFs, alert emails) only enter through
+- **Import inbox (invariant)**: bank movements (card statements, cartolas: PDF or CSV) only enter through
   `finance.StageCandidates`/`stageItems` into `import_items` and become expenses (or, for bank
   credits, extra incomes) only when the user confirms them (`ConfirmImportItem`/`LinkImportItem`/
   `ConfirmImportItemAsIncome`), or mark a fixed expense's month paid (`LinkImportItemToFixed`).
@@ -118,8 +118,9 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   card's billing day is only the fallback. A bank movement that matches an expense entered by hand
   merges into it (`mergeIntoExpense`): the bank wins on date, amount and month, the user's words
   stay, the bank's descriptor goes to `bank_description`, and paid cuotas never move. Statement
-  parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); email
-  parsers in `backend/mailsync` (desktop only, IMAP). Parser fixtures must be anonymized (public
+  parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and web); the
+  user uploads every statement by hand (the IMAP mail sync was removed; its migrations stay under
+  `backend/mailsync/migrations`, desktop only). Parser fixtures must be anonymized (public
   repo) — `frontend/scripts/pdf-runs.mjs` dumps a PDF's positioned text runs. See `ARCHITECTURE.md` §18.
 - **In-app updates** (`backend/updates`, Wails `pkg/updater`): `main()` must call
   `updater.HandleHelperMode()` before anything else; the app version is `info.version` of the
@@ -177,7 +178,7 @@ Full detail and rationale: `ARCHITECTURE.md`. The invariants:
   generates it from the `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` repository secrets.
 - **Web/PWA target (iPad)**: `vite --mode web` ships the same React app as a PWA backed by a TS
   port of the domain (`frontend/src/engine/`) over sqlite-wasm (opfs-sahpool, Worker + Comlink).
-  Mode `web` aliases `@/services/{finance,users,settings,mailsync,…}` → `frontend/src/services/web/*`; the
+  Mode `web` aliases `@/services/{finance,users,settings,…}` → `frontend/src/services/web/*`; the
   shared type contract is `frontend/src/services/contract.ts`. The engine reuses the SAME
   `backend/*/migrations/*.up.sql` files, so exported `.sqlite` files are interchangeable
   desktop⇄web. Deploy: `.github/workflows/deploy-web.yml` → GitHub Pages. See `ARCHITECTURE.md` §17.

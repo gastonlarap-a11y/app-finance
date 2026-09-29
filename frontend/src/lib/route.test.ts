@@ -19,6 +19,8 @@ describe('parseHash', () => {
     ['#/config', { page: 'config', section: null }],
     ['#/config/tarjetas', { page: 'config', section: 'tarjetas' }],
     ['#/config/nada', { page: 'config', section: null }],
+    // The bank-email section was removed: a saved link opens the list.
+    ['#/config/correo', { page: 'config', section: null }],
     ['#/mes', { page: 'resumen' }],
     ['#/no-existe/x', { page: 'resumen' }],
   ] as const)('%s', (hash, want) => {
@@ -26,9 +28,8 @@ describe('parseHash', () => {
   })
 
   it('sends desktop-only sections to the Configuración list on the web build', () => {
-    expect(parseHash('#/config/correo', true)).toEqual({ page: 'config', section: null })
     expect(parseHash('#/config/actualizaciones', true)).toEqual({ page: 'config', section: null })
-    expect(parseHash('#/config/correo', false)).toEqual({ page: 'config', section: 'correo' })
+    expect(parseHash('#/config/actualizaciones', false)).toEqual({ page: 'config', section: 'actualizaciones' })
     expect(parseHash('#/config/respaldo', true)).toEqual({ page: 'config', section: 'respaldo' })
   })
 })
