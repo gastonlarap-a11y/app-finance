@@ -10,26 +10,56 @@
       "Bash(go test:*)",
       "Bash(npm run:*)",
       "Bash(npm test:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(./node_modules/.bin/eslint:*)",
+      "Bash(./node_modules/.bin/vitest:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(wails3 version)",
+      "Bash(wails3 task check)",
+      "Bash(wails3 task lint)",
+      "Bash(wails3 task test)",
+      "Bash(wails3 task typecheck)",
+      "Bash(task check)",
+      "Bash(task lint)",
+      "Bash(task test)",
+      "Bash(task typecheck)"
     ],
     "ask": [
       "Bash(git push:*)"
     ],
     "deny": [
-      "Read(./config.toml)",
+      "Read(/config.toml)",
       "Read(**/.env)",
       "Read(**/*.env)",
       "Read(**/secrets.env)",
-      "Read(**/google-token.json)"
+      "Read(**/google-token.json)",
+      "Read(**/*.pem)"
     ]
   },
+  "enabledMcpjsonServers": [
+    "github"
+  ],
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 180,
+            "command": "bash \"$HOME/.claude/hooks/verify-turn.sh\" '*.go,go.mod,go.sum,.golangci.yml::golangci-lint run ./...' 'frontend/*::npm --prefix frontend run typecheck' 'frontend/*::npm --prefix frontend run lint'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
+            "if": "Bash(git *)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/git-safety.sh\""
           }
         ]
@@ -42,13 +72,13 @@
           {
             "type": "command",
             "if": "Edit(*.go)",
-            "command": "gofmt -w \"$(cat | jq -r '.tool_input.file_path')\"",
+            "command": "golangci-lint fmt \"$(cat | jq -r '.tool_input.file_path')\"",
             "timeout": 30
           },
           {
             "type": "command",
             "if": "Write(*.go)",
-            "command": "gofmt -w \"$(cat | jq -r '.tool_input.file_path')\"",
+            "command": "golangci-lint fmt \"$(cat | jq -r '.tool_input.file_path')\"",
             "timeout": 30
           }
         ]

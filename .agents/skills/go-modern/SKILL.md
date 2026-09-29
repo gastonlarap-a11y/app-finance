@@ -9,7 +9,7 @@ description: >
 # Go 1.26 Modern Coding Skill
 
 > **Source**: Official Go 1.26 Release Notes — <https://go.dev/doc/go1.26>
-> **Go version in this workspace**: `go 1.25.8` (upgrade to 1.26 when ready)
+> **Go version in this workspace**: `go 1.27` (`go.mod`) — every Go 1.26 idiom below applies
 
 ---
 

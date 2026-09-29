@@ -1,0 +1,3 @@
+# Committed files kept out of Grep/Glob (ripgrep honours .ignore; git still tracks them).
+# Build output is not listed: ripgrep already skips everything .gitignore covers.
+frontend/package-lock.json

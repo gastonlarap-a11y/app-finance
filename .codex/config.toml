@@ -1,0 +1,10 @@
+# Project defaults for Codex CLI (loaded only when this project is trusted).
+# Mirrors the Claude Code project config by hand — see .claude/rules/agent-config.md.
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+# Same server as .mcp.json (Codex does not read it), read-only: writes stay on `gh`.
+# Codex has no headersHelper: export GITHUB_PAT yourself, e.g. GITHUB_PAT="$(gh auth token)".
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/readonly"
+bearer_token_env_var = "GITHUB_PAT"

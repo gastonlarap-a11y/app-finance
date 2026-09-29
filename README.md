@@ -99,7 +99,7 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
 | [Go](https://go.dev/dl/) | 1.27+ | Descargar del sitio oficial |
 | [Node.js](https://nodejs.org/) | 24 LTS (`frontend/.nvmrc`) | Descargar del sitio oficial |
 | Wails v3 CLI | v3.0.0-beta.25 | Ver abajo |
-| [Task](https://taskfile.dev) | 3.x | `go install github.com/go-task/task/v3/cmd/task@latest` |
+| [Task](https://taskfile.dev) | 3.x | `go install github.com/go-task/task/v3/cmd/task@latest` (opcional: sin Task, `wails3 task <nombre>` corre el mismo Taskfile) |
 | [golangci-lint](https://golangci-lint.run) | v2.13+ | `brew install golangci-lint` (sólo para `task lint`/`task check`) |
 
 ### Pasos
@@ -128,6 +128,12 @@ cp config.example.toml config.toml
 **5. Instalar dependencias del frontend:**
 ```bash
 cd frontend && npm install && cd ..
+```
+
+**6. Instalar Chromium headless para los tests de UI** (una vez por máquina; lo usa el proyecto
+`browser` de vitest en `npm test` / `task test`):
+```bash
+cd frontend && npx playwright install chromium && cd ..
 ```
 
 Ya está listo para desarrollar.
@@ -163,6 +169,18 @@ task vuln        # govulncheck + npm audit (dependencias de producción)
 El typecheck desktop necesita los bindings generados (`wails3 generate bindings -ts`): el wrapper
 `frontend/src/services/finance.ts` asigna los bindings al contrato escrito a mano
 (`services/contract.ts`), así que un cambio de firma en Go no reflejado en el contrato falla aquí.
+
+**Un solo test mientras se itera:**
+```bash
+go test -run TestName ./backend/finance                             # un test de Go
+cd frontend && npx vitest run --project unit|browser [archivo]      # un proyecto / un archivo de vitest
+```
+
+**Target web/PWA (iPad)** — el mismo frontend sobre el motor TS local, sin backend Go:
+```bash
+cd frontend && npm run dev:web     # servidor de desarrollo (abrir /app-finance/ en el navegador)
+cd frontend && npm run build:web   # typecheck (tsconfig.web.json) + bundle PWA → dist/
+```
 
 ---
 
@@ -304,6 +322,9 @@ app-finance/
 │   ├── settings/           # carpeta BD, Google Drive, backup al cerrar
 │   ├── diagnostics/        # servicio de diagnóstico (error reporting)
 │   ├── reports/            # excel.go — SaveTable: .xlsx + diálogo nativo «Guardar como»
+│   ├── updates/            # actualizaciones in-app (Wails pkg/updater, firma Ed25519, solo escritorio)
+│   ├── reminders/          # notificaciones nativas de vencimientos (solo escritorio)
+│   ├── mailsync/           # solo migraciones retiradas del antiguo sync de correo
 │   └── shared/
 │       ├── config/         # cargador de config
 │       ├── prefs/          # prefs de usuario que sobreescriben config
@@ -316,15 +337,18 @@ app-finance/
 │       ├── drive/          # manager OAuth de Google Drive
 │       └── types/          # Decimal (dinero)
 │
+├── tools/updatesign/       # firma/verificación Ed25519 de los artefactos de actualización
+│
 └── frontend/
     ├── index.html · vite.config.ts · package.json · tsconfig.json
     └── src/
         ├── main.tsx · App.tsx · index.css
         ├── atoms/                        # estado Jotai de UI (period, quick-add, refresh)
-        ├── services/{finance,users,settings,diagnostics}.ts  # wrappers tipados por contract.ts
+        ├── services/{finance,users,settings,diagnostics,reports,updates}.ts  # wrappers tipados por contract.ts
         ├── services/web/*                # adaptadores del target web (motor TS local)
         ├── engine/                       # port TS del dominio sobre sqlite-wasm (target web)
         ├── lib/{route,useRoute,shortcuts,theme,format,money,result,notify,useQuery}.ts
+        ├── lib/statements/               # parsers de cartolas y estados de cuenta (PDF/CSV, compartidos)
         └── components/
             ├── shell/                    # AppShell, Sidebar, PeriodNav, QuickAddHost, MobileTopBar
             ├── config/                   # hub de Configuración (sections.tsx) y sus secciones nuevas
@@ -341,11 +365,12 @@ app-finance/
 - **desktop** (macOS): `go vet`, golangci-lint, `go test -race`, govulncheck, compilación; luego
   instala el `wails3` de la versión fijada en `go.mod`, genera los bindings y corre ESLint + typecheck
   desktop/web del frontend.
-- **web** (ubuntu): vitest (paridad del motor TS), typecheck + bundle PWA y `npm audit` de producción.
+- **web** (ubuntu): vitest (paridad del motor TS + tests de UI en Chromium headless), typecheck +
+  bundle PWA y `npm audit` de producción.
 - **gitleaks**: escaneo de secretos.
 
-`.github/workflows/deploy-web.yml` publica la PWA en GitHub Pages en cada push a `main` que toque el
-frontend o las migraciones. Dependabot (`.github/dependabot.yml`) propone actualizaciones semanales
+`.github/workflows/deploy-web.yml` publica la PWA en GitHub Pages cada vez que CI termina en verde
+sobre un push a `main` (compila ese mismo commit: tests del motor + `build:web`). Dependabot (`.github/dependabot.yml`) propone actualizaciones semanales
 agrupadas de Go, npm y GitHub Actions (Wails y `@wailsio/runtime` quedan fuera: se suben juntos a mano).
 `.github/workflows/release.yml` publica los instaladores: al subir un tag `vX.Y.Z` compila en macOS el
 `.dmg` universal (Apple Silicon + Intel) y el instalador NSIS de Windows, y los sube como **GitHub
