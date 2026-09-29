@@ -1,8 +1,17 @@
 // Spanish wording for results the UI reports, kept pure so it is tested apart
 // from the screens that show it.
-import { periodLabel } from './format'
+import { formatCLP, periodLabel } from './format'
+import { isZero } from './money'
 
 type Span = { startPeriod: string; endPeriod: string }
+type Moved = { mode: string; amount: string }
+
+// transferAmount says what a transfer moves: its amount, or the salary minus
+// what stays behind (the whole salary when nothing stays).
+export function transferAmount(t: Moved): string {
+  if (t.mode !== 'salary_rest') return formatCLP(t.amount)
+  return isZero(t.amount) ? 'Todo el sueldo' : `Sueldo − ${formatCLP(t.amount)}`
+}
 type CatalogCounts = { categories: number; merchants: number; rules: number }
 
 // transferSpan says when a transfer moves money: once, every month, or a range.

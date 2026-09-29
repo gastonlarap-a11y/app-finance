@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { periodLabel } from './format'
-import { catalogMessage, transferSpan } from './wording'
+import { formatCLP, periodLabel } from './format'
+import { catalogMessage, transferAmount, transferSpan } from './wording'
+
+describe('transferAmount', () => {
+  it('names a fixed amount, the salary minus what stays, and the whole salary', () => {
+    expect(transferAmount({ mode: 'fixed', amount: '1500000' })).toBe(formatCLP('1500000'))
+    expect(transferAmount({ mode: 'salary_rest', amount: '470000' })).toBe(`Sueldo − ${formatCLP('470000')}`)
+    expect(transferAmount({ mode: 'salary_rest', amount: '0' })).toBe('Todo el sueldo')
+  })
+})
 
 describe('transferSpan', () => {
   it('names a one-off, an open monthly and an ended monthly transfer', () => {
