@@ -7,6 +7,8 @@ import { itauAccountStatement } from '@/lib/statements/itau/accountStatement'
 import { itauCardStatement } from '@/lib/statements/itau/cardStatement'
 import { itauWebCardStatement } from '@/lib/statements/itau/webCardStatement'
 import { bancoChileCardStatement } from '@/lib/statements/bancochile/cardStatement'
+import { cencosudCardStatement } from '@/lib/statements/cencosud/cardStatement'
+import { cmrCardStatement } from '@/lib/statements/cmr/cardStatement'
 import { StatementFormatError, type ParsedStatement, type StatementParser } from '@/lib/statements/types'
 
 const PARSERS: readonly StatementParser[] = [
@@ -14,6 +16,8 @@ const PARSERS: readonly StatementParser[] = [
   bancoChileCardStatement,
   itauCardStatement,
   itauWebCardStatement,
+  cencosudCardStatement,
+  cmrCardStatement,
 ]
 
 // format is the parser's label, shown to the user.

@@ -1,10 +1,13 @@
 // Credit-card statement formats beyond Itaú's emailed PDF (cardStatement.test.ts):
-// Banco de Chile's (same CMF standard, other issuer and text runs) and Itaú's
-// downloaded from its website (another layout).
+// Banco de Chile's (same CMF standard, other issuer and text runs), Itaú's
+// downloaded from its website, Cencosud's and CMR's (layouts of their own).
 import { describe, expect, it } from 'vitest'
 import { parseStatement } from '@/lib/statements/detect'
 import { syntheticBancoChileRuns as bancoChile } from '@/lib/statements/bancochile/testdata/cardStatementRuns'
 import { syntheticItauWebRuns as itauWeb } from '@/lib/statements/itau/testdata/webCardStatementRuns'
+import { syntheticCencosudRuns as cencosud } from '@/lib/statements/cencosud/testdata/cardStatementRuns'
+import { syntheticCmrRuns as cmr } from '@/lib/statements/cmr/testdata/cardStatementRuns'
+import { CMR_UNVERIFIED_NOTE } from '@/lib/statements/cmr/cardStatement'
 import type { TextRun } from '@/lib/statements/layout'
 import type { CardStatementInput } from '@/services/contract'
 import { createTestDb } from '@/engine/testing/db'
@@ -139,5 +142,117 @@ describe('estado de cuenta tarjeta Itaú descargado de la web', () => {
   it('rechaza el estado internacional de la web, que aún no se admite', () => {
     const international = itauWeb.map((r) => (r.str === 'Estado de cuenta nacional' ? { ...r, str: 'Estado de cuenta internacional' } : r))
     expect(() => parseStatement(international)).toThrow(/internacional descargado de la web/)
+  })
+})
+
+describe('estado de cuenta tarjeta Cencosud Scotiabank', () => {
+  it('se lee completo, sin las notas escritas encima, y cuadra con el total facturado y el cupo', () => {
+    const { list, warnings, notes, format } = parse(cencosud)
+    expect(format).toBe('Estado de cuenta tarjeta Cencosud Scotiabank')
+    expect(warnings).toEqual([])
+    const { lines, schedule, ...head } = list[0]!
+    expect(head).toEqual({
+      issuer: 'cencosud', kind: 'nacional', currency: 'CLP', cardLastDigits: '4321', statementDate: '2026-03-21',
+      periodFrom: '2026-02-22', periodTo: '2026-03-21', dueDate: '2026-04-06',
+      previousPeriodFrom: '2026-01-22', previousPeriodTo: '2026-02-21', nextPeriodFrom: '2026-03-22', nextPeriodTo: '2026-04-21',
+      creditLimit: '3000000', creditUsed: '1153000', creditAvailable: '1847000',
+      cashLimit: '', cashUsed: '0', cashAvailable: '1500000',
+      previousBalanceStart: '0', previousBilled: '500000', previousPaid: '-500000', previousBalanceEnd: '0',
+      transferFromNational: '', totalOperations: '-310000', voluntaryProducts: '1000', chargesNet: '2000', totalBilled: '193000',
+      minimumPayment: '50000', prepaymentCost: '1153000', automaticCharge: '', unbilledBalance: '960000',
+      rateRevolving: '2.46', rateInstallments: '3.40', rateCashAdvance: '3.40',
+      caeRevolving: '50.85', caeInstallments: '64.18', caeCashAdvance: '64.18', caePrepayment: '3.39',
+      lateInterestRate: '29.52', fileHash: '',
+    })
+    // Cencosud names each coming month by when it is paid: MAY is April's statement.
+    expect(schedule).toEqual([
+      { period: '2026-04', amount: '130000' },
+      { period: '2026-05', amount: '130000' },
+      { period: '2026-06', amount: '100000' },
+      { period: '2026-07', amount: '100000' },
+    ])
+    expect(lines.map(lineTuple)).toEqual([
+      ['pago', '', '2026-02-27', '', 'MONTO CANCELADO SERVIPAG APP', '', '500000', '1/1', '-500000'],
+      ['compra', 'LAS CONDES', '2025-12-22', '', 'TIENDA UNO CL', '', '1200000', '3/12', '100000'],
+      ['compra', 'SANTIAGO', '2026-02-21', '', 'MERCADOPAGO TIENDA DOS', '', '50000', '1/1', '50000'],
+      ['compra', 'SANTIAGO', '2026-02-24', '', 'TIENDA TRES', '', '90000', '1/3', '30000'],
+      // A reversal stays among the purchases: the inbox stages it as money back.
+      ['compra', 'SANTIAGO', '2026-03-11', '', 'TIENDA TRES', '', '10000', '1/1', '-10000'],
+      ['compra', '', '2026-03-04', '', 'SERVICIO DIGITAL 22 USD', '', '20000', '1/1', '20000'],
+      ['voluntario', '', '2026-03-21', '', 'SEGURO DESGRAVAMEN', '', '1000', '1/1', '1000'],
+      ['cargo', '', '2026-03-21', '', 'SERVICIO ADMINISTRACION MENSUAL', '', '2000', '1/1', '2000'],
+    ])
+    expect(notes).toEqual(['Estado nacional ••4321 al 21/03/2026 (CLP): 1 pago, 6 compras, 1 cargo.'])
+  })
+
+  it('no depende del orden en que el PDF entrega el texto', () => {
+    expect(parse(cencosud.toReversed()).list).toEqual(parse(cencosud).list)
+  })
+
+  it('avisa cuando los movimientos no suman el total facturado', () => {
+    // The monthly fee's charged amount read as 2.500 instead of 2.000.
+    const tampered = cencosud.map((r) => (r.page === 2 && r.y === 366 && r.x > 540 ? { ...r, str: '2.500' } : r))
+    expect(parse(tampered).warnings).toEqual([
+      'Estado nacional: el total facturado no cuadra (calculado 193500, informado 193000). Revisa el estado de cuenta.',
+    ])
+  })
+
+  it('el motor guarda las compras con el mes de su primera cuota y la reversa como abono', async () => {
+    const db = await createTestDb()
+    const finance = createFinanceService(db, createSession(db))
+    const r = await finance.ImportCardStatement(parse(cencosud).list[0]!)
+    expect(r.error).toBeUndefined()
+    const items = (await finance.ListImportItems('pendiente')).data!
+    expect(items.find((it) => it.description === 'TIENDA UNO CL')).toMatchObject({
+      issuer: 'cencosud', firstPeriod: '2026-01', installmentNumber: 3, installmentsTotal: 12,
+      installmentAmount: '100000', amount: '1200000',
+    })
+    expect(items.filter((it) => it.kind === 'abono').map((it) => [it.description, it.amount])).toEqual([['TIENDA TRES', '10000']])
+    // The same file again adds nothing.
+    expect((await finance.ImportCardStatement(parse(cencosud).list[0]!)).data?.alreadyImported).toBe(true)
+  })
+})
+
+describe('estado de cuenta tarjeta CMR Falabella', () => {
+  it('se lee completo, con la tarjeta del pie y el pago entre los cargos, y avisa que falta validarlo', () => {
+    const { list, warnings, notes, format } = parse(cmr)
+    expect(format).toBe('Estado de cuenta tarjeta CMR Falabella')
+    expect(warnings).toEqual([])
+    const { lines, schedule, ...head } = list[0]!
+    expect(head).toEqual({
+      issuer: 'cmr', kind: 'nacional', currency: 'CLP', cardLastDigits: '4321', statementDate: '2026-06-19',
+      periodFrom: '2026-05-20', periodTo: '2026-06-19', dueDate: '2026-07-05',
+      previousPeriodFrom: '2026-04-20', previousPeriodTo: '2026-05-19', nextPeriodFrom: '2026-06-20', nextPeriodTo: '2026-07-19',
+      creditLimit: '2000000', creditUsed: '120000', creditAvailable: '1880000',
+      cashLimit: '', cashUsed: '0', cashAvailable: '1880000',
+      previousBalanceStart: '0', previousBilled: '44530', previousPaid: '-44530', previousBalanceEnd: '0',
+      transferFromNational: '', totalOperations: '15470', voluntaryProducts: '0', chargesNet: '0', totalBilled: '60000',
+      minimumPayment: '60000', prepaymentCost: '120000', automaticCharge: '', unbilledBalance: '60000',
+      rateRevolving: '3.44', rateInstallments: '4.37', rateCashAdvance: '4.37',
+      caeRevolving: '50.06', caeInstallments: '42.85', caeCashAdvance: '45.67', caePrepayment: '0.00',
+      lateInterestRate: '3.44', fileHash: '',
+    })
+    expect(schedule).toEqual([]) // its coming months are not read until a real statement shows them
+    expect(lines.map(lineTuple)).toEqual([
+      ['compra', 'FALABELLA ONLINE', '2026-05-28', '', 'Tienda Uno', '', '30000', '1/1', '30000'],
+      ['compra', 'SANTIAGO', '2026-06-10', '', 'Tienda Dos', '', '90000', '1/3', '30000'],
+      ['pago', 'S/I', '2026-05-25', '', 'Pago Tarjeta Cmr', '', '-44530', '1/1', '-44530'],
+    ])
+    expect(notes).toEqual(['Estado nacional ••4321 al 19/06/2026 (CLP): 1 pago, 2 compras.', CMR_UNVERIFIED_NOTE])
+  })
+
+  it('no depende del orden en que el PDF entrega el texto', () => {
+    expect(parse(cmr.toReversed()).list).toEqual(parse(cmr).list)
+  })
+})
+
+describe('detección de emisores', () => {
+  it.each([
+    [cencosud, 'Estado de cuenta tarjeta Cencosud Scotiabank'],
+    [cmr, 'Estado de cuenta tarjeta CMR Falabella'],
+    [bancoChile, 'Estado de cuenta tarjeta de crédito Banco de Chile'],
+    [itauWeb, 'Estado de cuenta tarjeta de crédito Itaú (descargado de la web)'],
+  ])('cada formato se reconoce por sus marcas (%#)', (runs, format) => {
+    expect(parseStatement(runs).format).toBe(format)
   })
 })

@@ -95,8 +95,8 @@ export function CardStatementsSection() {
             </Button>
           }
         >
-          Impórtalos desde la Bandeja con el PDF de la tarjeta (Itaú, el del correo o el de su web, o Banco de Chile): se guardan
-          completos y sus compras se comparan con tus gastos.
+          Impórtalos desde la Bandeja con el PDF de la tarjeta (Itaú, el del correo o el de su web; Banco de Chile; Cencosud
+          Scotiabank o CMR Falabella): se guardan completos y sus compras se comparan con tus gastos.
         </EmptyState>
       ) : (
         <ul className="space-y-2">
