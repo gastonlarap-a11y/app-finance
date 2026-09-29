@@ -27,8 +27,9 @@ frontend/dist/
 frontend/node_modules/
 frontend/bindings/
 
-# App config local (tiene rutas hardcodeadas y datos sensibles)
-config.toml
+# App config local (tiene rutas hardcodeadas y datos sensibles). Anclado a la raíz:
+# .codex/config.toml sí se versiona.
+/config.toml
 
 # Variables de entorno locales
 .env

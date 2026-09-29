@@ -1,0 +1,16 @@
+{
+  "description": "End-of-turn gate (mirrors the Stop hook in .claude/settings.json)",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 180,
+            "command": "CLAUDE_PROJECT_DIR=\"$(git rev-parse --show-toplevel)\" bash \"$HOME/.claude/hooks/verify-turn.sh\" '*.go,go.mod,go.sum,.golangci.yml::golangci-lint run ./...' 'frontend/*::npm --prefix frontend run typecheck' 'frontend/*::npm --prefix frontend run lint'"
+          }
+        ]
+      }
+    ]
+  }
+}

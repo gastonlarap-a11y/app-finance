@@ -22,6 +22,8 @@ paths:
 - **Personalization**: a category/card/goal shows its look through `lib/look.ts`
   (`categoryLook`, `cardColor`, `goalLook`, `categoryLooks()` for names) and `LookIcon`/`ColorDot`;
   color only via `data-look` + `text-(--look)`/`bg-(--look-soft)`, never a class built from a key.
+  Icons/colors the user picks are stored as keys of `backend/finance/looks.json` (`''` =
+  automatic). Details: `ARCHITECTURE.md` §21.
 - **Icons**: `lucide-react` static named imports, `aria-hidden="true"` next to visible text;
   icon-only controls go through `IconButton` or `Menu` (mandatory label). No emoji/Unicode glyphs
   as icons, and no ✓/⚠ inside `notify()` text (the toast's icon states the tone).
@@ -29,8 +31,10 @@ paths:
   mouse and 44px on `pointer: coarse` (the primitives already do it).
 - **Every async view** ships loading (skeleton), empty (reason + action), error (`QueryError`
   with retry) and stale (dimmed, `aria-busy`) states.
-- **Navigation**: link screens with `<Link to={route}>` / `navigate(route)` (`lib/route.ts`,
-  `lib/useRoute.ts`), never "la pestaña X" in copy. A new Configuración section = a
+- **Navigation**: screens are routes in the URL hash; link them with `<Link to={route}>` /
+  `navigate(route)` (`lib/route.ts`, `lib/useRoute.ts`), never with an atom nor "la pestaña X" in
+  copy. Month-dependent data belongs in the month views; what is configured once, in
+  Configuración. Keyboard shortcuts go through `lib/shortcuts.ts` (`ARCHITECTURE.md` §22). A new Configuración section = a
   `ConfigSection` in `lib/route.ts` + its entry in `components/config/sections.tsx`. Each screen's
   title comes from `components/shell/nav.ts` (the shell renders the `PageHeader`).
 - **Tests**: interactive behavior (focus, keyboard, dialogs, popovers) in `*.dom.test.tsx`
