@@ -43,7 +43,9 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
 - **Cuentas y transferencias**: cuentas corrientes, vista, digitales/prepago (Mercado Pago), efectivo y
   ahorro, cada una con su saldo. Una tarjeta y un gasto fijo (el dividendo por PAC) indican de qué cuenta
   se pagan; las transferencias entre tus cuentas (el sueldo que pasas a otro banco, la carga de Mercado
-  Pago), únicas o mensuales, mueven el saldo de cada cuenta sin contar como gasto ni ingreso.
+  Pago), únicas o mensuales, mueven el saldo de cada cuenta sin contar como gasto ni ingreso. Una
+  transferencia puede pasar «el resto del sueldo» (el sueldo de cada mes menos lo que se queda, como el
+  dividendo), y cada cuenta se concilia con el saldo real del banco desde el panel Cuentas del Resumen.
 - **Catálogo sugerido**: con un botón en Categorías o Comercios agrega las categorías habituales en
   Chile (con su ícono y color) y ~200 comercios conocidos con su categoría y las reglas que los reconocen
   al importar. Un comercio con categoría habitual la propone al elegirlo en un gasto (Apple →

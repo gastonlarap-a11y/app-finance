@@ -9,8 +9,9 @@ import { isNegative, isZero } from '@/lib/money'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Link } from './Link'
 import { TransfersSection } from './Transfers'
-import { Landmark, Pencil, Plus } from 'lucide-react'
-import { Badge, Button, ConfirmAction, EmptyState, Field, Modal, MoneyInput, QueryError, Section, Select, SkeletonRows, inputCls } from './ui'
+import { AccountReconcileDialog } from './AccountReconcileDialog'
+import { CircleCheck, Landmark, Pencil, Plus, Scale } from 'lucide-react'
+import { Badge, Button, ConfirmAction, EmptyState, Field, Menu, Modal, MoneyInput, QueryError, Section, Select, SkeletonRows, inputCls } from './ui'
 
 const KIND_LABEL: Record<string, string> = {
   corriente: 'Cuenta corriente',
@@ -73,29 +74,69 @@ export function AccountsSettings() {
 }
 
 // AccountBalancesPanel shows, in the Resumen, each account at the close of the
-// month on screen. Nothing while the profile has no accounts.
+// month on screen, and lets the user reconcile it with the bank's balance.
+// Nothing while the profile has no accounts.
 export function AccountBalancesPanel({ period }: { period: string }) {
   const version = useVersion('ledger')
   const invalidate = useInvalidate()
+  const [reconciling, setReconciling] = useState<AccountView | null>(null)
   const query = useQuery(`account-balances:${period}:${version}`, async () => {
     const res = await FinanceService.ListAccounts(period)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'cuentas no disponibles')
     return res.data.accounts
   })
   if (query.status !== 'error' && (query.data?.length ?? 0) === 0) return null
+  // A month that has not started, or before the account's opening, cannot be closed.
+  const canReconcile = (a: AccountView) => period <= currentPeriod() && a.openingPeriod <= period
   return (
     <Section title="Cuentas" action={<Link to={{ page: 'config', section: 'cuentas' }}>Administrar</Link>}>
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
       ) : (
-        <ul className="space-y-2 text-sm">
+        <ul className="space-y-2.5 text-sm">
           {(query.data ?? []).map((a) => (
-            <li key={a.id} className="flex items-center justify-between gap-3">
-              <span className="min-w-0 truncate text-fg-muted">{a.name}</span>
-              <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
+            <li key={a.id} className="space-y-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-fg-muted">{a.name}</span>
+                  {a.conciliacion && (
+                    <Badge tone="positive" icon={CircleCheck}>
+                      Conciliada
+                    </Badge>
+                  )}
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
+                  {canReconcile(a) && (
+                    <Menu
+                      label={`Acciones de la cuenta ${a.name}`}
+                      items={[
+                        {
+                          label: a.conciliacion ? `Editar conciliación de ${periodLabel(period)}…` : `Conciliar ${periodLabel(period)}…`,
+                          icon: Scale,
+                          onSelect: () => setReconciling(a),
+                        },
+                      ]}
+                    />
+                  )}
+                </span>
+              </div>
+              {a.conciliacion && !isZero(a.conciliacion.diferencia) && (
+                <p className="text-xs text-fg-subtle">
+                  El banco dice {formatCLP(a.conciliacion.saldoReal)}; la app calculaba {formatCLP(a.conciliacion.calculado)}.
+                </p>
+              )}
             </li>
           ))}
         </ul>
+      )}
+      {reconciling && (
+        <AccountReconcileDialog
+          account={reconciling}
+          period={period}
+          onClose={() => setReconciling(null)}
+          onSaved={() => invalidate('ledger')}
+        />
       )}
     </Section>
   )
@@ -237,14 +278,18 @@ function AccountForm({
             </Select>
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Saldo al inicio del mes">
+        <div className="grid grid-cols-2 items-start gap-3">
+          <Field label="Saldo al inicio del mes" hint="Lo que tenía antes de los movimientos de ese mes (por ejemplo, antes del sueldo).">
             <MoneyInput value={opening} onChange={setOpening} placeholder="0" />
           </Field>
           <Field label="Mes">
             <input type="month" className={inputCls} value={openingPeriod} onChange={(e) => setOpeningPeriod(e.target.value)} required />
           </Field>
         </div>
+        <p className="text-xs text-fg-subtle">
+          Se pone una sola vez: desde ahí la app sigue sola mes a mes. Si después no calza con el banco, usa «Conciliar» en el panel
+          Cuentas del Resumen.
+        </p>
         <label className="flex items-center gap-2 text-sm text-fg">
           <input type="checkbox" className="size-4 accent-accent" checked={salary} onChange={(e) => setSalary(e.target.checked)} />
           Aquí cae mi sueldo

@@ -1,11 +1,12 @@
 import { useState, type SubmitEvent } from 'react'
 import { ArrowRight, ArrowRightLeft, CalendarX, Pencil, Plus, Trash } from 'lucide-react'
 import { FinanceService, type Account, type Transfer } from '@/services/finance'
+import type { TransferMode } from '@/services/contract'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { formatCLP, shiftPeriod } from '@/lib/format'
-import { transferSpan } from '@/lib/wording'
+import { shiftPeriod } from '@/lib/format'
+import { transferAmount, transferSpan } from '@/lib/wording'
 import {
   Badge,
   Button,
@@ -17,6 +18,7 @@ import {
   MoneyInput,
   QueryError,
   Section,
+  SegmentedControl,
   Select,
   SkeletonRows,
   Switch,
@@ -25,6 +27,11 @@ import {
 } from './ui'
 
 type Editing = { kind: 'new' } | { kind: 'edit'; transfer: Transfer } | { kind: 'end'; transfer: Transfer } | { kind: 'delete'; transfer: Transfer }
+
+const MODES = [
+  { value: 'fixed', label: 'Monto fijo' },
+  { value: 'salary_rest', label: 'Resto del sueldo' },
+] as const satisfies readonly { value: TransferMode; label: string }[]
 
 // TransfersSection is Configuración › Cuentas › Transferencias: money moved
 // between two own accounts (the salary passed on, a digital wallet topped
@@ -101,7 +108,7 @@ export function TransfersSection({ period }: { period: string }) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <strong className="tabular-nums text-fg">{formatCLP(t.amount)}</strong>
+                <strong className="tabular-nums text-fg">{transferAmount(t)}</strong>
                 <Menu label={`Acciones de la transferencia ${nameOf(t.fromAccountId)} a ${nameOf(t.toAccountId)}`} items={actions(t)} />
               </div>
             </li>
@@ -157,19 +164,24 @@ function TransferForm({
   const salaryAccount = accounts.find((a) => a.receivesSalary)
   const [from, setFrom] = useState(transfer?.fromAccountId ?? salaryAccount?.id ?? accounts[0]!.id)
   const [to, setTo] = useState(transfer?.toAccountId ?? accounts.find((a) => a.id !== from)!.id)
+  const [mode, setMode] = useState<TransferMode>(transfer?.mode === 'salary_rest' ? 'salary_rest' : 'fixed')
   const [amount, setAmount] = useState(transfer?.amount ?? '')
   const [description, setDescription] = useState(transfer?.description ?? '')
   const [startPeriod, setStartPeriod] = useState(transfer?.startPeriod ?? defaultPeriod)
   const [monthly, setMonthly] = useState(transfer ? transfer.endPeriod !== transfer.startPeriod : true)
   const [busy, setBusy] = useState(false)
+  // Only the salary's own account can pass on "the rest of the salary".
+  const source = accounts.find((a) => a.id === from)
+  const followsSalary = source?.receivesSalary === true && mode === 'salary_rest'
 
   async function submit(e: SubmitEvent) {
     e.preventDefault()
     setBusy(true)
+    const sent: TransferMode = followsSalary ? 'salary_rest' : 'fixed'
     try {
       const res = transfer
-        ? await FinanceService.UpdateTransfer(transfer.id, from, to, description, 'fixed', amount)
-        : await FinanceService.CreateTransfer(from, to, description, 'fixed', amount, startPeriod, monthly)
+        ? await FinanceService.UpdateTransfer(transfer.id, from, to, description, sent, amount)
+        : await FinanceService.CreateTransfer(from, to, description, sent, amount, startPeriod, monthly)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -199,9 +211,21 @@ function TransferForm({
           </Field>
         </div>
         {from === to && <p className="-mt-2 text-xs text-negative-fg">Elige dos cuentas distintas.</p>}
-        <Field label="Monto">
-          <MoneyInput value={amount} onChange={setAmount} placeholder="1500000" required autoFocus />
-        </Field>
+        {source?.receivesSalary && (
+          <SegmentedControl label="Cuánto pasa" value={mode} options={MODES} onChange={setMode} />
+        )}
+        {followsSalary ? (
+          <Field
+            label={`Se queda en ${source.name}`}
+            hint="Cada mes pasa el sueldo de ese mes menos este monto (por ejemplo, el dividendo que se paga desde esa cuenta). Pon 0 para pasarlo entero."
+          >
+            <MoneyInput value={amount} onChange={setAmount} placeholder="470000" required autoFocus />
+          </Field>
+        ) : (
+          <Field label="Monto">
+            <MoneyInput value={amount} onChange={setAmount} placeholder="1500000" required autoFocus />
+          </Field>
+        )}
         <Field label="Descripción (opcional)">
           <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Sueldo a Itaú" />
         </Field>
