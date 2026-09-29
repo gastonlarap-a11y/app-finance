@@ -65,13 +65,26 @@ const SOURCE_LABEL: Record<string, string> = {
 const isCredit = (it: ImportItemView) => it.kind === 'abono'
 
 // ready reports whether an item can be confirmed in bulk as suggested: a rule
-// already names its merchant, nothing looks like a duplicate, it is not a card
-// payment (double counting), and it is a CLP expense (credits become income
-// and USD amounts need a reviewed CLP value).
+// already names its merchant, nothing looks like a duplicate (of an expense or
+// of another imported movement), it is neither a card payment nor a transfer
+// between own accounts (double counting), and it is a CLP expense (credits
+// become income and USD amounts need a reviewed CLP value).
 function ready(it: ImportItemView): boolean {
   return (
-    it.rulePattern !== '' && it.duplicateExpenseId == null && it.hint !== 'card_payment' && !isCredit(it) && it.currency === 'CLP'
+    it.rulePattern !== '' &&
+    it.duplicateExpenseId == null &&
+    it.duplicateItemId == null &&
+    it.suggestedTransferId == null &&
+    it.hint !== 'card_payment' &&
+    !isCredit(it) &&
+    it.currency === 'CLP'
   )
+}
+
+const ITEM_STATUS_LABEL: Record<string, string> = {
+  pendiente: 'por revisar',
+  confirmado: 'confirmado',
+  conciliado: 'conciliado',
 }
 
 function confirmAsSuggested(it: ImportItemView) {
@@ -210,6 +223,9 @@ function InboxPanel() {
                 onRestore={() => void run(it.id, () => FinanceService.RestoreImportItem(it.id))}
                 onLink={(expenseId) => void run(it.id, () => FinanceService.LinkImportItem(it.id, expenseId))}
                 onLinkFixed={(fixedId, period) => void run(it.id, () => FinanceService.LinkImportItemToFixed(it.id, fixedId, period))}
+                onLinkTransfer={(transferId, period) =>
+                  void run(it.id, () => FinanceService.LinkImportItemToTransfer(it.id, transferId, period))
+                }
                 // The credit's own month and amount: a reversal lands when the bank posts it.
                 onRefund={(expenseId) =>
                   void run(it.id, () => FinanceService.ConfirmImportItemAsRefund(it.id, expenseId, it.date.slice(0, 7), it.amount))
@@ -332,6 +348,7 @@ function ImportRow({
   onRestore,
   onLink,
   onLinkFixed,
+  onLinkTransfer,
   onRefund,
 }: {
   item: ImportItemView
@@ -342,6 +359,7 @@ function ImportRow({
   onRestore: () => void
   onLink: (expenseId: number) => void
   onLinkFixed: (fixedId: number, period: string) => void
+  onLinkTransfer: (transferId: number, period: string) => void
   onRefund: (expenseId: number) => void
 }) {
   const card = it.cardId != null ? cards.find((c) => c.id === it.cardId) : undefined
@@ -421,6 +439,35 @@ function ImportRow({
             ¿Es el cobro de tu gasto fijo «{it.suggestedFixedDescription}» de {periodLabel(it.suggestedFixedPeriod)}?
           </Suggestion>
         )}
+        {it.duplicateItemId != null && (
+          <Suggestion
+            action={
+              <Button variant="secondary" size="sm" disabled={busy} onClick={onDiscard}>
+                Sí, descartar este
+              </Button>
+            }
+          >
+            ¿Es el mismo movimiento que ya importaste desde {SOURCE_LABEL[it.duplicateItemSource]?.toLowerCase() ?? it.duplicateItemSource}{' '}
+            («{it.duplicateItemDescription}», {ITEM_STATUS_LABEL[it.duplicateItemStatus] ?? it.duplicateItemStatus})?
+          </Suggestion>
+        )}
+        {it.suggestedTransferId != null && (
+          <Suggestion
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => onLinkTransfer(it.suggestedTransferId!, it.suggestedTransferPeriod)}
+              >
+                Sí, es esa transferencia
+              </Button>
+            }
+          >
+            ¿Es tu transferencia «{it.suggestedTransferDescription}» de {periodLabel(it.suggestedTransferPeriod)}?{' '}
+            <span className="text-fg-muted">No cuenta como gasto ni como ingreso: solo mueve plata entre tus cuentas.</span>
+          </Suggestion>
+        )}
         {it.suggestedRefundExpenseId != null && (
           <Suggestion
             action={
@@ -433,6 +480,9 @@ function ImportRow({
           </Suggestion>
         )}
         {it.fixedPeriod !== '' && <div className="text-xs text-fg-muted">Pagó el gasto fijo de {periodLabel(it.fixedPeriod)}</div>}
+        {it.transferPeriod !== '' && it.transferId != null && (
+          <div className="text-xs text-fg-muted">Transferencia entre tus cuentas de {periodLabel(it.transferPeriod)}</div>
+        )}
       </div>
       <div className="flex flex-col items-end gap-2">
         <span className={`font-semibold tabular-nums ${isCredit(it) ? 'text-positive-fg' : 'text-fg'}`}>
@@ -459,7 +509,7 @@ function ImportRow({
         )}
         {it.status === 'confirmado' && it.reopenable && (
           <div className="flex flex-col items-end gap-1">
-            <span className="text-xs text-fg-muted">Su gasto o ingreso está en la papelera</span>
+            <span className="text-xs text-fg-muted">Lo que registró está en la papelera o se eliminó</span>
             <Button variant="secondary" size="sm" disabled={busy} onClick={onRestore}>
               Volver a revisar
             </Button>

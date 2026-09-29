@@ -611,6 +611,15 @@ expense until the user confirms it:
   amount other than its USD figure (CLP has no minor unit, ISO 4217). A confirmed item whose
   expense, income or fixed expense went to the trash can be reopened (`RestoreImportItem`,
   `reopenable` in the view); an expense takes the link of one item only.
+  Two more suggestions, the way Actual Budget reviews an import (`inboxmatch.go`, migration
+  `20260929042`): a pending CLP movement that moves exactly what a transfer between own accounts moves
+  in its month (`salary_rest` included) is offered as that transfer's leg — `LinkImportItemToTransfer`
+  confirms it with `import_items.transfer_id/transfer_period`, adding no expense nor income; each leg
+  (transfer, month, kind: the source's charge and the destination's credit) takes one movement, and
+  deleting the transfer makes the item reopenable. And a pending movement that repeats an earlier one
+  imported from another format or bank label (same kind, currency and amount, a day apart, named alike
+  or with the same bank reference) is flagged as `DuplicateItem*` on the later sighting only; nothing is
+  removed on its own (Actual's auto-dedupe can eat a legitimate repeat).
 - **Statements (PDF, desktop + web)**: parsed in the frontend only (`frontend/src/lib/statements/`),
   then staged with `StageImport`. `pdfText.ts` is the only pdf.js module (dynamic import; its worker
   is precached by the PWA). Parsers work on positioned runs: **rows are rebuilt from y coordinates**

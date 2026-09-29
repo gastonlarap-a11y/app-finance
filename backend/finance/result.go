@@ -420,6 +420,19 @@ type ImportItemView struct {
 	// (same name, not more than it cost): ConfirmImportItemAsRefund links it.
 	SuggestedRefundExpenseID   *int64 `json:"suggestedRefundExpenseId"`
 	SuggestedRefundDescription string `json:"suggestedRefundDescription"`
+	// A pending movement that looks like one leg of a transfer between own
+	// accounts (same amount, that month): LinkImportItemToTransfer confirms it
+	// without counting it as spending or income.
+	SuggestedTransferID          *int64 `json:"suggestedTransferId"`
+	SuggestedTransferDescription string `json:"suggestedTransferDescription"`
+	SuggestedTransferPeriod      string `json:"suggestedTransferPeriod"`
+	// A pending movement that looks like one already imported from another
+	// format or bank label (same kind and amount, a day apart, similar wording):
+	// the same bank fact seen twice. Only flagged, never removed on its own.
+	DuplicateItemID          *int64 `json:"duplicateItemId"`
+	DuplicateItemSource      string `json:"duplicateItemSource"`
+	DuplicateItemStatus      string `json:"duplicateItemStatus"`
+	DuplicateItemDescription string `json:"duplicateItemDescription"`
 	// A confirmed item whose expense or income went to the trash can go back
 	// to review (RestoreImportItem).
 	Reopenable bool `json:"reopenable"`

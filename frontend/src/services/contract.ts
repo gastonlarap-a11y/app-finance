@@ -557,6 +557,9 @@ export interface ImportItem {
   fixedExpenseId: number | null
   fixedPeriod: string // YYYY-MM marked paid; '' = not linked
   refundId: number | null // a credit confirmed as the refund of an expense
+  // One leg of a transfer between own accounts: neither spending nor income.
+  transferId: number | null
+  transferPeriod: string // YYYY-MM of that transfer; '' = not linked
 }
 
 export interface ImportItemView extends ImportItem {
@@ -579,6 +582,17 @@ export interface ImportItemView extends ImportItem {
   // A pending bank credit that looks like the refund of a recent purchase.
   suggestedRefundExpenseId: number | null
   suggestedRefundDescription: string
+  // A pending movement that looks like one leg of a transfer between own
+  // accounts (same amount, that month): LinkImportItemToTransfer confirms it.
+  suggestedTransferId: number | null
+  suggestedTransferDescription: string
+  suggestedTransferPeriod: string
+  // A pending movement that looks like one already imported from another
+  // format or bank label: flagged only, never removed on its own.
+  duplicateItemId: number | null
+  duplicateItemSource: string
+  duplicateItemStatus: string
+  duplicateItemDescription: string
   reopenable: boolean // confirmed item whose expense/income went to the trash
 }
 
@@ -1060,6 +1074,7 @@ export interface FinanceServiceContract {
   ): Promise<ExpenseResult>
   LinkImportItem(id: number, expenseID: number): Promise<OpResult>
   LinkImportItemToFixed(id: number, fixedID: number, period: string): Promise<OpResult>
+  LinkImportItemToTransfer(id: number, transferID: number, period: string): Promise<OpResult>
   DiscardImportItem(id: number): Promise<OpResult>
   RestoreImportItem(id: number): Promise<OpResult>
   ListMerchantRules(): Promise<MerchantRule[]>

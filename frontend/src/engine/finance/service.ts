@@ -490,6 +490,9 @@ const mergeWindowDays = 10
 // detected movement and still be offered as "probably the same purchase"
 // (the merge window: a date typed wrong by days is still found).
 const duplicateWindowDays = mergeWindowDays
+// duplicateItemDays mirrors Go: how far apart two sightings of one bank
+// movement may be dated (a posting date against an operation date).
+const duplicateItemDays = 1
 
 // dayNumber / shiftDay do calendar arithmetic on YYYY-MM-DD strings (UTC days).
 function dayNumber(ymd: string): number {
@@ -1375,6 +1378,75 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         if (cardId != null && ex.cardId != null && ex.cardId !== cardId) continue
         if (Money.fromString(ex.installmentAmount).mulInt(ex.installmentsTotal).cmp(amount) < 0) continue
         if (namesMatch(ex.merchant, item.description) || namesMatch(ex.description, item.description)) return ex
+      }
+      return null
+    }
+  }
+
+  // transferSuggester mirrors Go's loadTransferIndex + suggest: a pending CLP
+  // movement is a transfer leg when a transfer moves exactly its amount in its
+  // month and that leg (transfer, month, kind) is not linked yet; the oldest
+  // transfer wins. It returns the transfer, its label and the month.
+  function transferSuggester(
+    items: ImportItem[],
+  ): (item: ImportItem) => { transfer: Transfer; label: string; period: string } | null {
+    const reviewable = (it: ImportItem) => it.status === ImportPendiente && it.currency === 'CLP' && it.date.length >= 10
+    const months = items.filter(reviewable).map((it) => it.date.slice(0, 7))
+    if (months.length === 0) return () => null
+    const transfers = db.query('SELECT * FROM transfers WHERE user_id = ? ORDER BY id ASC', [uid()]).map(rowToTransfer)
+    if (transfers.length === 0) return () => null
+    const from = months.reduce((a, b) => (b < a ? b : a))
+    const to = months.reduce((a, b) => (b > a ? b : a))
+    const salaries = salaryByMonth(from, to)
+    const names = new Map(
+      db.query('SELECT id, name FROM accounts WHERE user_id = ?', [uid()]).map((r) => [asNumber(r.id), asString(r.name)] as const),
+    )
+    const taken = new Set(
+      db
+        .query('SELECT transfer_id, transfer_period, kind FROM import_items WHERE user_id = ? AND transfer_id IS NOT NULL', [uid()])
+        .map((r) => `${asNumber(r.transfer_id)}|${asString(r.transfer_period)}|${asString(r.kind)}`),
+    )
+    return (item) => {
+      if (!reviewable(item)) return null
+      const period = item.date.slice(0, 7)
+      const amount = Money.fromString(item.amount)
+      for (const t of transfers) {
+        if (!transferActiveIn(t, period) || taken.has(`${t.id}|${period}|${item.kind}`)) continue
+        if (transferMoved(t, salaries.get(period)?.amount ?? Money.zero()).cmp(amount) === 0) {
+          const label = t.description || `${names.get(t.fromAccountId) ?? ''} → ${names.get(t.toAccountId) ?? ''}`
+          return { transfer: t, label, period }
+        }
+      }
+      return null
+    }
+  }
+
+  // sightingFinder mirrors Go's sightingsNear + find: the earlier item that
+  // looks like the same bank movement as a pending one, imported from another
+  // format or under another bank label — same kind, currency and amount, a day
+  // apart at most, named alike or with the same bank reference; the oldest wins.
+  function sightingFinder(items: ImportItem[]): (item: ImportItem) => ImportItem | null {
+    const pending = items.filter((it) => it.status === ImportPendiente).map((it) => it.date)
+    if (pending.length === 0) return () => null
+    const from = shiftDay(pending.reduce((a, b) => (b < a ? b : a)), -duplicateItemDays)
+    const to = shiftDay(pending.reduce((a, b) => (b > a ? b : a)), duplicateItemDays)
+    const seen = db
+      .query('SELECT * FROM import_items WHERE user_id = ? AND status <> ? AND date >= ? AND date <= ? ORDER BY id ASC', [
+        uid(),
+        ImportDescartado,
+        from,
+        to,
+      ])
+      .map(rowToImportItem)
+    return (item) => {
+      if (item.status !== ImportPendiente) return null
+      const amount = Money.fromString(item.amount)
+      const day = dayNumber(item.date)
+      for (const o of seen) {
+        if (o.id >= item.id || o.kind !== item.kind || o.currency !== item.currency || Money.fromString(o.amount).cmp(amount) !== 0) continue
+        if (o.source === item.source && o.issuer === item.issuer) continue
+        if (Math.abs(dayNumber(o.date) - day) > duplicateItemDays) continue
+        if (namesMatch(o.description, item.description) || (o.reference !== '' && o.reference === item.reference)) return o
       }
       return null
     }
@@ -2510,7 +2582,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
   }
 
   // reopenableIds mirrors Go's reopenableItems: confirmed items whose every
-  // target (expense, income, fixed expense) is in the trash or gone.
+  // target (expense, income, fixed expense, refund, transfer) is in the trash or gone.
   function reopenableIds(): Set<number> {
     const rows = db.query(
       `SELECT ii.id FROM import_items AS ii
@@ -2523,7 +2595,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
          AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
          AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
          AND (f.id IS NULL OR f.deleted_at IS NOT NULL)
-         AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)`,
+         AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)
+         AND ii.transfer_id IS NULL`,
       [uid(), ImportConfirmado],
     )
     return new Set(rows.map((r) => asNumber(r.id)))
@@ -5188,6 +5261,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const findDuplicate = duplicateFinder(items)
       const findRefunded = refundFinder(items)
       const matchedByID = matchedItemsOf(items)
+      const suggestTransfer = status === ImportPendiente ? transferSuggester(items) : () => null
+      const findSighting = status === ImportPendiente ? sightingFinder(items) : () => null
       const data = items.map((it): ImportItemView => {
         const card = cardByDigits.get(it.cardLastDigits)
         const rule = ruleFor(rules, it.description)
@@ -5200,6 +5275,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
             ? suggestFixed(it, fixedPeriod, card?.id ?? null, clpAmountOf(it, suggestedClp))
             : null
         const matched = it.matchedItemId != null ? (matchedByID.get(it.matchedItemId) ?? null) : null
+        const transfer = suggestTransfer(it)
+        const sighting = findSighting(it)
         return {
           ...it,
           cardId: card?.id ?? null,
@@ -5220,6 +5297,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           suggestedFixedPeriod: fixed ? fixedPeriod : '',
           suggestedRefundExpenseId: refunded?.id ?? null,
           suggestedRefundDescription: refunded?.description ?? '',
+          suggestedTransferId: transfer?.transfer.id ?? null,
+          suggestedTransferDescription: transfer?.label ?? '',
+          suggestedTransferPeriod: transfer?.period ?? '',
+          duplicateItemId: sighting?.id ?? null,
+          duplicateItemSource: sighting?.source ?? '',
+          duplicateItemStatus: sighting?.status ?? '',
+          duplicateItemDescription: sighting?.description ?? '',
           reopenable: reopenable.has(it.id),
         }
       })
@@ -5344,6 +5428,41 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       })
     },
 
+    // LinkImportItemToTransfer mirrors Go (inboxmatch.go): a pending CLP
+    // movement confirmed as one leg (its kind) of a transfer's month; no expense
+    // nor income. Each leg of a month takes one movement.
+    async LinkImportItemToTransfer(id: number, transferID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      return db.transaction((): OpResult => {
+        const pending = loadPendingItem(id)
+        if (pending.error || !pending.item) return { error: pending.error ?? newError(ErrNotFound, 'movimiento no encontrado') }
+        const item = pending.item
+        if (item.currency !== CurrencyCLP) {
+          return { error: newError(ErrValidation, 'solo un movimiento en pesos puede ser una transferencia entre tus cuentas') }
+        }
+        const row = db.query('SELECT * FROM transfers WHERE id = ? AND user_id = ?', [transferID, uid()])[0]
+        if (!row) return { error: newError(ErrNotFound, 'transferencia no encontrada') }
+        if (!transferActiveIn(rowToTransfer(row), period)) {
+          return { error: newError(ErrValidation, 'la transferencia no mueve plata en ' + period) }
+        }
+        const taken = db.query(
+          'SELECT 1 FROM import_items WHERE user_id = ? AND transfer_id = ? AND transfer_period = ? AND kind = ?',
+          [uid(), transferID, period, item.kind],
+        )
+        if (taken.length > 0) {
+          return { error: newError(ErrConflict, 'ese mes de la transferencia ya está enlazado a otro movimiento del banco') }
+        }
+        db.exec('UPDATE import_items SET status = ?, transfer_id = ?, transfer_period = ? WHERE id = ? AND user_id = ?', [
+          ImportConfirmado,
+          transferID,
+          period,
+          id,
+          uid(),
+        ])
+        return {}
+      })
+    },
+
     // RestoreImportItem mirrors Go: a discarded item, or a confirmed one whose
     // targets all went to the trash, goes back to review without its old link.
     async RestoreImportItem(id: number): Promise<OpResult> {
@@ -5358,7 +5477,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         }
         db.exec(
           `UPDATE import_items SET status = ?, expense_id = NULL, income_id = NULL, fixed_expense_id = NULL,
-           fixed_period = '', refund_id = NULL WHERE id = ? AND user_id = ? AND status = ?`,
+           fixed_period = '', refund_id = NULL, transfer_id = NULL, transfer_period = ''
+           WHERE id = ? AND user_id = ? AND status = ?`,
           [ImportPendiente, id, uid(), ImportConfirmado],
         )
         return {}

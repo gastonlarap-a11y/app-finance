@@ -260,6 +260,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.DeleteFixedExpense(fe.data!.id),
       () => finance.ConfirmImportItem(itemID, `${period}-05`, 'x', '', '', null, 'unico', '1', 1, ''),
       () => finance.LinkImportItem(itemID, expense.data!.id),
+      () => finance.LinkImportItemToTransfer(itemID, transfer.id, period),
       () => finance.DiscardImportItem(itemID),
       () => finance.RestoreImportItem(itemID),
       () => finance.DeleteMerchantRule(rules[0]!.id),

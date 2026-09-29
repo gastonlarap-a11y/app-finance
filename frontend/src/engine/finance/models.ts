@@ -96,6 +96,8 @@ export function rowToImportItem(r: SqlRow): ImportItem {
     fixedExpenseId: asNullableNumber(r.fixed_expense_id),
     fixedPeriod: asString(r.fixed_period),
     refundId: asNullableNumber(r.refund_id),
+    transferId: asNullableNumber(r.transfer_id),
+    transferPeriod: asString(r.transfer_period),
   }
 }
 

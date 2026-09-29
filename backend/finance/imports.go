@@ -324,8 +324,16 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		return nil, err
 	}
 	var fixed fixedIndex
+	var transfers transferIndex
+	var sightings itemSightings
 	if status == ImportPendiente {
 		if fixed, err = s.loadFixedIndex(ctx, uid); err != nil {
+			return nil, err
+		}
+		if transfers, err = s.loadTransferIndex(ctx, uid, items); err != nil {
+			return nil, err
+		}
+		if sightings, err = s.sightingsNear(ctx, uid, items); err != nil {
 			return nil, err
 		}
 	}
@@ -382,6 +390,12 @@ func (s *FinanceService) listImportItems(ctx context.Context, uid int64, status 
 		if it.MatchedItemID != nil {
 			matched := matchedByID[*it.MatchedItemID]
 			v.MatchedSource, v.MatchedDate = matched.Source, matched.Date
+		}
+		if t, period, ok := transfers.suggest(it); ok {
+			v.SuggestedTransferID, v.SuggestedTransferDescription, v.SuggestedTransferPeriod = &t.ID, transfers.label(t), period
+		}
+		if o := sightings.find(it); o != nil {
+			v.DuplicateItemID, v.DuplicateItemSource, v.DuplicateItemStatus, v.DuplicateItemDescription = &o.ID, o.Source, o.Status, o.Description
 		}
 		out = append(out, v)
 	}
@@ -736,7 +750,7 @@ func (s *FinanceService) RestoreImportItem(ctx context.Context, id int64) OpResu
 		_, err = tx.NewUpdate().Model((*ImportItem)(nil)).
 			Set("status = ?", ImportPendiente).
 			Set("expense_id = NULL").Set("income_id = NULL").Set("fixed_expense_id = NULL").Set("fixed_period = ''").
-			Set("refund_id = NULL").
+			Set("refund_id = NULL").Set("transfer_id = NULL").Set("transfer_period = ''").
 			Where("id = ? AND user_id = ? AND status = ?", id, uid, ImportConfirmado).Exec(ctx)
 		return err
 	})
@@ -748,7 +762,8 @@ func (s *FinanceService) RestoreImportItem(ctx context.Context, id int64) OpResu
 
 // reopenableItems returns the ids of uid's confirmed items that no longer
 // point at anything live: every target they had (expense, income, fixed
-// expense, refund — or the expense of that refund) is in the trash or gone.
+// expense, refund — or the expense of that refund —, transfer) is in the
+// trash or gone.
 func reopenableItems(ctx context.Context, db bun.IDB, uid int64) (map[int64]bool, error) {
 	var ids []int64
 	err := db.NewRaw(`
@@ -762,7 +777,8 @@ func reopenableItems(ctx context.Context, db bun.IDB, uid int64) (map[int64]bool
 		  AND (e.id IS NULL OR e.deleted_at IS NOT NULL)
 		  AND (inc.id IS NULL OR inc.deleted_at IS NOT NULL)
 		  AND (f.id IS NULL OR f.deleted_at IS NOT NULL)
-		  AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)`, uid, ImportConfirmado).Scan(ctx, &ids)
+		  AND (rf.id IS NULL OR rfe.deleted_at IS NOT NULL)
+		  AND ii.transfer_id IS NULL`, uid, ImportConfirmado).Scan(ctx, &ids)
 	if err != nil {
 		return nil, fmt.Errorf("finding reopenable items: %w", err)
 	}
