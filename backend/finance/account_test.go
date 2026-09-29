@@ -40,8 +40,9 @@ func TestAccountsFollowTheirMovements(t *testing.T) {
 	for _, a := range jan.Accounts {
 		byName[a.Name] = a
 	}
-	// Checking: 100.000 + salary 500.000 − the card's 80.000.
-	if a := byName["Cuenta corriente"]; a.Balance.String() != "520000" || a.Ingresos.String() != "500000" || a.Gastos.String() != "80000" {
+	// Checking: 100.000 + salary 500.000; the card's 80.000 leaves it when
+	// January's statement is paid, in February.
+	if a := byName["Cuenta corriente"]; a.Balance.String() != "600000" || a.Ingresos.String() != "500000" || !a.Gastos.IsZero() {
 		t.Fatalf("checking = %+v", a)
 	}
 	// Cash: 20.000 + 30.000 − 5.000.
@@ -51,8 +52,8 @@ func TestAccountsFollowTheirMovements(t *testing.T) {
 	if jan.UnassignedGastos.String() != "1000" || !jan.UnassignedIngreso.IsZero() {
 		t.Fatalf("unassigned = %+v", jan)
 	}
-	// Balances carry into the next month.
-	if a := accountsAt(t, s, "2030-02").Accounts[0]; a.Balance.String() != "520000" || !a.Gastos.IsZero() {
+	// Balances carry into the next month, where the card is paid.
+	if a := accountsAt(t, s, "2030-02").Accounts[0]; a.Balance.String() != "520000" || a.Gastos.String() != "80000" {
 		t.Fatalf("february checking = %+v", a)
 	}
 

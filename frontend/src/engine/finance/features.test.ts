@@ -277,6 +277,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.ConfirmImportItemAsRefund(creditID, expense.data!.id, period, '1'),
       () => finance.SetCategoryLook(cat.data!.id, 'tag', 'blue'),
       () => finance.SetCardColor(card.id, 'blue'),
+      () => finance.SetCardPaymentDay(card.id, null),
       () => finance.SetSavingsGoalIcon(goal.id, 'car'),
       () => finance.CreateTransfer(acct.id, savingsAcct.id, 'x', 'fixed', '1', period, false),
       () => finance.UpdateTransfer(transfer.id, acct.id, savingsAcct.id, 'x', 'fixed', '1'),

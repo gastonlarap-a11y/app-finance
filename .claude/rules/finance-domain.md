@@ -42,7 +42,8 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   (`transfer.go`, fixed or `salary_rest`) only move account balances, and an account
   reconciliation (`accountreconciliation.go`) only restarts one account's balance. A receivable
   settles as a refund (`insertRefund`), a foreign-currency purchase keeps its pesos in
-  `installment_amount`. None of them adds a monthly flow to `flowsBetween`.
+  `installment_amount`. None of them adds a monthly flow to `flowsBetween`. In the accounts view
+  only, what goes on a card leaves its account in the statement's payment month (`cardpayment.go`).
 - **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —
   `replanInstallments` adapts them by number (stable ids: statement lines link to them). A pending
   cuota takes a new amount only when the edit changes it (a bank-rounded or hand-set cuota stays) and

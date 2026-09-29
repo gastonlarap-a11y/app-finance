@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { page, userEvent } from 'vitest/browser'
 import { render } from 'vitest-browser-react'
-import type { AccountView } from '@/services/contract'
+import type { AccountView, CardOwed } from '@/services/contract'
 import { formatCLP } from '@/lib/format'
 import { AccountBalancesPanel } from './Accounts'
 
@@ -24,13 +24,15 @@ const account = (conciliacion: AccountView['conciliacion'] = null): AccountView 
 
 const state = vi.hoisted(() => ({
   accounts: [] as AccountView[],
+  cards: [] as CardOwed[],
   saved: [] as unknown[][],
   deleted: [] as unknown[][],
 }))
 
 vi.mock('@/services/finance', () => ({
   FinanceService: {
-    ListAccounts: () => Promise.resolve({ data: { accounts: state.accounts, unassignedIngresos: '0', unassignedGastos: '0' } }),
+    ListAccounts: () =>
+      Promise.resolve({ data: { accounts: state.accounts, unassignedIngresos: '0', unassignedGastos: '0', cards: state.cards } }),
     SetAccountReconciliation: (...args: unknown[]) => {
       state.saved.push(args)
       return Promise.resolve({})
@@ -44,6 +46,7 @@ vi.mock('@/services/finance', () => ({
 
 beforeEach(() => {
   state.accounts = []
+  state.cards = []
   state.saved = []
   state.deleted = []
 })
@@ -80,6 +83,16 @@ describe('account reconciliation from the Resumen panel', () => {
     await page.getByRole('menuitem', { name: /Editar conciliación/ }).click()
     await page.getByRole('button', { name: 'Quitar conciliación' }).click()
     await expect.poll(() => state.deleted).toEqual([[3, '2026-08']])
+  })
+
+  it('lists what each card still owes and the month it is paid', async () => {
+    state.accounts = [account()]
+    state.cards = [{ cardId: 7, name: 'Itaú Mastercard', owed: '110000', paymentPeriod: '2026-09' }]
+    await render(<AccountBalancesPanel period="2026-08" />)
+    await expect.element(page.getByText('Tarjetas por pagar')).toBeVisible()
+    await expect.element(page.getByText('Itaú Mastercard')).toBeVisible()
+    await expect.element(page.getByText(formatCLP('110000'))).toBeVisible()
+    await expect.element(page.getByText('se paga en septiembre de 2026')).toBeVisible()
   })
 
   it('offers no reconciliation for a month that has not started', async () => {

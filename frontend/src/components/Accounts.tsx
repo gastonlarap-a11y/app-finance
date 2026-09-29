@@ -1,6 +1,6 @@
 import { useState, type SubmitEvent } from 'react'
 import { useAtomValue } from 'jotai'
-import { FinanceService, type Account, type AccountView } from '@/services/finance'
+import { FinanceService, type Account, type AccountView, type CardOwed } from '@/services/finance'
 import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
@@ -73,6 +73,29 @@ export function AccountsSettings() {
   )
 }
 
+// CardsOwedList shows what each card had billed and not yet paid at a month's
+// close: its purchases leave the account that pays it the month its statement
+// is paid. Nothing when no card owes anything.
+function CardsOwedList({ cards }: { cards: readonly CardOwed[] }) {
+  if (cards.length === 0) return null
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <p className="mb-1.5 text-xs font-medium text-fg-muted">Tarjetas por pagar</p>
+      <ul className="space-y-1.5 text-sm">
+        {cards.map((c) => (
+          <li key={c.cardId} className="flex items-center justify-between gap-2">
+            <span className="truncate text-fg-muted">{c.name}</span>
+            <span className="shrink-0 text-right">
+              <strong className="tabular-nums text-fg">{formatCLP(c.owed)}</strong>
+              <span className="ml-1.5 text-xs text-fg-subtle">se paga en {periodLabel(c.paymentPeriod).toLowerCase()}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 // AccountBalancesPanel shows, in the Resumen, each account at the close of the
 // month on screen, and lets the user reconcile it with the bank's balance.
 // Nothing while the profile has no accounts.
@@ -83,9 +106,9 @@ export function AccountBalancesPanel({ period }: { period: string }) {
   const query = useQuery(`account-balances:${period}:${version}`, async () => {
     const res = await FinanceService.ListAccounts(period)
     if (res.error || !res.data) throw new Error(res.error?.message ?? 'cuentas no disponibles')
-    return res.data.accounts
+    return res.data
   })
-  if (query.status !== 'error' && (query.data?.length ?? 0) === 0) return null
+  if (query.status !== 'error' && (query.data?.accounts.length ?? 0) === 0) return null
   // A month that has not started, or before the account's opening, cannot be closed.
   const canReconcile = (a: AccountView) => period <= currentPeriod() && a.openingPeriod <= period
   return (
@@ -93,42 +116,45 @@ export function AccountBalancesPanel({ period }: { period: string }) {
       {query.status === 'error' ? (
         <QueryError message={query.error} onRetry={() => invalidate('ledger')} />
       ) : (
-        <ul className="space-y-2.5 text-sm">
-          {(query.data ?? []).map((a) => (
-            <li key={a.id} className="space-y-0.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate text-fg-muted">{a.name}</span>
-                  {a.conciliacion && (
-                    <Badge tone="positive" icon={CircleCheck}>
-                      Conciliada
-                    </Badge>
-                  )}
-                </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
-                  {canReconcile(a) && (
-                    <Menu
-                      label={`Acciones de la cuenta ${a.name}`}
-                      items={[
-                        {
-                          label: a.conciliacion ? `Editar conciliación de ${periodLabel(period)}…` : `Conciliar ${periodLabel(period)}…`,
-                          icon: Scale,
-                          onSelect: () => setReconciling(a),
-                        },
-                      ]}
-                    />
-                  )}
-                </span>
-              </div>
-              {a.conciliacion && !isZero(a.conciliacion.diferencia) && (
-                <p className="text-xs text-fg-subtle">
-                  El banco dice {formatCLP(a.conciliacion.saldoReal)}; la app calculaba {formatCLP(a.conciliacion.calculado)}.
-                </p>
-              )}
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-2.5 text-sm">
+            {(query.data?.accounts ?? []).map((a) => (
+              <li key={a.id} className="space-y-0.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-fg-muted">{a.name}</span>
+                    {a.conciliacion && (
+                      <Badge tone="positive" icon={CircleCheck}>
+                        Conciliada
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <strong className={`tabular-nums ${isNegative(a.balance) ? 'text-negative-fg' : 'text-fg'}`}>{formatCLP(a.balance)}</strong>
+                    {canReconcile(a) && (
+                      <Menu
+                        label={`Acciones de la cuenta ${a.name}`}
+                        items={[
+                          {
+                            label: a.conciliacion ? `Editar conciliación de ${periodLabel(period)}…` : `Conciliar ${periodLabel(period)}…`,
+                            icon: Scale,
+                            onSelect: () => setReconciling(a),
+                          },
+                        ]}
+                      />
+                    )}
+                  </span>
+                </div>
+                {a.conciliacion && !isZero(a.conciliacion.diferencia) && (
+                  <p className="text-xs text-fg-subtle">
+                    El banco dice {formatCLP(a.conciliacion.saldoReal)}; la app calculaba {formatCLP(a.conciliacion.calculado)}.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+          <CardsOwedList cards={query.data?.cards ?? []} />
+        </>
       )}
       {reconciling && (
         <AccountReconcileDialog
@@ -211,9 +237,11 @@ function AccountsSection({ period }: { period: string }) {
               </li>
             ))}
           </ul>
+          <CardsOwedList cards={query.data.cards} />
           <p className="mt-3 text-xs text-fg-subtle">
-            Sin cuenta este mes: +{formatCLP(query.data.unassignedIngresos)} / −{formatCLP(query.data.unassignedGastos)}. Eliminar
-            una cuenta deja sus movimientos sin cuenta.
+            Sin cuenta este mes: +{formatCLP(query.data.unassignedIngresos)} / −{formatCLP(query.data.unassignedGastos)}. Lo que
+            compras con tarjeta sale de su cuenta el mes en que pagas el estado de cuenta. Eliminar una cuenta deja sus
+            movimientos sin cuenta.
           </p>
         </>
       )}

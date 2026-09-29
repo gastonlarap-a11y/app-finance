@@ -52,11 +52,12 @@ type AccountView struct {
 }
 
 // AccountsSummary is every account at a month plus the month's movements no
-// account claims.
+// account claims, and what each card still owed at the month's close.
 type AccountsSummary struct {
 	Accounts          []AccountView `json:"accounts"`
 	UnassignedIngreso types.Decimal `json:"unassignedIngresos"`
 	UnassignedGastos  types.Decimal `json:"unassignedGastos"`
+	Cards             []CardOwed    `json:"cards"` // cards with something billed and not yet paid, by name
 }
 
 type AccountResult struct {
@@ -253,7 +254,7 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	for _, a := range accs {
 		from = min(from, a.OpeningPeriod)
 	}
-	flows, err := s.accountFlows(ctx, uid, accs, from, period)
+	flows, owed, err := s.accountFlows(ctx, uid, accs, from, period)
 	if err != nil {
 		return AccountsResult{Error: internalErr(err)}
 	}
@@ -261,7 +262,15 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 	if err != nil {
 		return AccountsResult{Error: internalErr(err)}
 	}
-	out := &AccountsSummary{Accounts: make([]AccountView, 0, len(accs))}
+	out := &AccountsSummary{Accounts: make([]AccountView, 0, len(accs)), Cards: make([]CardOwed, 0, len(owed))}
+	for _, o := range owed {
+		if !o.Owed.IsZero() {
+			out.Cards = append(out.Cards, *o)
+		}
+	}
+	slices.SortFunc(out.Cards, func(a, b CardOwed) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), cmp.Compare(a.CardID, b.CardID))
+	})
 	for _, a := range accs {
 		v := AccountView{Account: a, Balance: types.Zero(), Ingresos: types.Zero(), Gastos: types.Zero(),
 			TransferIn: types.Zero(), TransferOut: types.Zero()}
@@ -291,7 +300,10 @@ func (s *FinanceService) ListAccounts(ctx context.Context, period string) Accoun
 // cuotas and fixed charges (the expense's own account, else its card's) and
 // refunds (back to where the expense was paid from); plus the transfers
 // between own accounts, which only move money from one account to another.
-func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Account, from, to string) (map[int64]map[string]accountFlow, error) {
+// What went on a card leaves its account in the month the card's statement is
+// paid (cardPayments), so it also returns what each card still owed at the
+// close of `to`.
+func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Account, from, to string) (map[int64]map[string]accountFlow, map[int64]*CardOwed, error) {
 	out := map[int64]map[string]accountFlow{}
 	flow := func(acc int64, period string) accountFlow {
 		if out[acc] == nil {
@@ -318,10 +330,39 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 			salaryAcc = a.ID
 		}
 	}
+	payments, err := loadCardPayments(ctx, s.db, uid)
+	if err != nil {
+		return nil, nil, err
+	}
+	owed := map[int64]*CardOwed{}
+	// charge books money going out of acc (negative: coming back) for a
+	// movement of `period`: in that month, or in the month its card's
+	// statement is paid; a card's charge not paid by the close of `to` is owed.
+	charge := func(acc int64, card *int64, period string, amt types.Decimal) {
+		paid := period
+		if card != nil {
+			paid = payments.paymentPeriod(*card, period)
+			if period <= to && paid > to {
+				o := owed[*card]
+				if o == nil {
+					o = &CardOwed{CardID: *card, Name: payments.cards[*card].Name, Owed: types.Zero(), PaymentPeriod: paid}
+					owed[*card] = o
+				}
+				o.Owed, o.PaymentPeriod = o.Owed.Add(amt), min(o.PaymentPeriod, paid)
+			}
+		}
+		if from <= paid && paid <= to {
+			add(acc, paid, types.Zero(), amt)
+		}
+	}
+	// Card charges billed a little before `from` are paid inside it.
+	billedFrom := addMonths(from, -cardPaymentLookback)
+
 	type row struct {
 		Period  string        `bun:"period"`
 		Amount  types.Decimal `bun:"amount"`
 		Account *int64        `bun:"account"`
+		Card    *int64        `bun:"card"`
 	}
 	scan := func(what, query string, args ...any) ([]row, error) {
 		var rows []row
@@ -337,68 +378,56 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 		return *r.Account
 	}
 
-	salaries, err := scan("salaries", `SELECT period, amount, NULL AS account FROM period_salaries
+	salaries, err := scan("salaries", `SELECT period, amount, NULL AS account, NULL AS card FROM period_salaries
 		WHERE user_id = ? AND period >= ? AND period <= ?`, uid, from, to)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	salaryOf := make(map[string]types.Decimal, len(salaries)) // a salary_rest transfer follows it
 	for _, r := range salaries {
 		add(salaryAcc, r.Period, r.Amount, types.Zero())
 		salaryOf[r.Period] = r.Amount
 	}
-	incomes, err := scan("incomes", `SELECT period, amount, account_id AS account FROM incomes
+	incomes, err := scan("incomes", `SELECT period, amount, account_id AS account, NULL AS card FROM incomes
 		WHERE user_id = ? AND deleted_at IS NULL AND period >= ? AND period <= ?`, uid, from, to)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, r := range incomes {
 		add(acct(r), r.Period, r.Amount, types.Zero())
 	}
-	cuotas, err := scan("cuotas", `SELECT inst.period AS period, inst.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+	cuotas, err := scan("cuotas", `SELECT inst.period AS period, inst.amount AS amount,
+		COALESCE(ex.account_id, c.account_id) AS account, ex.card_id AS card
 		FROM installments AS inst JOIN expenses AS ex ON ex.id = inst.expense_id AND ex.deleted_at IS NULL
 		LEFT JOIN cards AS c ON c.id = ex.card_id
-		WHERE inst.user_id = ? AND inst.period >= ? AND inst.period <= ?`, uid, from, to)
+		WHERE inst.user_id = ? AND inst.period >= ? AND inst.period <= ?`, uid, billedFrom, to)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, r := range cuotas {
-		add(acct(r), r.Period, types.Zero(), r.Amount)
+		charge(acct(r), r.Card, r.Period, r.Amount)
 	}
-	refunds, err := scan("refunds", `SELECT rf.period AS period, rf.amount AS amount, COALESCE(ex.account_id, c.account_id) AS account
+	refunds, err := scan("refunds", `SELECT rf.period AS period, rf.amount AS amount,
+		COALESCE(ex.account_id, c.account_id) AS account, ex.card_id AS card
 		FROM refunds AS rf JOIN expenses AS ex ON ex.id = rf.expense_id AND ex.deleted_at IS NULL
 		LEFT JOIN cards AS c ON c.id = ex.card_id
-		WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ?`, uid, from, to)
+		WHERE rf.user_id = ? AND rf.period >= ? AND rf.period <= ?`, uid, billedFrom, to)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, r := range refunds {
-		add(acct(r), r.Period, types.Zero(), types.Zero().Sub(r.Amount))
+		charge(acct(r), r.Card, r.Period, types.Zero().Sub(r.Amount))
 	}
 
 	fixed, amountsByID, err := s.loadFixed(ctx, uid, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	uf, err := s.loadUF(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cardAcc := map[int64]int64{}
-	var cards []Card
-	if err := s.db.NewSelect().Model(&cards).WhereAllWithDeleted().Where("user_id = ?", uid).Scan(ctx); err != nil {
-		return nil, err
-	}
-	for _, c := range cards {
-		if c.AccountID != nil {
-			cardAcc[c.ID] = *c.AccountID
-		}
-	}
-	var transfers []Transfer
-	if err := s.db.NewSelect().Model(&transfers).Where("user_id = ?", uid).Scan(ctx); err != nil {
-		return nil, fmt.Errorf("transfers: %w", err)
-	}
-	for m := from; m <= to; m = addMonths(m, 1) {
+	for m := billedFrom; m <= to; m = addMonths(m, 1) {
 		for _, fe := range fixed {
 			if !fe.billsIn(m) {
 				continue
@@ -408,16 +437,22 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 			switch {
 			case fe.AccountID != nil:
 				acc = *fe.AccountID
-			case fe.CardID != nil:
-				acc = cardAcc[*fe.CardID]
+			case fe.CardID != nil && payments.cards[*fe.CardID].AccountID != nil:
+				acc = *payments.cards[*fe.CardID].AccountID
 			}
-			add(acc, m, types.Zero(), amt)
+			charge(acc, fe.CardID, m, amt)
 		}
+	}
+	var transfers []Transfer
+	if err := s.db.NewSelect().Model(&transfers).Where("user_id = ?", uid).Scan(ctx); err != nil {
+		return nil, nil, fmt.Errorf("transfers: %w", err)
+	}
+	for m := from; m <= to; m = addMonths(m, 1) {
 		for _, t := range transfers {
 			if t.activeIn(m) {
 				move(t.FromAccountID, t.ToAccountID, m, t.moved(salaryOf[m]))
 			}
 		}
 	}
-	return out, nil
+	return out, owed, nil
 }

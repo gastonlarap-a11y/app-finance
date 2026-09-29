@@ -78,6 +78,7 @@ export function CardsView() {
                     </div>
                     <div className="text-xs text-fg-muted">
                       Cupo {formatCLP(c.creditLimit)} · corte día {c.billingDay}
+                      {c.paymentDay != null && <> · pago día {c.paymentDay}</>}
                     </div>
                   </div>
                 </div>
@@ -117,6 +118,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
   const [limit, setLimit] = useState(card?.creditLimit ?? '')
   const [billingDay, setBillingDay] = useState(String(card?.billingDay ?? 24))
   const [lastDigits, setLastDigits] = useState(card?.lastDigits ?? '')
+  const [paymentDay, setPaymentDay] = useState(card?.paymentDay != null ? String(card.paymentDay) : '')
   const accounts = useAccounts()
   const [accountId, setAccountId] = useState<number | null>(card?.accountId ?? null)
   const [color, setColor] = useState(card?.color ?? '')
@@ -132,10 +134,12 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
         : await FinanceService.CreateCard(name, limit || '0', day, lastDigits)
       if (failed(res) || !res.data) return
       const id = res.data.id
+      const payDay = paymentDay.trim() === '' ? null : Number(paymentDay)
       // The card is saved either way; a failed extra keeps the dialog open
       // (with its toast) so that choice is not silently lost.
       const extraFailed =
         (accountId !== (card?.accountId ?? null) && failed(await FinanceService.SetCardAccount(id, accountId))) ||
+        (payDay !== (card?.paymentDay ?? null) && failed(await FinanceService.SetCardPaymentDay(id, payDay))) ||
         (color !== (card?.color ?? '') && failed(await FinanceService.SetCardColor(id, color)))
       onSaved()
       if (!extraFailed) onClose()
@@ -170,6 +174,12 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
           />
         </Field>
         <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} label="Se paga desde la cuenta" noneLabel="Ninguna" />
+        <Field
+          label="Día de pago (opcional)"
+          hint="Cuándo pagas el estado de cuenta: sus compras salen de la cuenta ese mes. Sin él, al mes siguiente del corte. Si importas el estado, manda su fecha «pagar hasta»."
+        >
+          <Input type="number" min="1" max="31" inputMode="numeric" value={paymentDay} onChange={(e) => setPaymentDay(e.target.value)} placeholder="Ej. 5" />
+        </Field>
         <ColorPicker value={color} onChange={setColor} auto={card ? cardColor({ id: card.id, color: '' }) : undefined} />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>

@@ -227,16 +227,18 @@ func TestFixedExpenseAccountWinsOverCard(t *testing.T) {
 	netflix := s.CreateFixedExpense(ctx, "Netflix", "Suscripciones", &card.Data.ID, "2026-09", "9000", 1, CurrencyCLP)
 	mustOK(t, "netflix", netflix.Error)
 
+	// A fixed charge on the card leaves the account when the card is paid: September's
+	// Netflix in October, next to October's mortgage.
 	mustOK(t, "SetFixedExpenseAccount", s.SetFixedExpenseAccount(ctx, mortgage.Data.ID, &chile.Data.ID).Error)
-	wantMoney(t, "chile pays the mortgage", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "600000")
-	wantMoney(t, "itau pays the card's fixed", accountByName(t, s, "2026-09", "Itaú").Gastos, "9000")
+	wantMoney(t, "chile pays the mortgage", accountByName(t, s, "2026-10", "Banco de Chile").Gastos, "600000")
+	wantMoney(t, "itau pays the card's fixed", accountByName(t, s, "2026-10", "Itaú").Gastos, "9000")
 
 	// Its own account wins over its card's.
 	mustOK(t, "netflix from chile", s.SetFixedExpenseAccount(ctx, netflix.Data.ID, &chile.Data.ID).Error)
-	wantMoney(t, "chile pays both", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "609000")
+	wantMoney(t, "chile pays both", accountByName(t, s, "2026-10", "Banco de Chile").Gastos, "609000")
 	// Editing the fixed expense keeps its account.
 	mustOK(t, "UpdateFixedExpense", s.UpdateFixedExpense(ctx, mortgage.Data.ID, "Dividendo casa", "Vivienda", nil).Error)
-	wantMoney(t, "still chile", accountByName(t, s, "2026-09", "Banco de Chile").Gastos, "609000")
+	wantMoney(t, "still chile", accountByName(t, s, "2026-10", "Banco de Chile").Gastos, "609000")
 
 	if r := s.SetFixedExpenseAccount(ctx, mortgage.Data.ID, new(int64(9999))); r.Error == nil || r.Error.Code != shared.ErrNotFound {
 		t.Fatalf("unknown account: %v, want not found", r.Error)
