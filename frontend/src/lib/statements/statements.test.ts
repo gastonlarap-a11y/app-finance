@@ -3,6 +3,7 @@ import raw from '@/lib/statements/itau/testdata/account-statement.runs.json?raw'
 import { groupRows, rowText, type TextRun } from '@/lib/statements/layout'
 import { isClAmount, parseClAmount, parseClDate, parseClMoney, parseClPercent, parseClShortDate } from '@/lib/statements/amounts'
 import { hintFor } from '@/lib/statements/itau/accountStatement'
+import { moneyCells, monthNumber } from '@/lib/statements/cardFields'
 import { parseStatement } from '@/lib/statements/detect'
 import { StatementFormatError } from '@/lib/statements/types'
 
@@ -60,6 +61,17 @@ describe('montos y fechas chilenos', () => {
     expect(parseClPercent('13,33 %')).toBe('13.33')
     expect(parseClPercent('9%')).toBe('9')
     expect(parseClPercent('2,56')).toBeNull()
+    // Cencosud prints rates with a decimal point.
+    expect(parseClPercent('2.46%')).toBe('2.46')
+  })
+
+  it('meses completos y abreviados', () => {
+    expect(['MAYO', 'MAY', 'may', 'SEPT', 'SEP', 'Diciembre', 'AGO'].map(monthNumber)).toEqual([5, 5, 5, 9, 9, 12, 8])
+    expect(['ACTUAL', 'MA', 'MAYONESA', ''].map(monthNumber)).toEqual([0, 0, 0, 0])
+  })
+
+  it('celdas de montos con guion para lo que no aplica', () => {
+    expect(moneyCells(['-', '0', '10.000.000', '0,00%'])).toEqual(['', '0', '10000000'])
   })
 })
 

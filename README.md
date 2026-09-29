@@ -18,6 +18,9 @@ Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre
 - **Resumen del mes**: sueldo mensual, ingresos extra y tabla de movimientos que combina cuotas de tarjeta
   de crédito y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?), cupo de
   tarjetas y saldo de cuentas.
+- **Importar**: estados de cuenta de tarjeta en PDF (Itaú, Banco de Chile, Cencosud Scotiabank y CMR
+  Falabella), la cartola de Itaú en PDF y cartolas de cualquier banco en CSV. Todo llega a una bandeja
+  donde confirmas cada movimiento antes de que cuente.
 - **Gastos fijos**: suscripciones/servicios que se trasladan automáticamente cada mes. Editar el monto de
   un mes aplica **desde ese mes en adelante** — los meses anteriores conservan su valor. Cada cargo puede
   marcarse pagado/pendiente por mes.
