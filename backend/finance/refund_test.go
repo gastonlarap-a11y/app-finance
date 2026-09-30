@@ -97,6 +97,21 @@ func TestRefundValidationAndDelete(t *testing.T) {
 	}
 }
 
+// A plan with an uneven cuota costs the sum of its cuotas, not cuota × N: its
+// whole reversal is a valid refund, and so is someone owing all of it.
+func TestRefundAndReceivableUseTheRealCost(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	ex := s.CreateExpense(ctx, "2026-01-05", "Tele", "", "", nil, KindCuotas, "10000", 6)
+	mustOK(t, "CreateExpense", ex.Error)
+	mustOK(t, "SetInstallmentAmount", s.SetInstallmentAmount(ctx, cuotas(t, s, ex.Data.ID)[5].ID, "10001").Error)
+
+	wantCode(t, "refund beyond the plan", s.CreateRefund(ctx, ex.Data.ID, "2026-02", "60002", "").Error, shared.ErrValidation)
+	wantCode(t, "owed beyond the plan", s.CreateReceivable(ctx, ex.Data.ID, "Ana", "60002").Error, shared.ErrValidation)
+	mustOK(t, "CreateReceivable of the whole plan", s.CreateReceivable(ctx, ex.Data.ID, "Ana", "60001").Error)
+	mustOK(t, "CreateRefund of the whole plan", s.CreateRefund(ctx, ex.Data.ID, "2026-02", "60001", "").Error)
+}
+
 func TestBankCreditConfirmedAsRefund(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

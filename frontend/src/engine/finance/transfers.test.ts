@@ -114,6 +114,23 @@ describe('transfers', () => {
     expect((await account('2026-11', 'Itaú')).transferIn).toBe('2000000')
   })
 
+  it('a live salary_rest transfer pins the account the salary lands in', async () => {
+    const chile = ok(await finance.CreateAccount('Banco de Chile', 'corriente', '0', '2020-01', true)).data!
+    const itau = ok(await finance.CreateAccount('Itaú', 'corriente', '0', '2020-01', false)).data!
+    const rest = ok(await finance.CreateTransfer(chile.id, itau.id, 'Sueldo a Itaú', 'salary_rest', '470000', '2020-01', true)).data!
+
+    expect((await finance.UpdateAccount(itau.id, 'Itaú', 'corriente', '0', '2020-01', true)).error?.code).toBe('CONFLICT')
+    expect((await finance.UpdateAccount(chile.id, 'Banco de Chile', 'corriente', '0', '2020-01', false)).error?.code).toBe('CONFLICT')
+    expect((await finance.CreateAccount('Cuenta RUT', 'vista', '0', '2020-01', true)).error?.code).toBe('CONFLICT')
+    ok(await finance.UpdateAccount(chile.id, 'Chile', 'corriente', '0', '2020-01', true))
+    expect((await account('2020-01', 'Chile')).receivesSalary).toBe(true)
+
+    // Once the transfer has ended, the salary may land elsewhere.
+    ok(await finance.EndTransfer(rest.id, '2020-06'))
+    ok(await finance.UpdateAccount(itau.id, 'Itaú', 'corriente', '0', '2020-01', true))
+    expect((await account('2020-01', 'Chile')).receivesSalary).toBe(false)
+  })
+
   it("a fixed expense's own account wins over its card's", async () => {
     const chile = ok(await finance.CreateAccount('Banco de Chile', 'corriente', '0', '2026-09', false)).data!
     const itau = ok(await finance.CreateAccount('Itaú', 'corriente', '0', '2026-09', false)).data!

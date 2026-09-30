@@ -641,6 +641,7 @@ func (s *FinanceService) UpdateExpense(
 		before: oldCutoff.periodOf(old.Date.UTC()),
 		after:  cutoff.periodOf(ex.Date),
 	}
+	amountChanged := old.InstallmentAmount.Cmp(ex.InstallmentAmount) != 0
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model(ex).
 			Column("date", "description", "category", "merchant", "card_id", "kind", "installment_amount", "installments_total").
@@ -648,7 +649,7 @@ func (s *FinanceService) UpdateExpense(
 		if aerr := requireOne(res, err, "gasto no encontrado"); aerr != nil {
 			return aerr
 		}
-		if err := replanInstallments(ctx, tx, ex, placement); err != nil {
+		if err := replanInstallments(ctx, tx, ex, placement, amountChanged); err != nil {
 			return err
 		}
 		return tx.NewSelect().Model(ex).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
@@ -676,10 +677,15 @@ func (p placementChange) moved() bool { return p.before != p.after }
 // replanInstallments adapts an edited expense's cuotas in place, matched by
 // number, instead of regenerating them. Ids stay stable (card statement lines
 // link to them). A paid cuota records money already paid, so an edit never
-// rewrites it: the new amount applies to pending cuotas only, and an edit that
-// would drop a paid cuota or move the plan to other months is refused until the
-// user unmarks it.
-func replanInstallments(ctx context.Context, tx bun.Tx, ex *Expense, placement placementChange) error {
+// rewrites it, and an edit that would drop a paid cuota or move the plan to
+// other months is refused until the user unmarks it.
+//
+// A pending cuota changes only as far as the edit does. It takes the new cuota
+// amount only when amountChanged (else it keeps its own: the bank's rounded
+// last cuota, one set by hand), and it is re-placed only when the plan moved
+// (else it keeps its month: a prepayment, a statement's months). Cuotas added
+// to a plan that did not move follow its last one.
+func replanInstallments(ctx context.Context, tx bun.Tx, ex *Expense, placement placementChange, amountChanged bool) error {
 	var insts []Installment
 	if err := tx.NewSelect().Model(&insts).
 		Where("expense_id = ? AND user_id = ?", ex.ID, ex.UserID).Order("number ASC").Scan(ctx); err != nil {
@@ -708,9 +714,17 @@ func replanInstallments(ctx context.Context, tx bun.Tx, ex *Expense, placement p
 			"el cambio mueve las cuotas a otros meses y hay cuotas pagadas: desmárcalas para moverlo")
 	}
 
+	previous := "" // the month of cuota n-1 once placed
 	for n := 1; n <= total; n++ {
 		period := addMonths(first, n-1)
 		inst, ok := byNumber[n]
+		switch {
+		case ok && !placement.moved():
+			period = inst.Period
+		case !ok && !placement.moved() && previous != "":
+			period = addMonths(previous, 1)
+		}
+		previous = period
 		switch {
 		case !ok:
 			row := &Installment{
@@ -725,8 +739,12 @@ func replanInstallments(ctx context.Context, tx bun.Tx, ex *Expense, placement p
 				return fmt.Errorf("updating paid cuota %d: %w", n, err)
 			}
 		default:
+			amount := inst.Amount
+			if amountChanged {
+				amount = ex.InstallmentAmount
+			}
 			if _, err := tx.NewUpdate().Model(inst).
-				Set("total = ?", total).Set("period = ?", period).Set("amount = ?", ex.InstallmentAmount).
+				Set("total = ?", total).Set("period = ?", period).Set("amount = ?", amount).
 				WherePK().Exec(ctx); err != nil {
 				return fmt.Errorf("updating cuota %d: %w", n, err)
 			}

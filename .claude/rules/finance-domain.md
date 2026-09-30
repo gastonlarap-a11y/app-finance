@@ -44,7 +44,8 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   settles as a refund (`insertRefund`), a foreign-currency purchase keeps its pesos in
   `installment_amount`. None of them adds a monthly flow to `flowsBetween`.
 - **Paid cuotas are immutable (invariant)**: `UpdateExpense` never regenerates installments —
-  `replanInstallments` adapts them by number (stable ids: statement lines link to them), applies a
-  new amount to pending cuotas only, keeps the cuota-1 month while the date/card lead to the same
-  billing month (it may come from a card statement), and refuses dropping or moving paid cuotas.
+  `replanInstallments` adapts them by number (stable ids: statement lines link to them). A pending
+  cuota takes a new amount only when the edit changes it (a bank-rounded or hand-set cuota stays) and
+  keeps its month while the date/card lead to the same billing month (a statement's months, a
+  prepayment); paid cuotas are never dropped or moved.
   Input ranges: years 2000–2099 (`minYear`/`maxYear`), up to 120 cuotas (`maxInstallments`).

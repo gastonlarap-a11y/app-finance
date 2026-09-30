@@ -14,6 +14,18 @@ import (
 // settle the difference in the last one, and a plan can be paid off early.
 // Paid cuotas record money already paid and are never rewritten.
 
+// expenseCost is what an expense really costs: the sum of its cuotas, which
+// differs from cuota × N once the bank rounded the last one or one was set by
+// hand. The caller has proved the expense is uid's.
+func expenseCost(ctx context.Context, idb bun.IDB, uid, expenseID int64) (types.Decimal, error) {
+	cost, err := sumAmounts(ctx, idb.NewSelect().Model((*Installment)(nil)).
+		Where("expense_id = ? AND user_id = ?", expenseID, uid))
+	if err != nil {
+		return types.Zero(), fmt.Errorf("expense %d cost: %w", expenseID, err)
+	}
+	return cost, nil
+}
+
 // pendingCuotaOf loads a pending cuota of a live expense of the profile.
 func pendingCuotaOf(ctx context.Context, idb bun.IDB, uid, id int64) (*Installment, *shared.AppError) {
 	inst := new(Installment)
@@ -31,8 +43,9 @@ func pendingCuotaOf(ctx context.Context, idb bun.IDB, uid, id int64) (*Installme
 }
 
 // SetInstallmentAmount changes the amount of one pending cuota (the bank's
-// rounded last cuota, a renegotiated one). Editing the expense later applies
-// its cuota amount to every pending cuota again.
+// rounded last cuota, a renegotiated one). Editing the expense keeps it unless
+// the edit changes the expense's cuota amount, which then reaches every
+// pending cuota.
 func (s *FinanceService) SetInstallmentAmount(ctx context.Context, id int64, amount string) OpResult {
 	amt, aerr := parseAmount(amount)
 	if aerr != nil {

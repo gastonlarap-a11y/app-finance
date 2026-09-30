@@ -79,7 +79,10 @@ func (s *FinanceService) CreateReceivable(ctx context.Context, expenseID int64, 
 		if err != nil {
 			return fmt.Errorf("summing receivables: %w", err)
 		}
-		total := ex.InstallmentAmount.MulInt(int64(max(ex.InstallmentsTotal, 1)))
+		total, err := expenseCost(ctx, tx, uid, expenseID)
+		if err != nil {
+			return err
+		}
 		if owed.Add(amt).GT(total) {
 			return shared.NewError(shared.ErrValidation,
 				fmt.Sprintf("lo que te deben supera lo que costó el gasto (quedan %s)", total.Sub(owed)))

@@ -125,10 +125,12 @@ dates and periods are bounded to 2000–2099 and plans to 120 cuotas (`minYear`/
 
 **Editing an expense** follows the ledger rule that recorded payments are not rewritten:
 `replanInstallments` adapts the existing cuotas by number instead of regenerating them. Ids stay stable,
-so `card_statement_lines.installment_id` links survive. A new amount reaches pending cuotas only, and
-cuota 1 keeps its month while the old and new date/card lead to the same billing month, because that
-month may come from a card statement (`ConfirmImportItem`'s `FirstPeriod`). Dropping a paid cuota or
-moving a plan that has paid cuotas is refused until the user unmarks them.
+so `card_statement_lines.installment_id` links survive. A pending cuota changes only as far as the edit
+does: it takes a new cuota amount only when the edit changes it (otherwise it keeps its own — the bank's
+rounded last cuota, one set by hand), and it keeps its month while the old and new date/card lead to
+the same billing month, because that month may come from a card statement (`ConfirmImportItem`'s
+`FirstPeriod`) or a prepayment. Cuotas added to a plan that did not move follow its last one. Dropping
+a paid cuota or moving a plan that has paid cuotas is refused until the user unmarks them.
 
 The effective-dated lookup is generic (`effectiveDated` rows → `latestAsOf` / `resolveAsOf`), and
 `sumAsOf` totals a month range by multiplying each amount stretch instead of walking month by month —
@@ -197,7 +199,8 @@ viaje?". Renaming onto another tag's name is refused; deleting a tag removes it 
 
 **Refunds** (`refund.go`, migration `20260926024`), as YNAB and Monarch treat them: `refunds(expense_id,
 period, amount)` is money returned for one expense (a store return, a bank reversal), partial or
-total, never more than the expense cost (`insertRefund`). It is a negative movimiento of the month it
+total, never more than the expense cost — the sum of its cuotas, which an uneven plan makes differ from
+cuota × N (`expenseCost`, `insertRefund`). It is a negative movimiento of the month it
 arrives in (`SourceReembolso`, status pagado) in its expense's category and card, so `Gastos`,
 `PorCategoria`, budgets, the card's month charges (`cardChargesIn`, statement comparison), the year,
 the trend and the carried balance (`flowsBetween`) are all net of it; the forecast adds it to
@@ -232,7 +235,7 @@ one pending cuota (uneven plans). When a bank movement confirms or merges into a
 amount; paid cuotas stay where they are.
 
 **Receivables** (`receivable.go`, migration `20260927031`) cover shared expenses: the part of an
-expense someone else owes (`person`, `amount` ≤ the expense). Settling one records a refund on that
+expense someone else owes (`person`, `amount` ≤ the expense's cost, `expenseCost`). Settling one records a refund on that
 expense in the month it arrives (`SettleReceivable` → `insertRefund`), so every total nets it through
 the refund path. An open receivable changes nothing.
 
@@ -260,7 +263,9 @@ accounts' balances (`AccountView.TransferIn/Out`). Deleting an account deletes i
 `fixed` moves `amount`; `salary_rest` moves that month's salary minus `amount`, which stays behind
 (the salary lands in one bank, the mortgage is debited there, the rest goes on to the everyday
 account). It never moves less than nothing, and a month without a salary yet moves 0. Only the
-account that receives the salary can be its source (`ownAccounts`).
+account that receives the salary can be its source (`ownAccounts`), and while one is live (open-ended
+or ending this month or later) the salary cannot move to, or be cleared from, another account
+(`keepSalaryRestSource`): the transfer would keep passing on a salary that lands elsewhere.
 
 **Account reconciliations** (`accountreconciliation.go`, migration `20260929038`) are the monthly
 reconciliation per account: the real balance at a month's close, as the bank shows it. From the
@@ -574,9 +579,10 @@ expense until the user confirms it:
   expense that looks like the same purchase (±10 days, cuota or total), and a fixed expense whose
   unpaid month the charge looks like the bill of (`fixedmatch.go`, Actual Budget's schedule model:
   a significant word of the name must match, the amount only within ±7.5 %, because a fixed
-  amount is an estimate). `LinkImportItemToFixed` marks that month paid and, for a CLP charge,
-  makes the bank's real amount that month's amount only (an override at the month, the plan
-  restored the month after). The item's `kind` is fixed at staging and every confirm path checks
+  amount is an estimate). `LinkImportItemToFixed` marks that month paid and, for a CLP charge on a
+  CLP fixed expense, makes the bank's real amount that month's amount only (an override at the
+  month, the plan restored the month after); a fixed expense in UF keeps its UF amounts, since a
+  peso charge is not an amount in UF. The item's `kind` is fixed at staging and every confirm path checks
   it: an abono never becomes an expense, nor a charge an income. A USD item needs a whole-peso
   amount other than its USD figure (CLP has no minor unit, ISO 4217). A confirmed item whose
   expense, income or fixed expense went to the trash can be reopened (`RestoreImportItem`,

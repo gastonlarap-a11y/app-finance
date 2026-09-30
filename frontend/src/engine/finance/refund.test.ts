@@ -67,6 +67,17 @@ describe('reembolsos', () => {
     expect((await finance.DeleteRefund(rf.id)).error?.code).toBe('NOT_FOUND')
   })
 
+  it('el tope es la suma real de las cuotas, no cuota × N', async () => {
+    const ex = ok(await finance.CreateExpense('2026-01-05', 'Tele', '', '', null, 'cuotas', '10000', 6)).data!
+    const last = (await monthly('2026-06')).movimientos.find((m) => m.expenseId === ex.id)!
+    ok(await finance.SetInstallmentAmount(last.installmentId, '10001'))
+
+    expect((await finance.CreateRefund(ex.id, '2026-02', '60002', '')).error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.CreateReceivable(ex.id, 'Ana', '60002')).error?.code).toBe('VALIDATION_ERROR')
+    ok(await finance.CreateReceivable(ex.id, 'Ana', '60001'))
+    ok(await finance.CreateRefund(ex.id, '2026-02', '60001', ''))
+  })
+
   it('un abono del banco se confirma como reembolso', async () => {
     const ex = ok(await finance.CreateExpense('2026-03-02', 'Zapatillas', 'Ropa', 'Falabella', null, 'unico', '45990', 1)).data!
     const blank = { currency: '', cardLastDigits: '', account: '', reference: '', installmentsTotal: 0, hint: '' }

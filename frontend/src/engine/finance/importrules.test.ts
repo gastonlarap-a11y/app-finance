@@ -142,6 +142,22 @@ describe('fixed-expense bills', () => {
     )
   })
 
+  it('enlazar un cargo en pesos a un gasto fijo en UF no guarda los pesos como UF', async () => {
+    const fe = await finance.CreateFixedExpense('Arriendo depto', 'Hogar', null, '2026-07', '15', 1, 'UF')
+    expect((await finance.SetUFValues([{ period: '2026-08', value: '40000' }])).error).toBeUndefined()
+    const bill = await stageOne({ date: '2026-08-05', description: 'PAC ARRIENDO DEPTO', amount: '612345' })
+    expect(bill.suggestedFixedId).toBe(fe.data!.id)
+
+    expect((await finance.LinkImportItemToFixed(bill.id, fe.data!.id, '2026-08')).error).toBeUndefined()
+    for (const [period, amount, status] of [
+      ['2026-08', '600000', 'pagado'],
+      ['2026-09', '600000', 'pendiente'], // September borrows August's UF value
+    ] as const) {
+      const mov = (await finance.MonthlySummary(period)).data?.movimientos.find((m) => m.fixedId === fe.data!.id)
+      expect(mov, period).toMatchObject({ amount, status, ufAmount: '15' })
+    }
+  })
+
   it('namesMatch compara palabras significativas', () => {
     expect(namesMatch('Plan Entel', 'ENTEL PCS PAGO ENSANTIAGO C')).toBe(true)
     expect(namesMatch('Claude', 'ANTHROPIC* CLAUDE SUB')).toBe(true)

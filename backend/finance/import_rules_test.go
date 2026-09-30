@@ -180,6 +180,43 @@ func TestFixedExpenseSuggestionAndLink(t *testing.T) {
 		s.LinkImportItemToFixed(ctx, again.ID, fe.Data.ID, "2026-06").Error, shared.ErrValidation)
 }
 
+// A peso bank charge linked to a fixed expense in UF marks the month paid and
+// leaves the UF amounts alone: its pesos are never stored as UF.
+func TestLinkingAPesoChargeToAUFFixedExpense(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	fe := s.CreateFixedExpense(ctx, "Arriendo depto", "Hogar", nil, "2026-07", "15", 1, CurrencyUF)
+	mustOK(t, "CreateFixedExpense", fe.Error)
+	mustOK(t, "SetUFValues", s.SetUFValues(ctx, []UFValueInput{{Period: "2026-08", Value: "40000"}}).Error)
+
+	bill := stageOne(t, s, ImportCandidate{Date: "2026-08-05", Description: "PAC ARRIENDO DEPTO", Amount: "612345"})
+	if bill.SuggestedFixedID == nil || *bill.SuggestedFixedID != fe.Data.ID {
+		t.Fatalf("suggestion = %v, want the UF rent", bill.SuggestedFixedID)
+	}
+	mustOK(t, "LinkImportItemToFixed", s.LinkImportItemToFixed(ctx, bill.ID, fe.Data.ID, "2026-08").Error)
+
+	var rows []FixedExpenseAmount
+	if err := s.db.NewSelect().Model(&rows).Where("fixed_expense_id = ?", fe.Data.ID).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Amount.String() != "15" {
+		t.Fatalf("UF amounts = %+v, want only the 15 UF it was created with", rows)
+	}
+	for _, tc := range []struct{ period, amount, status string }{
+		{"2026-08", "600000", StatusPagado},
+		{"2026-09", "600000", StatusPendiente}, // September borrows August's UF value
+	} {
+		mv, ok := fixedAmountIn(t, s, tc.period, fe.Data.ID)
+		if !ok {
+			t.Fatalf("%s has no UF rent", tc.period)
+		}
+		wantMoney(t, tc.period+" rent", mv.Amount, tc.amount)
+		if mv.Status != tc.status || mv.UFAmount == nil || mv.UFAmount.String() != "15" {
+			t.Fatalf("%s rent = %s %v UF, want %s 15 UF", tc.period, mv.Status, mv.UFAmount, tc.status)
+		}
+	}
+}
+
 func TestNamesMatch(t *testing.T) {
 	for _, tc := range []struct {
 		fixed, descriptor string
