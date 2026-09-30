@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   accounts: [] as AccountView[],
   transfers: [] as Transfer[],
   created: [] as unknown[][],
+  edited: [] as Array<[string, ...unknown[]]>,
 }))
 
 vi.mock('@/services/finance', () => ({
@@ -35,13 +36,60 @@ vi.mock('@/services/finance', () => ({
       state.created.push(args)
       return Promise.resolve({ data: { id: 1 } })
     },
+    UpdateTransfer: (...args: unknown[]) => {
+      state.edited.push(['UpdateTransfer', ...args])
+      return Promise.resolve({ data: { id: 7 } })
+    },
+    ChangeTransferFrom: (...args: unknown[]) => {
+      state.edited.push(['ChangeTransferFrom', ...args])
+      return Promise.resolve({ data: { id: 8 } })
+    },
   },
 }))
+
+const monthlySalary: Transfer = {
+  id: 7,
+  userId: 1,
+  fromAccountId: 2,
+  toAccountId: 1,
+  description: 'Sueldo',
+  mode: 'fixed',
+  amount: '1500000',
+  startPeriod: '2026-08',
+  endPeriod: '',
+  createdAt: '',
+}
 
 beforeEach(() => {
   state.accounts = []
   state.transfers = []
   state.created = []
+  state.edited = []
+})
+
+describe('editing a monthly transfer', () => {
+  async function openEdit() {
+    state.accounts = [account(1, 'Itaú'), account(2, 'Banco de Chile', true)]
+    state.transfers = [monthlySalary]
+    await render(<TransfersSection period="2026-10" />)
+    await page.getByRole('button', { name: 'Acciones de la transferencia Banco de Chile a Itaú' }).click()
+    await page.getByRole('menuitem', { name: 'Editar' }).click()
+    await userEvent.fill(page.getByRole('textbox', { name: 'Monto' }), '1600000')
+  }
+
+  it('applies from the month on screen, keeping the months before', async () => {
+    await openEdit()
+    await expect.element(page.getByLabelText('Aplicar desde')).toHaveValue('2026-10')
+    await page.getByRole('button', { name: 'Guardar' }).click()
+    await expect.poll(() => state.edited).toEqual([['ChangeTransferFrom', 7, 2, 1, 'Sueldo', 'fixed', '1600000', '2026-10']])
+  })
+
+  it('changes every month when applied from its first month', async () => {
+    await openEdit()
+    await userEvent.fill(page.getByLabelText('Aplicar desde'), '2026-08')
+    await page.getByRole('button', { name: 'Guardar' }).click()
+    await expect.poll(() => state.edited).toEqual([['UpdateTransfer', 7, 2, 1, 'Sueldo', 'fixed', '1600000']])
+  })
 })
 
 describe('TransfersSection', () => {

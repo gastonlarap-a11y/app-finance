@@ -10,11 +10,14 @@ import (
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
-	"github.com/uptrace/bun/driver/sqliteshim"
 	"github.com/uptrace/bun/extra/bundebug"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared/config"
 )
+
+// driverName is the name modernc.org/sqlite registers its database/sql driver
+// under (imported in fold.go).
+const driverName = "sqlite"
 
 // busyTimeoutMs is how long a statement waits for another connection's lock
 // (a second app instance, an external sqlite3 shell) before failing with BUSY.
@@ -22,8 +25,8 @@ const busyTimeoutMs = 5000
 
 // DSN builds the connection string for the SQLite file at path.
 //
-// sqliteshim resolves to modernc.org/sqlite on every platform this app ships
-// for (darwin/amd64, darwin/arm64, windows/amd64), and modernc only honors
+// The driver is modernc.org/sqlite (pure Go, every platform this app ships for:
+// darwin/amd64, darwin/arm64, windows/amd64), which only honors
 // `_pragma=name(value)` — the mattn-style `_foreign_keys=on` / `_journal=WAL`
 // keys are silently ignored. The pragmas run on every new connection.
 //
@@ -37,7 +40,14 @@ func DSN(path string) string {
 // Open opens the SQLite file at path with the app's connection settings and
 // verifies they took effect. It does not run migrations.
 func Open(ctx context.Context, path string) (*bun.DB, error) {
-	sqldb, err := sql.Open(sqliteshim.ShimName, DSN(path))
+	// Before the first connection: the driver hands its functions to new ones.
+	if err := registerFold(); err != nil {
+		return nil, fmt.Errorf("registering %s(): %w", FoldSQL, err)
+	}
+	// modernc's own registration ("sqlite"), not bun's sqliteshim: the shim
+	// wraps a driver instance of its own, which never carries the functions
+	// registered with modernc (fold).
+	sqldb, err := sql.Open(driverName, DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}

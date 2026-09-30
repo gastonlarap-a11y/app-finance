@@ -104,6 +104,12 @@ Connection (`db.go`): `db.DSN` passes `_pragma=busy_timeout(5000)&_pragma=foreig
 `_txlock=immediate`, and `db.Open` fails unless `PRAGMA foreign_keys` reads 1. The journal stays in
 DELETE mode on purpose — the DB folder may be synced by iCloud/Dropbox, and WAL side files synced out
 of step can corrupt it. Tests open DBs through `dbtest.OpenMigrated`, i.e. with the same settings.
+`db.Open` uses modernc's own driver registration (`"sqlite"`), not bun's `sqliteshim`: the shim wraps a
+driver instance of its own, which never carries the SQL functions registered with modernc. The one
+such function is `fold(x)` (`fold.go`: lowercase, accents stripped), which text search compares with
+because SQLite's `LIKE` folds ASCII only; the web engine registers the same function on its handle
+(`engine/db/sqlite.ts`). It is used in queries only, never in the schema, so the file stays readable
+by any SQLite.
 
 ### Per-month & effective-dated data
 
@@ -165,7 +171,8 @@ summaries.perf.test.ts` does the same for the web engine (`BENCH=1`). Rules that
 Read-only aggregates built on top: `CommitmentsForecast` (`forecast.go` — future installments + active
 fixed expenses vs. salary: a month's confirmed or base salary, else — only without a base salary — the
 last confirmed one) and `SearchExpenses`
-(`search.go` — LIKE with escaped wildcards, category/card/period-range filters, paginated with a count).
+(`search.go` — `fold(x) LIKE fold(?)` with escaped wildcards, so case and accents never matter:
+«cafe» finds «Café», «nunoa» finds «ÑUÑOA»; category/card/period-range filters, paginated with a count).
 `YearSummary.CategoriaMeses` is the category × month breakdown (same pass that builds `PorCategoria`).
 
 **Savings goals** (`savings.go`, migration `20260923015`): `savings_goals` (soft delete, Papelera) and
@@ -251,7 +258,11 @@ no category may take that name (`validCategoryName`; migration 029 renamed an ex
 one pending cuota (uneven plans). When a bank movement confirms or merges into a plan,
 `settleLastCuota` makes the last cuota absorb the rounding, so the cuotas add up to the bank's total.
 `PrepayExpense` moves every pending cuota into `period` (the month the balance is paid, never before
-the plan's first cuota), keeping each amount; paid cuotas stay where they are. In the month view each cuota of a plan carries its progress
+the plan's first cuota), keeping each amount; paid cuotas stay where they are. `DeferExpense` is the
+other way, for a purchase whose first cuota the bank postponed («compra hoy, primera cuota en 3
+meses»): the whole plan shifts so cuota 1 falls in `period`, never before the purchase's billing month,
+and only while no cuota is paid; an edit keeps those months (`replanInstallments`). The expense form
+offers it on a new purchase in cuotas, the cuota dialog on an existing plan. In the month view each cuota of a plan carries its progress
 (`Movimiento.SoFar/Remaining/RemainingCount`, `cuotaProgressAt`): what the plan's cuotas billed up to
 that month add up to and what is left — by each cuota's month and real amount, not by paid status, so
 a prepaid plan reads as all behind.
@@ -265,7 +276,9 @@ the refund path. An open receivable changes nothing.
 pesos for every total (`installment_amount`), and additionally keeps `currency`, `original_amount`
 (its total there) and `fx_rate`. `ConfirmImportItem` records them from a foreign-currency item
 (`recordItemCurrency`), and `LatestFxRate` suggests the CLP/USD rate implied by the last
-international card payment.
+international card payment. That payment is the cartola's «INTER» movement within the payment window
+whose implied rate is plausible (300–3.000 CLP/USD) and closest to the last rate learned
+(`bestUSDPayment`) — never simply the nearest in date, which could be another international movement.
 
 **Accounts, light** (`account.go`, migrations `20260927033`, `20260928036`). An account
 (corriente, vista, digital — a prepaid wallet such as Mercado Pago —, efectivo, ahorro) is a lens on
@@ -289,7 +302,10 @@ the month's close — the liability between the accounts' balances and the app's
 
 **Transfers** (`transfer.go`) move money between two own accounts (the salary passed from the bank
 it lands in to the everyday one, topping up a digital wallet): one-off (`end_period =
-start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). They are neither spending
+start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). Editing one from a month on
+(`ChangeTransferFrom`) splits it as a calendar edits «this and following events»: it ends the month
+before and a new transfer carries the new accounts, mode and amount, taking the bank movements linked
+to its months; from its first month it is `UpdateTransfer`, every month. They are neither spending
 nor income, so they never enter `flowsBetween` or a month's summary; they only move the two
 accounts' balances (`AccountView.TransferIn/Out`). An account a transfer moves money to or from is
 not deleted (`DeleteAccount` → conflict: end or delete the transfer first), so a hard delete never
@@ -598,7 +614,12 @@ expense until the user confirms it:
   import of YNAB, Actual and Monarch: every Chilean bank exports its cartola to Excel/CSV, so instead
   of a parser per layout the user maps the columns once (fecha, descripción, and a signed monto, a
   column of card charges, or separate cargos/abonos). The reader detects the delimiter (`;` `,` tab)
-  and the encoding (UTF-8, else Windows-1252), reads es-CL dates and amounts, skips title/total rows,
+  and the encoding (UTF-8, else Windows-1252), and how the file writes dates and amounts
+  (`detectFormats`): Chilean (dd/mm, 1.234,56) or US-locale (mm/dd, 1,234.56). A day past 12 tells
+  the date order; a value only one locale reads as money (at most two decimals) tells the numbers
+  («1,234» is 1.234 pesos only in the US reading); one side told makes the other follow its locale.
+  Like Actual's date-format pick, the dialog shows both as selects with the preview, and asks to
+  check when the values read both ways (Chilean by default). It skips title/total rows,
   and stages the rows with source `csv` (statement family: re-importing adds nothing). A new
   bank-specific PDF parser still needs a real sample of that bank's document, turned into an
   anonymized fixture.
@@ -677,7 +698,7 @@ expense until the user confirms it:
   - The bank's descriptor goes to `expenses.bank_description`, and its code comes with the link.
   - A paid cuota never moves: when the bank's plan would move or drop one, only the date and the descriptor are taken.
 - **Real cutoffs** (`cutoff.go`, `engine/finance/cutoff.ts`): banks move the cutoff with weekends and holidays.
-  - A card expense entered by hand is placed by the windows its card's statements printed: first each statement's billed period, then the next period it announced. The card's billing day covers only the dates no statement reached.
+  - A card expense entered by hand is placed by the windows its card's statements printed: first each statement's billed period, then the next period it announced. The card's billing day covers only the dates no statement reached. It may be 1–31 (a day outside is refused, never swapped): in a month without that day the cutoff falls on its last day (`periodOf`).
   - Statements link to the one live card holding their last digits. Saving a card's digits relinks them (`relinkStatements`), so the national and international statements land on the same card.
 - **No mail sync**: the IMAP reader of bank alert emails was removed; the user uploads each statement.
   Its migrations stay (`backend/mailsync/migrations`, desktop only: `017` created `mail_accounts`,

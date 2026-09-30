@@ -185,6 +185,23 @@ describe('búsqueda de gastos', () => {
       'VALIDATION_ERROR',
     )
   })
+
+  // Mirror of TestSearchIgnoresAccents.
+  it('ignora mayúsculas y tildes más allá de ASCII', async () => {
+    ok(await finance.CreateExpense('2030-01-05', 'Café con leche', '', '', null, 'unico', '3000', 1))
+    ok(await finance.CreateExpense('2030-01-06', 'Estacionamiento', '', 'ÑUÑOA PARKING', null, 'unico', '2000', 1))
+    ok(await finance.CreateExpense('2030-01-07', 'Pan', '', 'Cafetería Ágil', null, 'unico', '1500', 1))
+    for (const [text, want] of [
+      ['cafe', ['Pan', 'Café con leche']],
+      ['CAFÉ CON', ['Café con leche']],
+      ['ñuñoa', ['Estacionamiento']],
+      ['nunoa', ['Estacionamiento']],
+      ['agil', ['Pan']],
+    ] as const) {
+      const res = ok(await finance.SearchExpenses(filter({ text }))).data!
+      expect(res.items.map((it) => it.expense.description), text).toEqual(want)
+    }
+  })
 })
 
 describe('aislamiento en escrituras por id y lecturas agregadas', () => {
@@ -266,6 +283,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetCategoryRollover(cat.data!.id, true),
       () => finance.PurgeTrashItem('expense', expense.data!.id),
       () => finance.PrepayExpense(expense.data!.id, period),
+      () => finance.DeferExpense(expense.data!.id, period),
       () => finance.SetExpenseCurrency(expense.data!.id, 'USD', '1', '1'),
       () => finance.SetInstallmentAmount(cuotaID, '1'),
       () => finance.SetFixedExpenseDueDay(fe.data!.id, null),
@@ -297,6 +315,7 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
       () => finance.SetSavingsGoalAccount(goal.id, null),
       () => finance.CreateTransfer(acct.id, savingsAcct.id, 'x', 'fixed', '1', period, false),
       () => finance.UpdateTransfer(transfer.id, acct.id, savingsAcct.id, 'x', 'fixed', '1'),
+      () => finance.ChangeTransferFrom(transfer.id, acct.id, savingsAcct.id, 'x', 'fixed', '1', period),
       () => finance.SetAccountReconciliation(pastAcct.id, closed, '5'),
       () => finance.DeleteAccountReconciliation(pastAcct.id, closed),
       () => finance.EndTransfer(transfer.id, period),

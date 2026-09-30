@@ -472,6 +472,13 @@ function amountOrError(s: string): { amount?: Money; error?: ReturnType<typeof n
   }
 }
 
+// billingDayError mirrors Go validBillingDay: a cutoff day of the month, 1..31
+// (in a shorter month a later cutoff falls on its last day: periodOf).
+function billingDayError(day: number): ReturnType<typeof newError> | null {
+  if (!Number.isInteger(day) || day < 1 || day > 31) return newError(ErrValidation, 'el día de corte debe estar entre 1 y 31')
+  return null
+}
+
 // validateLastDigits mirrors the Go helper: '' (not informed) or exactly four digits.
 function validateLastDigits(s: string): { digits: string; error?: ReturnType<typeof newError> } {
   const t = s.trim()
@@ -875,6 +882,32 @@ function lineCandidate(st: CardStatement, l: CardStatementLine): ImportCandidate
 // ("PAGO DEUDA INTER. TC CTA CLP") from the national one.
 function isInternationalPayment(description: string): boolean {
   return description.toUpperCase().includes('INTER')
+}
+
+// Plausible CLP-per-USD rates, as in Go: a movement implying a rate outside
+// them is another international movement nearby, not the USD debt's payment.
+const FX_RATE_FLOOR = Money.fromString('300')
+const FX_RATE_CEILING = Money.fromString('3000')
+
+// bestUSDPayment mirrors Go: among candidates already ordered by date
+// distance, the one whose implied rate is plausible and closest to the last
+// rate learned (ref; '' = none yet, so the nearest in date). -1 when none is.
+export function bestUSDPayment(candidates: readonly { clp: Money; usd: Money }[], ref: string): number {
+  const last = ref === '' ? null : Money.fromString(ref)
+  let best = -1
+  let bestGap: Money | null = null
+  for (const [i, c] of candidates.entries()) {
+    if (c.usd.isZero() || c.usd.isNegative()) continue
+    const rate = c.clp.div(c.usd)
+    if (!rate.gte(FX_RATE_FLOOR) || rate.gt(FX_RATE_CEILING)) continue
+    if (last === null) return i
+    const gap = rate.sub(last).abs()
+    if (bestGap === null || gap.cmp(bestGap) < 0) {
+      best = i
+      bestGap = gap
+    }
+  }
+  return best
 }
 
 // suggestClp converts a USD item at the given CLP-per-USD rate, rounded to
@@ -1662,7 +1695,16 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         l.operationDate,
       ],
     )
-    for (const r of rows) {
+    let candidates = rows
+    if (international) {
+      const best = bestUSDPayment(
+        rows.map((r) => ({ clp: Money.fromString(asString(r.amount)), usd: paid })),
+        latestFxRate(),
+      )
+      if (best < 0) return 0
+      candidates = rows.slice(best, best + 1)
+    }
+    for (const r of candidates) {
       const it = rowToImportItem(r)
       if (st.kind === StatementNational && isInternationalPayment(it.description)) continue
       db.exec('UPDATE import_items SET status = ?, statement_line_id = ? WHERE id = ? AND user_id = ?', [
@@ -1690,18 +1732,25 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       params.push(StatementNational, item.amount.neg().toString())
     }
     params.push(item.date)
-    const row = db.query(
-      `SELECT csl.* FROM card_statement_lines AS csl JOIN card_statements AS cs ON cs.id = csl.statement_id
-       WHERE csl.user_id = ? AND csl.section = ?
-       AND ABS(julianday(csl.operation_date) - julianday(?)) <= ?
-       AND csl.id NOT IN (SELECT statement_line_id FROM import_items WHERE user_id = ? AND statement_line_id IS NOT NULL)
-       ${kindFilter}
-       ORDER BY ABS(julianday(csl.operation_date) - julianday(?)) ASC, csl.id ASC LIMIT 1`,
-      params,
-    )[0]
-    if (!row) return null
-    const line = rowToCardStatementLine(row)
-    if (international) learnFxRate(line.statementId, item.amount, Money.fromString(line.installmentAmount).abs())
+    const lines = db
+      .query(
+        `SELECT csl.* FROM card_statement_lines AS csl JOIN card_statements AS cs ON cs.id = csl.statement_id
+         WHERE csl.user_id = ? AND csl.section = ?
+         AND ABS(julianday(csl.operation_date) - julianday(?)) <= ?
+         AND csl.id NOT IN (SELECT statement_line_id FROM import_items WHERE user_id = ? AND statement_line_id IS NOT NULL)
+         ${kindFilter}
+         ORDER BY ABS(julianday(csl.operation_date) - julianday(?)) ASC, csl.id ASC`,
+        params,
+      )
+      .map(rowToCardStatementLine)
+    if (!international) return lines[0] ?? null
+    const best = bestUSDPayment(
+      lines.map((l) => ({ clp: item.amount, usd: Money.fromString(l.installmentAmount).abs() })),
+      latestFxRate(),
+    )
+    const line = lines[best]
+    if (!line) return null
+    learnFxRate(line.statementId, item.amount, Money.fromString(line.installmentAmount).abs())
     return line
   }
 
@@ -3494,13 +3543,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(creditLimit) }
       const digits = validateLastDigits(lastDigits)
       if (digits.error) return { error: digits.error }
-      const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
+      const badDay = billingDayError(billingDay)
+      if (badDay) return { error: badDay }
       const limit = parsed.amount.toString()
       return db.transaction((): CardResult => {
         const row = db.query(
           `INSERT INTO cards (user_id, name, credit_limit, billing_day, last_digits, created_at)
            VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
-          [uid(), name.trim(), limit, day, digits.digits, nowIso()],
+          [uid(), name.trim(), limit, billingDay, digits.digits, nowIso()],
         )[0]
         if (!row) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
         relinkStatements()
@@ -3520,13 +3570,14 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (parsed.error || !parsed.amount) return { error: parsed.error ?? invalidAmountError(creditLimit) }
       const digits = validateLastDigits(lastDigits)
       if (digits.error) return { error: digits.error }
-      const day = billingDay < 1 || billingDay > 28 ? 24 : billingDay
+      const badDay = billingDayError(billingDay)
+      if (badDay) return { error: badDay }
       const limit = parsed.amount.toString()
       return db.transaction((): CardResult => {
         db.exec(
           `UPDATE cards SET name = ?, credit_limit = ?, billing_day = ?, last_digits = ?
            WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
-          [name.trim(), limit, day, digits.digits, id, uid()],
+          [name.trim(), limit, billingDay, digits.digits, id, uid()],
         )
         if (db.changes() === 0) return { error: newError(ErrNotFound, 'tarjeta no encontrada') }
         relinkStatements()
@@ -4065,6 +4116,48 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return { data: rowToTransfer(db.query('SELECT * FROM transfers WHERE id = ?', [id])[0]!) }
     },
 
+    // ChangeTransferFrom mirrors Go: from `period` on, as a calendar's "this and
+    // following" — the transfer ends the month before, a new one covers the rest
+    // of its months and takes the bank movements linked to them.
+    async ChangeTransferFrom(
+      id: number,
+      fromAccountID: number,
+      toAccountID: number,
+      description: string,
+      mode: string,
+      amount: string,
+      period: string,
+    ): Promise<TransferResult> {
+      const v = validTransfer(fromAccountID, toAccountID, description, mode, amount)
+      if (v.error) return { error: v.error }
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const user = uid()
+      const row = db.query('SELECT * FROM transfers WHERE id = ? AND user_id = ?', [id, user])[0]
+      if (!row) return { error: newError(ErrNotFound, 'transferencia no encontrada') }
+      const old = rowToTransfer(row)
+      if (!activeIn(old, period)) return { error: newError(ErrValidation, `la transferencia no cubre ${period}`) }
+      if (period === old.startPeriod) return service.UpdateTransfer(id, fromAccountID, toAccountID, description, mode, amount)
+      const owned = ownAccounts(fromAccountID, toAccountID, mode)
+      if (owned) return { error: owned }
+      return db.transaction((): TransferResult => {
+        db.exec('UPDATE transfers SET end_period = ? WHERE id = ? AND user_id = ?', [addMonths(period, -1), id, user])
+        const next = db.query(
+          `INSERT INTO transfers (user_id, from_account_id, to_account_id, description, mode, amount, start_period, end_period, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          [user, fromAccountID, toAccountID, v.description, mode, v.amount, period, old.endPeriod, nowIso()],
+        )[0]
+        if (!next) throw new Error('INSERT transfers RETURNING produced no row')
+        const created = rowToTransfer(next)
+        db.exec('UPDATE import_items SET transfer_id = ? WHERE user_id = ? AND transfer_id = ? AND transfer_period >= ?', [
+          created.id,
+          user,
+          id,
+          period,
+        ])
+        return { data: created }
+      })
+    },
+
     async EndTransfer(id: number, lastPeriod: string): Promise<OpResult> {
       if (!validPeriod(lastPeriod)) return { error: invalidPeriodError() }
       db.exec('UPDATE transfers SET end_period = ? WHERE id = ? AND user_id = ? AND start_period <= ?', [
@@ -4147,6 +4240,36 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         StatusPendiente,
       ])
       if (db.changes() === 0) return { error: newError(ErrValidation, 'el gasto no tiene cuotas pendientes') }
+      return {}
+    },
+
+    // DeferExpense mirrors Go: the whole plan moves so its first cuota falls in
+    // `period`, never before the purchase's billing month; a paid cuota pins it.
+    async DeferExpense(expenseID: number, period: string): Promise<OpResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      const user = uid()
+      const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, user])[0]
+      if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      const ex = rowToExpense(row)
+      // A card row that is gone leaves the purchase in its own month (NO_CUTOFF).
+      const billed = cutoffPeriodOf(cutoffFor(ex.cardId, true).cutoff, storedDateParts(ex.date))
+      if (period < billed) {
+        return { error: newError(ErrValidation, `la primera cuota no puede ser antes del mes en que se factura la compra (${billed})`) }
+      }
+      const insts = db
+        .query('SELECT * FROM installments WHERE expense_id = ? AND user_id = ? ORDER BY number ASC', [expenseID, user])
+        .map(rowToInstallment)
+      const first = insts[0]
+      if (!first) return { error: newError(ErrValidation, 'el gasto no tiene cuotas') }
+      if (insts.some((i) => i.status === StatusPagado)) {
+        return { error: newError(ErrValidation, 'el plan tiene cuotas pagadas: desmárcalas antes de moverlo') }
+      }
+      const shift = monthsBetween(first.period, period)
+      db.transaction(() => {
+        for (const inst of insts) {
+          db.exec('UPDATE installments SET period = ? WHERE id = ? AND user_id = ?', [addMonths(inst.period, shift), inst.id, user])
+        }
+      })
       return {}
     },
 
@@ -5032,8 +5155,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (text !== '') {
         const pattern = `%${escapeLike(text)}%`
         const refs = expenseReferencesSQL('1 = 1', '1 = 1')
+        // Words ignore case and accents (fold, engine/db/fold.ts); a reference is digits.
         where.push(
-          `(description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\'` +
+          `(fold(description) LIKE fold(?) ESCAPE '\\' OR fold(merchant) LIKE fold(?) ESCAPE '\\'` +
+            ` OR fold(bank_description) LIKE fold(?) ESCAPE '\\'` +
             ` OR id IN (SELECT expense_id FROM (${refs}) WHERE reference LIKE ? ESCAPE '\\'))`,
         )
         params.push(pattern, pattern, pattern, uid(), uid(), uid(), pattern)

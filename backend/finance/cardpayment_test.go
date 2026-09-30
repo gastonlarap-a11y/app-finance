@@ -94,3 +94,20 @@ func TestSetCardPaymentDayValidation(t *testing.T) {
 		t.Fatalf("payment day = %v, want cleared", *cards[0].PaymentDay)
 	}
 }
+
+// A cutoff of 29–31 is kept (shorter months close on their last day,
+// TestPeriodOf); a day outside the month is refused, never swapped for another.
+func TestCardBillingDayValidation(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	card := s.CreateCard(ctx, "CMR", "500000", 31, "")
+	mustOK(t, "CreateCard day 31", card.Error)
+	if card.Data.BillingDay != 31 {
+		t.Fatalf("billing day = %d, want 31", card.Data.BillingDay)
+	}
+	for _, bad := range []int{0, 32, 99} {
+		wantCode(t, "CreateCard", s.CreateCard(ctx, "Visa", "0", bad, "").Error, shared.ErrValidation)
+		wantCode(t, "UpdateCard", s.UpdateCard(ctx, card.Data.ID, "CMR", "500000", bad, "").Error, shared.ErrValidation)
+	}
+	mustOK(t, "UpdateCard day 29", s.UpdateCard(ctx, card.Data.ID, "CMR", "500000", 29, "").Error)
+}

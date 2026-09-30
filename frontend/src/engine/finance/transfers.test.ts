@@ -150,6 +150,49 @@ describe('transfers', () => {
     expect((await account('2026-10', 'Banco de Chile')).gastos).toBe('609000')
     expect((await finance.SetFixedExpenseAccount(mortgage.id, 9999)).error?.code).toBe('NOT_FOUND')
   })
+
+  // Mirror of TestChangeTransferFromAMonth.
+  it('changing from a month on splits the transfer and moves the later links', async () => {
+    const itau = ok(await finance.CreateAccount('Itaú', 'corriente', '0', '2026-07', false)).data!
+    const mp = ok(await finance.CreateAccount('Mercado Pago', 'digital', '0', '2026-07', false)).data!
+    const load = ok(await finance.CreateTransfer(itau.id, mp.id, 'Carga', 'fixed', '50000', '2026-07', true)).data!
+    const blank = { currency: '', cardLastDigits: '', account: '', reference: '', installmentsTotal: 0, hint: '' }
+    ok(
+      await finance.StageImport({
+        source: 'pdf_account',
+        issuer: 'Itau',
+        items: [{ ...blank, date: '2026-09-15', description: 'CARGA MERCADOPAGO', amount: '50000' }],
+      }),
+    )
+    const sep = ok(await finance.ListImportItems('pendiente')).data![0]!
+    ok(await finance.LinkImportItemToTransfer(sep.id, load.id, '2026-09'))
+
+    const next = ok(await finance.ChangeTransferFrom(load.id, itau.id, mp.id, 'Carga mayor', 'fixed', '80000', '2026-09')).data!
+    expect([next.startPeriod, next.endPeriod, next.id !== load.id]).toEqual(['2026-09', '', true])
+    for (const [period, balance] of [
+      ['2026-07', '50000'],
+      ['2026-08', '100000'],
+      ['2026-09', '180000'],
+      ['2026-10', '260000'],
+    ]) {
+      expect((await account(period!, 'Mercado Pago')).balance, period).toBe(balance)
+    }
+    const transfers = await finance.ListTransfers()
+    expect(transfers.map((t) => t.endPeriod)).toEqual(['', '2026-08'])
+    expect(ok(await finance.ListImportItems('confirmado')).data!.map((it) => it.transferId)).toEqual([next.id])
+
+    const same = ok(await finance.ChangeTransferFrom(next.id, itau.id, mp.id, 'Carga', 'fixed', '70000', '2026-09')).data!
+    expect(same.id).toBe(next.id)
+
+    for (const [id, period, code] of [
+      [load.id, '2026-10', 'VALIDATION_ERROR'], // a month it does not cover
+      [next.id, '2026-08', 'VALIDATION_ERROR'], // before it starts
+      [next.id, '2026-9', 'VALIDATION_ERROR'],
+      [999, '2026-10', 'NOT_FOUND'],
+    ] as const) {
+      expect((await finance.ChangeTransferFrom(id, itau.id, mp.id, '', 'fixed', '1000', period)).error?.code).toBe(code)
+    }
+  })
 })
 
 describe('account reconciliations', () => {

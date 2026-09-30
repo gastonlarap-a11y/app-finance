@@ -18,8 +18,11 @@ Step-by-step procedure for a schema change: the `db-migration` skill.
   and ignored). Never delete or rename an applied migration file. Migrations need no engine
   change (auto-discovered by glob), but must be plain SQLite SQL with `--bun:split` separators.
 - **SQLite connection (invariant)**: open it only through `db.Open`/`db.DSN` (tests:
-  `dbtest.OpenMigrated`). The driver is modernc, which honors only `_pragma=…` DSN keys; `db.Open`
-  fails if `foreign_keys` is not 1. Journal stays DELETE (no WAL): the DB may live in a synced folder.
+  `dbtest.OpenMigrated`). The driver is modernc under its own name (`"sqlite"`, never bun's
+  `sqliteshim`, whose driver instance drops registered SQL functions), which honors only `_pragma=…`
+  DSN keys; `db.Open` fails if `foreign_keys` is not 1. Journal stays DELETE (no WAL): the DB may live
+  in a synced folder. SQL functions (`fold`, `backend/shared/db/fold.go`) are registered in Go and on
+  the web handle (`engine/db/sqlite.ts`) alike, and used in queries only, never in the schema.
 - **Sync state (invariant)**: desktop⇄iPad copies are compared with a version vector
   (`sync_vector` plus `sync_state.dirty`, `backend/shared/db/syncstate.go`, mirrored in
   `engine/db/syncstate.ts`). Every new user-data table needs its three `sync_dirty_*` triggers in its

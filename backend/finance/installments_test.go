@@ -210,3 +210,50 @@ func TestPrepayMovesOnlyPendingCuotas(t *testing.T) {
 		t.Fatalf("before the first cuota = %+v, want VALIDATION", r.Error)
 	}
 }
+
+// A purchase whose first cuota the bank postponed ("primera cuota en 3 meses")
+// moves as a whole; an edit keeps it there, a paid cuota pins it.
+func TestDeferMovesTheWholePlan(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	card := s.CreateCard(ctx, "Visa", "1000000", 24, "")
+	mustOK(t, "CreateCard", card.Error)
+	// Bought on the 26th, after the cutoff: billed in February.
+	ex := s.CreateExpense(ctx, "2030-01-26", "Refrigerador", "", "", &card.Data.ID, KindCuotas, "50000", 3)
+	mustOK(t, "CreateExpense", ex.Error)
+
+	mustOK(t, "DeferExpense", s.DeferExpense(ctx, ex.Data.ID, "2030-05").Error)
+	want := []string{"2030-05", "2030-06", "2030-07"}
+	if got := installmentPeriods(t, s, ex.Data.ID); !slices.Equal(got, want) {
+		t.Fatalf("periods = %v, want %v", got, want)
+	}
+	mustOK(t, "UpdateExpense", s.UpdateExpense(ctx, ex.Data.ID, "2030-01-26", "Refrigerador Samsung", "Hogar", "",
+		&card.Data.ID, KindCuotas, "50000", 3).Error)
+	if got := installmentPeriods(t, s, ex.Data.ID); !slices.Equal(got, want) {
+		t.Fatalf("periods after an edit = %v, want %v", got, want)
+	}
+
+	tests := []struct {
+		name   string
+		id     int64
+		period string
+		code   string
+	}{
+		{"bad period", ex.Data.ID, "2030-5", shared.ErrValidation},
+		{"before the billing month", ex.Data.ID, "2030-01", shared.ErrValidation},
+		{"unknown expense", 999, "2030-05", shared.ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantCode(t, "DeferExpense", s.DeferExpense(ctx, tt.id, tt.period).Error, tt.code)
+		})
+	}
+	mustOK(t, "back to the billing month", s.DeferExpense(ctx, ex.Data.ID, "2030-02").Error)
+
+	var first Installment
+	if err := s.db.NewSelect().Model(&first).Where("expense_id = ? AND number = 1", ex.Data.ID).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustOK(t, "SetInstallmentPaid", s.SetInstallmentPaid(ctx, first.ID, true).Error)
+	wantCode(t, "a paid cuota pins the plan", s.DeferExpense(ctx, ex.Data.ID, "2030-06").Error, shared.ErrValidation)
+}

@@ -1,11 +1,12 @@
 import { useState, type SubmitEvent } from 'react'
 import { FinanceService, type Movimiento } from '@/services/finance'
 import { failed } from '@/lib/result'
-import { formatCLP, periodLabel } from '@/lib/format'
+import { formatCLP, periodLabel, shiftPeriod } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput, inputCls } from './ui'
 
 // CuotaDialog adjusts one pending cuota of a purchase in cuotas: its amount
-// (the bank rounded it, or it was renegotiated) or paying off the whole
+// (the bank rounded it, or it was renegotiated), the month the whole plan
+// starts (the bank postponed its first cuota), or paying off the whole
 // balance early, which moves every pending cuota to the month it is paid.
 // Paid cuotas never change.
 export function CuotaDialog({
@@ -21,6 +22,8 @@ export function CuotaDialog({
 }) {
   const [amount, setAmount] = useState(cuota.amount)
   const [period, setPeriod] = useState(defaultPeriod)
+  // The plan's cuota 1 month, counted back from this cuota's (the month on screen).
+  const [firstMonth, setFirstMonth] = useState(shiftPeriod(defaultPeriod, 1 - cuota.number))
   const [busy, setBusy] = useState(false)
 
   async function run(action: () => ReturnType<typeof FinanceService.PrepayExpense>) {
@@ -54,6 +57,26 @@ export function CuotaDialog({
           </Button>
         </div>
       </form>
+
+      <div className="mt-6 space-y-3 border-t border-line pt-4">
+        <h4 className="text-sm font-semibold text-fg">Mover la primera cuota</h4>
+        <Field label="Mes de la primera cuota">
+          <input type="month" className={inputCls} value={firstMonth} onChange={(e) => setFirstMonth(e.target.value)} required />
+        </Field>
+        <p className="text-xs text-fg-subtle">
+          Si el banco postergó el inicio del plan: todas las cuotas se mueven para que la primera caiga en{' '}
+          {firstMonth ? periodLabel(firstMonth) : 'ese mes'}. Solo mientras ninguna cuota esté pagada.
+        </p>
+        <div className="flex justify-end">
+          <Button
+            variant="secondary"
+            disabled={busy || firstMonth === ''}
+            onClick={() => void run(() => FinanceService.DeferExpense(cuota.expenseId, firstMonth))}
+          >
+            Mover plan
+          </Button>
+        </div>
+      </div>
 
       <div className="mt-6 space-y-3 border-t border-line pt-4">
         <h4 className="text-sm font-semibold text-fg">Pagar el saldo por adelantado</h4>

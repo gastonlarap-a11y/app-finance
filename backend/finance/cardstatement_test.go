@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
+	"github.com/gastonlarap-a11y/app-finance/backend/shared/types"
 )
 
 // Synthetic statements (invented merchants and amounts) shaped like Itaú's.
@@ -258,6 +259,54 @@ func TestStatementPaymentsReconcileTheCartola(t *testing.T) {
 		t.Fatalf("cartola after statement = %+v, want the payment reconciled", got)
 	}
 	_ = ctx
+}
+
+// An "INTER" movement nearer in date whose pesos cannot pay the USD debt (40
+// CLP/USD) is not taken as its payment, nor does it set the rate.
+func TestUSDPaymentIgnoresAnImplausibleRate(t *testing.T) {
+	s := newTestService(t)
+	mustStage(t, s, ImportBatch{Source: ImportSourcePDFAccount, Issuer: "itau", Items: []ImportCandidate{
+		{Date: "2026-07-30", Description: "PAGO DEUDA INTER. TC CTA CLP", Amount: "4000", Hint: HintCardPayment},
+		{Date: "2026-08-02", Description: "PAGO DEUDA INTER. TC CTA CLP", Amount: "95000", Hint: HintCardPayment},
+	}})
+	if got := importStatement(t, s, internationalStatement()); got.PaymentsMatched != 1 {
+		t.Fatalf("international import = %+v, want one payment matched", got)
+	}
+	for _, it := range mustList(t, s, ImportConciliado) {
+		if it.Amount.String() != "95000" {
+			t.Fatalf("reconciled %s, want the 95000 payment", it.Amount)
+		}
+	}
+	if web := pendingByDescription(t, s)["SERVICIO WEB SUB"]; web.SuggestedAmountClp != "19000" {
+		t.Fatalf("USD purchase ≈ %s CLP, want 19000 (950 CLP/USD)", web.SuggestedAmountClp)
+	}
+}
+
+func TestBestUSDPayment(t *testing.T) {
+	pay := func(clp, usd string) usdPayment {
+		c, _ := types.New(clp)
+		u, _ := types.New(usd)
+		return usdPayment{clp: c, usd: u}
+	}
+	tests := []struct {
+		name       string
+		candidates []usdPayment
+		ref        string
+		want       int
+	}{
+		{"no rate yet: the nearest plausible", []usdPayment{pay("4000", "100"), pay("95000", "100"), pay("97000", "100")}, "", 1},
+		{"closest to the last rate", []usdPayment{pay("150000", "100"), pay("96000", "100")}, "950", 1},
+		{"a tie keeps the nearest in date", []usdPayment{pay("94000", "100"), pay("96000", "100")}, "950", 0},
+		{"none plausible", []usdPayment{pay("4000", "100"), pay("500000", "100")}, "950", -1},
+		{"no dollars paid", []usdPayment{pay("95000", "0")}, "", -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bestUSDPayment(tt.candidates, tt.ref); got != tt.want {
+				t.Fatalf("bestUSDPayment = %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestImportCardStatementValidation(t *testing.T) {

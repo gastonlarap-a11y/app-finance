@@ -1,6 +1,7 @@
 package finance
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
@@ -275,5 +276,38 @@ func TestSearchExpenses(t *testing.T) {
 
 	if r := s.SearchExpenses(ctx, ExpenseFilter{FromPeriod: "2030-05", ToPeriod: "2030-01"}); r.Error == nil {
 		t.Fatalf("inverted range = nil error, want validation")
+	}
+}
+
+// Search ignores case and accents beyond ASCII (SQLite's LIKE alone does not).
+func TestSearchIgnoresAccents(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	mustOK(t, "café", s.CreateExpense(ctx, "2030-01-05", "Café con leche", "", "", nil, KindUnico, "3000", 1).Error)
+	mustOK(t, "ñuñoa", s.CreateExpense(ctx, "2030-01-06", "Estacionamiento", "", "ÑUÑOA PARKING", nil, KindUnico, "2000", 1).Error)
+	mustOK(t, "cafetería", s.CreateExpense(ctx, "2030-01-07", "Pan", "", "Cafetería Ágil", nil, KindUnico, "1500", 1).Error)
+
+	tests := []struct {
+		text string
+		want []string
+	}{
+		{"cafe", []string{"Pan", "Café con leche"}},
+		{"CAFÉ CON", []string{"Café con leche"}},
+		{"ñuñoa", []string{"Estacionamiento"}},
+		{"nunoa", []string{"Estacionamiento"}},
+		{"agil", []string{"Pan"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			res := s.SearchExpenses(ctx, ExpenseFilter{Text: tt.text})
+			mustOK(t, "SearchExpenses", res.Error)
+			var got []string
+			for _, it := range res.Data.Items {
+				got = append(got, it.Expense.Description)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("SearchExpenses(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
 	}
 }

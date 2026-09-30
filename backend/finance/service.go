@@ -181,13 +181,13 @@ func (s *FinanceService) listCards(ctx context.Context, uid int64) ([]Card, erro
 	return cards, err
 }
 
-// normalizeBillingDay keeps the cutoff day in 1..28 (every month has it),
-// falling back to the 24th.
-func normalizeBillingDay(day int) int {
-	if day < 1 || day > 28 {
-		return 24
+// validBillingDay accepts a cutoff day of the month, 1..31 (in a shorter
+// month a later cutoff falls on its last day: periodOf).
+func validBillingDay(day int) *shared.AppError {
+	if day < 1 || day > 31 {
+		return shared.NewError(shared.ErrValidation, "el día de corte debe estar entre 1 y 31")
 	}
-	return day
+	return nil
 }
 
 // validateLastDigits accepts "" (not informed) or exactly four digits.
@@ -214,10 +214,13 @@ func (s *FinanceService) CreateCard(ctx context.Context, name, creditLimit strin
 	if aerr != nil {
 		return CardResult{Error: aerr}
 	}
+	if aerr := validBillingDay(billingDay); aerr != nil {
+		return CardResult{Error: aerr}
+	}
 	uid := s.uid()
 	card := &Card{
 		UserID: uid, Name: strings.TrimSpace(name), CreditLimit: limit,
-		BillingDay: normalizeBillingDay(billingDay), LastDigits: digits,
+		BillingDay: billingDay, LastDigits: digits,
 	}
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(card).Returning("*").Exec(ctx); err != nil {
@@ -243,13 +246,16 @@ func (s *FinanceService) UpdateCard(ctx context.Context, id int64, name, creditL
 	if aerr != nil {
 		return CardResult{Error: aerr}
 	}
+	if aerr := validBillingDay(billingDay); aerr != nil {
+		return CardResult{Error: aerr}
+	}
 	uid := s.uid()
 	card := new(Card)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model((*Card)(nil)).
 			Set("name = ?", strings.TrimSpace(name)).
 			Set("credit_limit = ?", limit).
-			Set("billing_day = ?", normalizeBillingDay(billingDay)).
+			Set("billing_day = ?", billingDay).
 			Set("last_digits = ?", digits).
 			Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
 		if aerr := requireOne(res, err, "tarjeta no encontrada"); aerr != nil {
@@ -1944,9 +1950,8 @@ func pad2(n int) string  { return fmt.Sprintf("%02d", n) }
 func itoa4(n int) string { return fmt.Sprintf("%04d", n) }
 
 // isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure.
-// Matched by message on purpose: sqliteshim picks a different driver (cgo
-// mattn vs pure-Go modernc) per build, each with its own error type, and the
-// message is the one thing both share.
+// Matched by SQLite's own message on purpose: it does not depend on a driver's
+// error type (the file is also opened by the web engine's sqlite-wasm).
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
