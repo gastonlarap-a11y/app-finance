@@ -16,8 +16,8 @@ La navegación es una **barra lateral agrupada** (Resumen, Importar, Buscar · A
 Cada pantalla tiene su URL (`#/resumen`, `#/config/tarjetas`…) y la app reabre la última visitada.
 
 - **Resumen del mes**: sueldo del mes (el sueldo base se repite solo como «esperado» hasta que lo confirmas),
-  ingresos extra y tabla de movimientos que combina cuotas de tarjeta
-  de crédito y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?), cupo de
+  ingresos extra y tabla de movimientos que combina cuotas de tarjeta de crédito (cada una dice cuánto llevas y
+  cuánto falta) y gastos fijos recurrentes; totales en vivo (disponible, gastos, balance, ¿alcanza?), cupo de
   tarjetas y saldo de cuentas.
 - **Importar**: estados de cuenta de tarjeta en PDF (Itaú, Banco de Chile, Cencosud Scotiabank y CMR
   Falabella), la cartola de Itaú en PDF y cartolas de cualquier banco en CSV. Todo llega a una bandeja

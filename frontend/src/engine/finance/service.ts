@@ -2166,6 +2166,33 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     ])
   }
 
+  // cuotaProgressAt mirrors Go: the progress at `period` of every plan (more
+  // than one cuota) among the month's cuotas, by each cuota's month — what the
+  // ones billed up to it add up to, what the later ones will, and how many.
+  function cuotaProgressAt(
+    period: string,
+    insts: readonly Installment[],
+  ): Map<number, { soFar: Money; remaining: Money; remainingCount: number }> {
+    const out = new Map<number, { soFar: Money; remaining: Money; remainingCount: number }>()
+    const ids = [...new Set(insts.filter((i) => i.total > 1).map((i) => i.expenseId))]
+    if (ids.length === 0) return out
+    for (const r of db.query(
+      `SELECT expense_id, period, amount FROM installments WHERE user_id = ? AND expense_id IN (${ids.map(() => '?').join(',')})`,
+      [uid(), ...ids],
+    )) {
+      const id = asNumber(r.expense_id)
+      const p = out.get(id) ?? { soFar: Money.zero(), remaining: Money.zero(), remainingCount: 0 }
+      const amount = Money.fromString(asString(r.amount))
+      if (asString(r.period) <= period) p.soFar = p.soFar.add(amount)
+      else {
+        p.remaining = p.remaining.add(amount)
+        p.remainingCount++
+      }
+      out.set(id, p)
+    }
+    return out
+  }
+
   // pendingCuotaOf mirrors Go: a pending cuota of a live expense of the profile.
   function pendingCuotaOf(id: number): { error?: ReturnType<typeof newError> } {
     const row = db.query(
@@ -2688,6 +2715,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
         date: null,
         ufAmount: fe.currency === CurrencyUF ? charge.original.toString() : null,
         estimado: charge.estimated,
+        soFar: null,
+        remaining: null,
+        remainingCount: 0,
         tags: [],
         references: [],
       })
@@ -2899,6 +2929,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       date: null,
       ufAmount: null,
       estimado: false,
+      soFar: null,
+      remaining: null,
+      remainingCount: 0,
       tags: [],
       references: [],
     }
@@ -4336,6 +4369,7 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       const exById = expenseMapActive(insts.map((i) => i.expenseId))
       const tagsOf = tagsByExpense(insts.map((i) => i.expenseId))
       const refsOf = referencesByExpense(insts.map((i) => i.expenseId))
+      const progressOf = cuotaProgressAt(period, insts)
 
       let extras = Money.zero()
       for (const inc of incomes) extras = extras.add(Money.fromString(inc.amount))
@@ -4374,6 +4408,9 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           date: null,
           ufAmount: null,
           estimado: false,
+          soFar: progressOf.get(inst.expenseId)?.soFar.toString() ?? null,
+          remaining: progressOf.get(inst.expenseId)?.remaining.toString() ?? null,
+          remainingCount: progressOf.get(inst.expenseId)?.remainingCount ?? 0,
           tags: tagsOf.get(inst.expenseId) ?? [],
           references: refsOf.get(inst.expenseId) ?? [],
         }

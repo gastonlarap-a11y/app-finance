@@ -294,6 +294,12 @@ export interface Movimiento {
   date: string | null
   ufAmount: string | null // the charge in UF when priced in UF (amount is its peso conversion)
   estimado: boolean // amount rests on an estimated UF value
+  // A cuota of a plan (total > 1): what its cuotas billed up to this month add
+  // up to, what the later ones will, and how many those are (null / 0
+  // otherwise). By month, not by paid status: a prepaid plan is all "so far".
+  soFar: string | null
+  remaining: string | null
+  remainingCount: number
   tags: string[] // tags of the expense behind a cuota
   references: string[] // the bank's codes for that expense, one per statement that reported it
 }
