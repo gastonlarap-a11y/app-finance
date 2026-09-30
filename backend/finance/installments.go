@@ -126,6 +126,15 @@ func (s *FinanceService) PrepayExpense(ctx context.Context, expenseID int64, per
 		if !live {
 			return shared.NewError(shared.ErrNotFound, "gasto no encontrado")
 		}
+		// A plan cannot be paid off before it started.
+		var first string
+		if err := tx.NewSelect().Model((*Installment)(nil)).ColumnExpr("MIN(period)").
+			Where("expense_id = ? AND user_id = ?", expenseID, uid).Scan(ctx, &first); err != nil {
+			return fmt.Errorf("finding the plan's first month: %w", err)
+		}
+		if period < first {
+			return shared.NewError(shared.ErrValidation, "no puedes pagar por adelantado antes de la primera cuota ("+first+")")
+		}
 		res, err := tx.NewUpdate().Model((*Installment)(nil)).Set("period = ?", period).
 			Where("expense_id = ? AND user_id = ? AND status = ?", expenseID, uid, StatusPendiente).Exec(ctx)
 		if err != nil {

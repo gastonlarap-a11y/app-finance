@@ -350,16 +350,18 @@ func (s *FinanceService) UpdateCategory(ctx context.Context, id int64, name stri
 			return err
 		}
 		if old.Name != name {
-			if _, err := tx.NewUpdate().Model((*Expense)(nil)).
+			// Rows in the trash too (bun skips them by default): restoring one must
+			// bring it back under the category's current name and budget.
+			if _, err := tx.NewUpdate().Model((*Expense)(nil)).WhereAllWithDeleted().
 				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}
-			if _, err := tx.NewUpdate().Model((*FixedExpense)(nil)).
+			if _, err := tx.NewUpdate().Model((*FixedExpense)(nil)).WhereAllWithDeleted().
 				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}
 			// Merchants' usual category and the import rules name it too.
-			if _, err := tx.NewUpdate().Model((*Merchant)(nil)).
+			if _, err := tx.NewUpdate().Model((*Merchant)(nil)).WhereAllWithDeleted().
 				Set("category = ?", name).Where("category = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}
@@ -436,7 +438,8 @@ func (s *FinanceService) UpdateMerchant(ctx context.Context, id int64, name stri
 			return err
 		}
 		if old.Name != name {
-			if _, err := tx.NewUpdate().Model((*Expense)(nil)).
+			// Expenses in the trash too, so a restored one keeps the merchant's current name.
+			if _, err := tx.NewUpdate().Model((*Expense)(nil)).WhereAllWithDeleted().
 				Set("merchant = ?", name).Where("merchant = ? AND user_id = ?", old.Name, uid).Exec(ctx); err != nil {
 				return err
 			}

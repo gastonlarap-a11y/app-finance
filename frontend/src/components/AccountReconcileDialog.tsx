@@ -1,7 +1,7 @@
 import { useState, type SubmitEvent } from 'react'
 import { FinanceService, type AccountView } from '@/services/finance'
 import { failed } from '@/lib/result'
-import { compare, isNegative, isZero, subtract } from '@/lib/money'
+import { compare, isNegative, subtract, withSign } from '@/lib/money'
 import { formatCLP, periodLabel } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput } from './ui'
 
@@ -23,7 +23,7 @@ export function AccountReconcileDialog({ account, period, onClose, onSaved }: Pr
   const [negative, setNegative] = useState(recorded ? isNegative(recorded) : false)
   const [busy, setBusy] = useState(false)
 
-  const amount = magnitude === '' ? '' : negative && !isZero(magnitude) ? `-${magnitude}` : magnitude
+  const amount = withSign(magnitude, negative)
   const computed = account.conciliacion?.calculado ?? account.balance
   const difference = amount === '' ? null : subtract(amount, computed)
 

@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { greaterThan, isNegative, maxAbs, pctChange, ratio, times, toPesos } from '@/lib/money'
+import { greaterThan, isNegative, maxAbs, pctChange, ratio, times, toPesos, withSign } from '@/lib/money'
 import { formatCLP } from '@/lib/format'
 
 describe('money helpers', () => {
+  it('withSign aplica el signo elegido a la magnitud, nunca a un cero', () => {
+    expect(withSign('150000', true)).toBe('-150000')
+    expect(withSign('150000', false)).toBe('150000')
+    expect(withSign('0', true)).toBe('0')
+    expect(withSign('', true)).toBe('')
+  })
+
   it('compara decimales exactos sin pasar por float', () => {
     // 2^53 + 1 vs 2^53: indistinguishable as JS numbers.
     expect(greaterThan('9007199254740993', '9007199254740992')).toBe(true)

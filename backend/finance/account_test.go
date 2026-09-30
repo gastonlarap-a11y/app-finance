@@ -69,6 +69,16 @@ func TestAccountsFollowTheirMovements(t *testing.T) {
 		t.Fatalf("after deleting cash = %+v, want its expense unassigned", got)
 	}
 
+	// An account a transfer moves money to or from is not deleted: that would
+	// erase the transfer from every month without a word.
+	savings := s.CreateAccount(ctx, "Ahorro", "ahorro", "0", "2030-01", false)
+	mustOK(t, "CreateAccount", savings.Error)
+	tr := s.CreateTransfer(ctx, checking.Data.ID, savings.Data.ID, "Ahorro mensual", TransferFixed, "10000", "2030-01", true)
+	mustOK(t, "CreateTransfer", tr.Error)
+	wantCode(t, "DeleteAccount with a transfer", s.DeleteAccount(ctx, savings.Data.ID).Error, shared.ErrConflict)
+	mustOK(t, "DeleteTransfer", s.DeleteTransfer(ctx, tr.Data.ID).Error)
+	mustOK(t, "DeleteAccount after its transfer", s.DeleteAccount(ctx, savings.Data.ID).Error)
+
 	for _, bad := range [][4]string{{"", "corriente", "0", "2030-01"}, {"X", "banco", "0", "2030-01"}, {"X", "vista", "abc", "2030-01"}, {"X", "vista", "0", "2030-1"}} {
 		if r := s.CreateAccount(ctx, bad[0], bad[1], bad[2], bad[3], false); r.Error == nil || r.Error.Code != shared.ErrValidation {
 			t.Fatalf("CreateAccount%v = %+v, want VALIDATION", bad, r.Error)

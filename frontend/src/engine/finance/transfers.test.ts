@@ -61,8 +61,8 @@ describe('transfers', () => {
 
     ok(await finance.DeleteTransfer(once.id))
     expect(await finance.ListTransfers()).toHaveLength(1)
-    ok(await finance.DeleteAccount(itau.id))
-    expect(await finance.ListTransfers()).toHaveLength(0)
+    expect((await finance.DeleteAccount(itau.id)).error?.code).toBe('CONFLICT')
+    expect(await finance.ListTransfers()).toHaveLength(1)
   })
 
   it('validate like Go', async () => {

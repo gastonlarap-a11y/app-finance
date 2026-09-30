@@ -19,6 +19,14 @@ export function isZero(v: string): boolean {
   return dec(v).isZero()
 }
 
+// withSign turns a MoneyInput magnitude and an explicit «Saldo negativo» choice
+// into the signed amount ('' stays '': nothing typed). The sign lives apart so a
+// stray "-" can never flip a balance; a zero is never negative.
+export function withSign(magnitude: string, negative: boolean): string {
+  if (magnitude === '') return ''
+  return negative && !isZero(magnitude) ? `-${magnitude}` : magnitude
+}
+
 // compare returns -1, 0 or 1 as a is less than, equal to or greater than b.
 export function compare(a: string, b: string): number {
   return dec(a).comparedTo(dec(b))

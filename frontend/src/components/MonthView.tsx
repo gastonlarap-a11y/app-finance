@@ -220,7 +220,7 @@ export function MonthView() {
 
   return (
     <div className={`@container space-y-6 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale}>
-      <OnboardingChecklist />
+      <OnboardingChecklist onOpeningBalance={() => setReconcile('inicio')} />
       <DuesBanner />
       <BudgetAlerts budgets={summary.presupuestos} />
       <MonthHeadline summary={summary} />

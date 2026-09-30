@@ -34,6 +34,7 @@ function useOnboardingFacts(): OnboardingFacts | null {
       categories: categories.length,
       incomeThisMonth: !!summary.data && !isZero(summary.data.ingresos),
       anyExpense: (search.data?.count ?? 0) > 0,
+      openingBalance: !!summary.data && (summary.data.acumuladoDesde !== '' || summary.data.conciliacion !== null),
       backupOn: IS_WEB ? lastExport() !== null : !!settings?.data && (settings.data.driveConnected || settings.data.backupOnClose),
     }
   })
@@ -52,7 +53,8 @@ function readDismissed(userId: number): boolean {
 // OnboardingChecklist is the Guía de inicio at the top of the Resumen: the
 // first steps of a new profile, each with the way to do it. It leaves on its
 // own once the required steps are done, or when hidden (per profile).
-export function OnboardingChecklist() {
+// onOpeningBalance opens the Resumen's «Saldo inicial» dialog.
+export function OnboardingChecklist({ onOpeningBalance }: { onOpeningBalance: () => void }) {
   const facts = useOnboardingFacts()
   const { active } = useProfiles()
   const setQuickAdd = useSetAtom(quickAddAtom)
@@ -115,6 +117,10 @@ export function OnboardingChecklist() {
                 {s.actions.map((a) =>
                   a.kind === 'quick-add' ? (
                     <Button key="quick-add" size="sm" onClick={() => setQuickAdd(true)}>
+                      {a.label}
+                    </Button>
+                  ) : a.kind === 'opening-balance' ? (
+                    <Button key="opening-balance" size="sm" variant="secondary" onClick={onOpeningBalance}>
                       {a.label}
                     </Button>
                   ) : (

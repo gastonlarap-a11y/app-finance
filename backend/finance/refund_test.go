@@ -81,6 +81,7 @@ func TestRefundValidationAndDelete(t *testing.T) {
 		{"bad period", "2026-13", "1", ex.Data.ID, shared.ErrValidation},
 		{"unknown expense", "2026-01", "1", 999, shared.ErrNotFound},
 		{"more than the plan", "2026-02", "300001", ex.Data.ID, shared.ErrValidation},
+		{"before the purchase", "2025-12", "1000", ex.Data.ID, shared.ErrValidation},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if r := s.CreateRefund(ctx, tt.expenseID, tt.period, tt.amount, ""); r.Error == nil || r.Error.Code != tt.code {

@@ -180,10 +180,32 @@ func keepSalaryRestSource(ctx context.Context, idb bun.IDB, uid int64, acc *Acco
 		"la transferencia «%s» pasa el resto del sueldo desde otra cuenta: termínala antes de cambiar dónde cae el sueldo", label))
 }
 
-// DeleteAccount removes an account; what named it is left without one.
+// DeleteAccount removes an account: what named it is left without one and its
+// reconciliations go with it. An account some transfer moves money to or from
+// is refused — deleting it would silently erase those transfers from every
+// month; the user ends or deletes them first.
 func (s *FinanceService) DeleteAccount(ctx context.Context, id int64) OpResult {
-	res, err := s.db.NewDelete().Model((*Account)(nil)).Where("id = ? AND user_id = ?", id, s.uid()).Exec(ctx)
-	return OpResult{Error: requireOne(res, err, "cuenta no encontrada")}
+	uid := s.uid()
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		n, err := tx.NewSelect().Model((*Transfer)(nil)).
+			Where("user_id = ? AND (from_account_id = ? OR to_account_id = ?)", uid, id, id).Count(ctx)
+		if err != nil {
+			return fmt.Errorf("counting the account's transfers: %w", err)
+		}
+		if n > 0 {
+			return shared.NewError(shared.ErrConflict, fmt.Sprintf(
+				"la cuenta tiene %d transferencia(s): termínalas o elimínalas antes de eliminar la cuenta", n))
+		}
+		res, err := tx.NewDelete().Model((*Account)(nil)).Where("id = ? AND user_id = ?", id, uid).Exec(ctx)
+		if aerr := requireOne(res, err, "cuenta no encontrada"); aerr != nil {
+			return aerr
+		}
+		return nil
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
 }
 
 // ownAccount checks that accountID (nil = none) is one of uid's accounts.

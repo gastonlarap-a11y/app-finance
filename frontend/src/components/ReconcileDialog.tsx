@@ -2,7 +2,7 @@ import { useState, type SubmitEvent } from 'react'
 import { FinanceService, type AccountsClosing, type MonthlySummary } from '@/services/finance'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { compare, isNegative, isZero, subtract } from '@/lib/money'
+import { compare, isNegative, isZero, subtract, withSign } from '@/lib/money'
 import { formatCLP, periodLabel, shiftPeriod } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput } from './ui'
 
@@ -34,7 +34,7 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
   const [negative, setNegative] = useState(recorded ? isNegative(recorded) : false)
   const [busy, setBusy] = useState(false)
 
-  const amount = magnitude === '' ? '' : negative && !isZero(magnitude) ? `-${magnitude}` : magnitude
+  const amount = withSign(magnitude, negative)
   // The same close as the bank shows it through the accounts, when they are all reconciled.
   const closing = useQuery(`accounts-closing:${target}`, async () => {
     const r = await FinanceService.AccountsClosing(target)

@@ -173,8 +173,9 @@ last confirmed one) and `SearchExpenses`
 outflow of their month: `MonthlySummary.Ahorro`, `Balance = Disponible − Gastos − Ahorro`,
 `Alcanza = Disponible ≥ Gastos + Ahorro`, and they are subtracted in `cumulativeBalanceBefore`, the
 year view and the forecast. A withdrawal (`WithdrawSavings`) is a negative contribution: the same sums
-give the money back to its month, and a goal never goes below zero (withdrawing more than it holds, or
-deleting a contribution a withdrawal relies on, is refused). A goal past its target month and still
+give the money back to its month, and a goal never goes below zero at any month (`goalHeadroom`: a
+withdrawal may take at most what the goal held that month and what every later month still holds, so
+one dated before the contributions is refused, as is deleting a contribution a withdrawal relies on). A goal past its target month and still
 short is `Overdue`, flagged in the Ahorro view. A goal may instead **follow a savings account**
 (`savings_goals.account_id`, migration `20260929040`, `SetSavingsGoalAccount`; one live goal per
 account), as Monarch and Copilot link goals to accounts: it holds that account's balance at the
@@ -213,7 +214,7 @@ viaje?". Renaming onto another tag's name is refused; deleting a tag removes it 
 **Refunds** (`refund.go`, migration `20260926024`), as YNAB and Monarch treat them: `refunds(expense_id,
 period, amount)` is money returned for one expense (a store return, a bank reversal), partial or
 total, never more than the expense cost — the sum of its cuotas, which an uneven plan makes differ from
-cuota × N (`expenseCost`, `insertRefund`). It is a negative movimiento of the month it
+cuota × N (`expenseCost`, `insertRefund`) — and never in a month before the purchase. It is a negative movimiento of the month it
 arrives in (`SourceReembolso`, status pagado) in its expense's category and card, so `Gastos`,
 `PorCategoria`, budgets, the card's month charges (`cardChargesIn`, statement comparison), the year,
 the trend and the carried balance (`flowsBetween`) are all net of it; the forecast adds it to
@@ -249,8 +250,8 @@ no category may take that name (`validCategoryName`; migration 029 renamed an ex
 **Cuotas the bank rounds, and paying a plan off** (`installments.go`). `SetInstallmentAmount` edits
 one pending cuota (uneven plans). When a bank movement confirms or merges into a plan,
 `settleLastCuota` makes the last cuota absorb the rounding, so the cuotas add up to the bank's total.
-`PrepayExpense` moves every pending cuota into `period` (the month the balance is paid), keeping each
-amount; paid cuotas stay where they are. In the month view each cuota of a plan carries its progress
+`PrepayExpense` moves every pending cuota into `period` (the month the balance is paid, never before
+the plan's first cuota), keeping each amount; paid cuotas stay where they are. In the month view each cuota of a plan carries its progress
 (`Movimiento.SoFar/Remaining/RemainingCount`, `cuotaProgressAt`): what the plan's cuotas billed up to
 that month add up to and what is left — by each cuota's month and real amount, not by paid status, so
 a prepaid plan reads as all behind.
@@ -290,8 +291,10 @@ the month's close — the liability between the accounts' balances and the app's
 it lands in to the everyday one, topping up a digital wallet): one-off (`end_period =
 start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). They are neither spending
 nor income, so they never enter `flowsBetween` or a month's summary; they only move the two
-accounts' balances (`AccountView.TransferIn/Out`). Deleting an account deletes its transfers
-(`ON DELETE CASCADE`). A transfer's `mode` (migration `20260929038`) says what it moves each month:
+accounts' balances (`AccountView.TransferIn/Out`). An account a transfer moves money to or from is
+not deleted (`DeleteAccount` → conflict: end or delete the transfer first), so a hard delete never
+takes a transfer's history with it; deleting an account still drops its reconciliations
+(`ON DELETE CASCADE`) and leaves its movements without an account. A transfer's `mode` (migration `20260929038`) says what it moves each month:
 `fixed` moves `amount`; `salary_rest` moves that month's salary minus `amount`, which stays behind
 (the salary lands in one bank, the mortgage is debited there, the rest goes on to the everyday
 account). It never moves less than nothing, and a month without a salary yet moves 0. Only the
@@ -512,7 +515,9 @@ plain text (`expenses.merchant`), not a foreign key: renaming a merchant (`Updat
 that text on its expenses and import rules; deleting one leaves the text untouched. A merchant may
 have a usual category (`merchants.category`, `SetMerchantCategory`): the expense form proposes it,
 and an import whose rule names the merchant but no category takes it. Renaming a category
-(`UpdateCategory`) rewrites it on expenses, fixed expenses, merchants and import rules.
+(`UpdateCategory`) rewrites it on expenses, fixed expenses, merchants and import rules — trashed rows
+included (`WhereAllWithDeleted`), so a restored expense comes back under the new name; renaming a
+merchant does the same on its expenses.
 
 **Suggested catalog** (`catalog.go` + `catalog.json`, mirrored by `engine/finance/catalog.ts`):
 ~34 categories (with a looks.json icon and color) and ~200 Chilean merchants with their usual
@@ -820,7 +825,10 @@ silently.
   `paletteReducer`, recents per device in localStorage. Opened by ⌘K or the sidebar's «Ir a…»
   (`paletteOpenAtom`, like `quickAddAtom`).
 - **Guía de inicio** (`OnboardingChecklist`, rules in `lib/onboarding.ts`): derived from existing
-  queries, no stored progress; hidden per profile and device.
+  queries, no stored progress; hidden per profile and device. Its optional «Anota con cuánto partes»
+  step opens the Resumen's «Saldo inicial» dialog (done once a reconciled close exists): cuotas
+  already running when you start fall in past months without salary, and the opening balance keeps
+  them out of the carried balance.
 - **Swipe** (`lib/swipe.ts` pure classifier + `lib/useSwipePeriod.ts`): on month/year screens a
   horizontal touch swipe turns the period (left = next). ≥ 64 px, 1.5× more horizontal than
   vertical, quick (< 600 ms or ≥ 0.3 px/ms); never from the left 24 px (iOS back), on form fields,

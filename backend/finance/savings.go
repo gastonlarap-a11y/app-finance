@@ -233,12 +233,13 @@ func (s *FinanceService) WithdrawSavings(ctx context.Context, goalID int64, peri
 		if err := handGoal(ctx, tx, uid, goalID); err != nil {
 			return err
 		}
-		saved, err := goalBalance(ctx, tx, goalID)
+		headroom, err := goalHeadroom(ctx, tx, goalID, period)
 		if err != nil {
 			return err
 		}
-		if amt.GT(saved) {
-			return shared.NewError(shared.ErrValidation, fmt.Sprintf("no puedes retirar más de lo ahorrado en la meta (%s)", saved))
+		if amt.GT(headroom) {
+			return shared.NewError(shared.ErrValidation, fmt.Sprintf(
+				"no puedes retirar más de lo que la meta tenía ahorrado en %s (%s)", period, headroom))
 		}
 		_, err = tx.NewInsert().Model(c).Returning("*").Exec(ctx)
 		return err
@@ -247,6 +248,45 @@ func (s *FinanceService) WithdrawSavings(ctx context.Context, goalID int64, peri
 		return SavingsContributionResult{Error: appErr(err)}
 	}
 	return SavingsContributionResult{Data: c}
+}
+
+// goalHeadroom is the most a withdrawal in `period` may take so the goal never
+// holds less than zero at any month's close, then or later: the lowest of its
+// balance at `period` and its balance after each later month's movements.
+func goalHeadroom(ctx context.Context, db bun.IDB, goalID int64, period string) (types.Decimal, error) {
+	var rows []struct {
+		Period string        `bun:"period"`
+		Amount types.Decimal `bun:"amount"`
+	}
+	if err := db.NewSelect().Model((*SavingsContribution)(nil)).Column("period", "amount").
+		Where("goal_id = ?", goalID).Order("period ASC").Scan(ctx, &rows); err != nil {
+		return types.Zero(), fmt.Errorf("goal %d movements: %w", goalID, err)
+	}
+	byMonth := map[string]types.Decimal{}
+	var months []string
+	for _, r := range rows {
+		if _, seen := byMonth[r.Period]; !seen {
+			months = append(months, r.Period)
+		}
+		byMonth[r.Period] = byMonth[r.Period].Add(r.Amount)
+	}
+	// The balance at period's close…
+	headroom, running := types.Zero(), types.Zero()
+	for _, m := range months {
+		running = running.Add(byMonth[m])
+		if m <= period {
+			headroom = running
+		}
+	}
+	// …and never more than any later month's close holds.
+	running = types.Zero()
+	for _, m := range months {
+		running = running.Add(byMonth[m])
+		if m > period && running.Cmp(headroom) < 0 {
+			headroom = running
+		}
+	}
+	return types.Zero().Add(headroom), nil
 }
 
 // goalBalance is what a goal holds: its contributions minus its withdrawals.
