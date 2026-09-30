@@ -72,6 +72,11 @@ type ImportItem struct {
 
 	// A credit confirmed as a refund of an expense (ConfirmImportItemAsRefund).
 	RefundID *int64 `bun:"refund_id" json:"refundId"`
+
+	// A movement that is one leg of a transfer between own accounts
+	// (LinkImportItemToTransfer): neither spending nor income.
+	TransferID     *int64 `bun:"transfer_id" json:"transferId"`
+	TransferPeriod string `bun:"transfer_period,notnull" json:"transferPeriod"` // YYYY-MM of that transfer; "" = not linked
 }
 
 // Import item kinds.

@@ -31,6 +31,9 @@ Detail: `ARCHITECTURE.md` §18.
 - A bank movement that matches an expense entered by hand merges into it (`mergeIntoExpense`): the
   bank wins on date, amount and month, the user's words stay, the bank's descriptor goes to
   `bank_description`, and paid cuotas never move.
+- A movement that is a leg of a transfer between own accounts is confirmed with
+  `LinkImportItemToTransfer` (no expense, no income); a repeat from another format is only
+  flagged (`DuplicateItem*`, `inboxmatch.go`) — never delete or merge inbox items automatically.
 - Statement parsers live in the frontend (`frontend/src/lib/statements/`, shared by desktop and
   web); the user uploads every statement by hand (the IMAP mail sync was removed; its migrations
   stay under `backend/mailsync/migrations`, desktop only). Parser fixtures must be anonymized
