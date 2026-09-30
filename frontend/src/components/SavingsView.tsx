@@ -28,10 +28,14 @@ import {
   type MenuAction,
 } from './ui'
 import { goalLook } from '@/lib/look'
+import { AccountSelect, useAccounts } from './Accounts'
+import { Link } from './Link'
 
 // SavingsView manages savings goals. Contributions count as an outflow of their
 // month (they lower disponible and the carried balance) but show apart from
 // gastos and never count against category budgets; withdrawals do the reverse.
+// A goal that follows a savings account holds its balance instead, and the
+// money transferred into that account is each month's Ahorro.
 export function SavingsView() {
   const version = useVersion('ledger')
   const period = useAtomValue(periodAtom)
@@ -41,6 +45,8 @@ export function SavingsView() {
   const [showForm, setShowForm] = useState(false)
   const [movement, setMovement] = useState<GoalMovement | null>(null)
   const [deleting, setDeleting] = useState<SavingsGoalView | null>(null)
+  const accounts = useAccounts()
+  const accountName = (id: number) => accounts.find((a) => a.id === id)?.name ?? 'su cuenta'
 
   const query = useQuery(version, () => FinanceService.ListSavingsGoals())
 
@@ -66,7 +72,8 @@ export function SavingsView() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-prose text-sm text-fg-muted">
           Cada aporte sale del disponible del mes en que lo registras (como un gasto, pero aparte), así el saldo refleja lo que te
-          queda para gastar. Un retiro hace lo contrario: la plata vuelve al disponible de su mes.
+          queda para gastar. Un retiro hace lo contrario: la plata vuelve al disponible de su mes. Si la meta sigue una cuenta de
+          ahorro, lo que transfieres a esa cuenta es tu ahorro de cada mes.
         </p>
         <Button icon={Plus} onClick={openNew}>
           Nueva meta
@@ -101,8 +108,11 @@ export function SavingsView() {
         <ul className="grid gap-4 @2xl:grid-cols-2">
           {goals.map((g) => {
             const done = isZero(g.remaining)
+            const byHand = g.accountId === null
             const actions: MenuAction[] = [
-              ...(!isZero(g.saved) ? [{ label: 'Retirar', icon: ArrowDownToLine, onSelect: () => setMovement({ goal: g, kind: 'retiro' }) }] : []),
+              ...(byHand && !isZero(g.saved)
+                ? [{ label: 'Retirar', icon: ArrowDownToLine, onSelect: () => setMovement({ goal: g, kind: 'retiro' }) }]
+                : []),
               {
                 label: 'Editar',
                 icon: Pencil,
@@ -152,7 +162,12 @@ export function SavingsView() {
                 )}
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                  {g.contributions.length > 0 ? (
+                  {g.accountId !== null ? (
+                    <p className="text-xs text-fg-muted">
+                      Sigue el saldo de <strong className="font-medium text-fg">{accountName(g.accountId)}</strong>: lo que transfieres
+                      a esa cuenta es tu ahorro de cada mes (<Link to={{ page: 'config', section: 'cuentas' }}>Cuentas</Link>).
+                    </p>
+                  ) : g.contributions.length > 0 ? (
                     <details className="group min-w-0 flex-1">
                       <summary className="cursor-pointer text-xs font-medium text-fg-muted hover:text-fg">
                         {g.contributions.length} {g.contributions.length === 1 ? 'movimiento' : 'movimientos'}
@@ -183,7 +198,7 @@ export function SavingsView() {
                   ) : (
                     <span className="text-xs text-fg-subtle">Sin aportes todavía</span>
                   )}
-                  {!done && (
+                  {!done && byHand && (
                     <Button size="sm" icon={Plus} onClick={() => setMovement({ goal: g, kind: 'aporte' })}>
                       Aporte
                     </Button>
@@ -211,6 +226,8 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
   const [target, setTarget] = useState(goal?.targetAmount ?? '')
   const [targetPeriod, setTargetPeriod] = useState(goal?.targetPeriod ?? '')
   const [icon, setIcon] = useState(goal?.icon ?? '')
+  const accounts = useAccounts()
+  const [accountId, setAccountId] = useState<number | null>(goal?.accountId ?? null)
   const [busy, setBusy] = useState(false)
   // Goals take the automatic color (by id); a new one has none to preview yet.
   const preview = goalLook({ id: goal?.id ?? 0, name, icon: '' })
@@ -223,14 +240,14 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
         ? await FinanceService.UpdateSavingsGoal(goal.id, name, target, targetPeriod)
         : await FinanceService.CreateSavingsGoal(name, target, targetPeriod)
       if (failed(res) || !res.data) return
-      // The goal is saved either way; a failed icon write keeps the dialog open
+      const id = res.data.id
+      // The goal is saved either way; a failed extra keeps the dialog open
       // (with its toast) so the choice is not silently lost.
-      if (icon !== (goal?.icon ?? '') && failed(await FinanceService.SetSavingsGoalIcon(res.data.id, icon))) {
-        onSaved()
-        return
-      }
+      const extraFailed =
+        (icon !== (goal?.icon ?? '') && failed(await FinanceService.SetSavingsGoalIcon(id, icon))) ||
+        (accountId !== (goal?.accountId ?? null) && failed(await FinanceService.SetSavingsGoalAccount(id, accountId)))
       onSaved()
-      onClose()
+      if (!extraFailed) onClose()
     } finally {
       setBusy(false)
     }
@@ -248,6 +265,18 @@ function GoalForm({ goal, onClose, onSaved }: { goal: SavingsGoalView | null; on
         <Field label="Fecha objetivo (opcional)">
           <input type="month" className={inputCls} value={targetPeriod} onChange={(e) => setTargetPeriod(e.target.value)} />
         </Field>
+        <AccountSelect
+          accounts={accounts}
+          value={accountId}
+          onChange={setAccountId}
+          label="Sigue una cuenta de ahorro (opcional)"
+          noneLabel="No: anoto los aportes a mano"
+        />
+        {accountId !== null && (
+          <p className="-mt-2 text-xs text-fg-subtle">
+            Lo ahorrado será el saldo de esa cuenta, y lo que le transfieras cada mes, tu ahorro del mes.
+          </p>
+        )}
         <IconPicker value={icon} onChange={setIcon} auto={preview.icon} color={goal ? preview.color : 'gray'} />
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>

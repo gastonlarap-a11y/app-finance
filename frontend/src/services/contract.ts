@@ -392,6 +392,9 @@ export interface SavingsGoal {
   targetAmount: string
   targetPeriod: string // YYYY-MM, '' = no target month
   icon: string // looks.json icon key, '' = automatic
+  // The savings account it follows: it holds that account's balance and the
+  // transfers into it are each month's Ahorro. null = contributions by hand.
+  accountId: number | null
   createdAt: string
   deletedAt?: string | null
 }
@@ -1010,6 +1013,7 @@ export interface FinanceServiceContract {
   SetCategoryLook(categoryID: number, icon: string, color: string): Promise<OpResult>
   SetCardColor(cardID: number, color: string): Promise<OpResult>
   SetSavingsGoalIcon(goalID: number, icon: string): Promise<OpResult>
+  SetSavingsGoalAccount(goalID: number, accountID: number | null): Promise<OpResult>
 
   SearchExpenses(filter: ExpenseFilter): Promise<ExpenseSearchResult>
 
