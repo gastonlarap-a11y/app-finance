@@ -2,14 +2,26 @@
 // it works with both an OpfsSAHPoolDb (worker/production) and an in-memory
 // oo1.DB (Node/vitest) without depending on the package's class exports.
 import type { SqlDb, SqlRow, SqlValue } from '@/engine/db/types'
+import { FOLD_SQL, foldText } from '@/engine/db/fold'
 
 interface Oo1Db {
   exec(sql: string, opts: { bind?: SqlValue[] }): unknown
   selectObjects(sql: string, bind?: SqlValue[]): Record<string, unknown>[]
   changes(): number | bigint
+  createFunction(
+    name: string,
+    fn: (ctxPtr: number, ...values: unknown[]) => unknown,
+    opts: { arity: number; deterministic: boolean; directOnly: boolean },
+  ): unknown
 }
 
 export function wrapOo1Db(db: Oo1Db): SqlDb {
+  // The SQL functions the queries use, on every connection (as Go's db.Open).
+  db.createFunction(FOLD_SQL, (_ctx, v) => (typeof v === 'string' ? foldText(v) : v), {
+    arity: 1,
+    deterministic: true,
+    directOnly: true,
+  })
   return {
     exec(sql, params) {
       db.exec(sql, { bind: params })

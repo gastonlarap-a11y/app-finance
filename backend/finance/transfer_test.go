@@ -244,3 +244,64 @@ func TestFixedExpenseAccountWinsOverCard(t *testing.T) {
 		t.Fatalf("unknown account: %v, want not found", r.Error)
 	}
 }
+
+// Changing a monthly transfer from a month on splits it, as a calendar's "this
+// and following": the months before keep what they moved, and the bank
+// movements linked to the later months follow the new transfer.
+func TestChangeTransferFromAMonth(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	itau := s.CreateAccount(ctx, "Itaú", "corriente", "0", "2026-07", false)
+	mustOK(t, "itau", itau.Error)
+	mp := s.CreateAccount(ctx, "Mercado Pago", "digital", "0", "2026-07", false)
+	mustOK(t, "mp", mp.Error)
+	load := s.CreateTransfer(ctx, itau.Data.ID, mp.Data.ID, "Carga", TransferFixed, "50000", "2026-07", true)
+	mustOK(t, "CreateTransfer", load.Error)
+	sep := stageOne(t, s, ImportCandidate{Date: "2026-09-15", Description: "CARGA MERCADOPAGO", Amount: "50000"})
+	mustOK(t, "link September", s.LinkImportItemToTransfer(ctx, sep.ID, load.Data.ID, "2026-09").Error)
+
+	next := s.ChangeTransferFrom(ctx, load.Data.ID, itau.Data.ID, mp.Data.ID, "Carga mayor", TransferFixed, "80000", "2026-09")
+	mustOK(t, "ChangeTransferFrom", next.Error)
+	if next.Data.StartPeriod != "2026-09" || next.Data.EndPeriod != "" || next.Data.ID == load.Data.ID {
+		t.Fatalf("new transfer = %+v, want a new monthly one from 2026-09", next.Data)
+	}
+	for _, c := range []struct{ period, balance string }{
+		{"2026-07", "50000"}, {"2026-08", "100000"}, {"2026-09", "180000"}, {"2026-10", "260000"},
+	} {
+		wantMoney(t, "Mercado Pago "+c.period, accountByName(t, s, c.period, "Mercado Pago").Balance, c.balance)
+	}
+	transfers, err := s.ListTransfers(ctx)
+	if err != nil || len(transfers) != 2 || transfers[1].EndPeriod != "2026-08" {
+		t.Fatalf("transfers = %+v (err %v), want the first ended in 2026-08", transfers, err)
+	}
+	for _, it := range mustList(t, s, ImportConfirmado) {
+		if it.TransferID == nil || *it.TransferID != next.Data.ID {
+			t.Fatalf("September's movement links %v, want the new transfer %d", it.TransferID, next.Data.ID)
+		}
+	}
+
+	// From its first month it is an edit: no split.
+	same := s.ChangeTransferFrom(ctx, next.Data.ID, itau.Data.ID, mp.Data.ID, "Carga", TransferFixed, "70000", "2026-09")
+	mustOK(t, "from the first month", same.Error)
+	if same.Data.ID != next.Data.ID {
+		t.Fatalf("change from the first month created transfer %d, want %d edited", same.Data.ID, next.Data.ID)
+	}
+
+	tests := []struct {
+		name   string
+		id     int64
+		period string
+		code   string
+	}{
+		{"a month it does not cover", load.Data.ID, "2026-10", shared.ErrValidation},
+		{"before it starts", next.Data.ID, "2026-08", shared.ErrValidation},
+		{"bad period", next.Data.ID, "2026-9", shared.ErrValidation},
+		{"unknown transfer", 999, "2026-10", shared.ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := s.ChangeTransferFrom(ctx, tt.id, itau.Data.ID, mp.Data.ID, "", TransferFixed, "1000", tt.period)
+			wantCode(t, "ChangeTransferFrom", r.Error, tt.code)
+		})
+	}
+}

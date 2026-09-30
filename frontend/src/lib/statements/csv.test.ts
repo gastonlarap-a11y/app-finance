@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { buildBatch, decodeText, guessMapping, parseAmountCL, parseCsv, parseDateCL } from '@/lib/statements/csv'
+import {
+  CHILEAN_FORMATS,
+  buildBatch,
+  decodeText,
+  detectFormats,
+  guessMapping,
+  parseAmount,
+  parseCsv,
+  parseDate,
+} from '@/lib/statements/csv'
 
-describe('parseAmountCL', () => {
+const parseAmountCL = (raw: string) => parseAmount(raw, 'cl')
+const parseDateCL = (raw: string) => parseDate(raw, 'dmy')
+
+describe('parseAmount', () => {
   it('lee los formatos chilenos', () => {
     for (const [raw, want] of [
       ['1.234.567', '1234567'],
@@ -22,9 +34,27 @@ describe('parseAmountCL', () => {
   it('rechaza lo que no es monto', () => {
     for (const raw of ['', 'abc', '1,2,3', '12.34.5', '$', '1.2345']) expect(parseAmountCL(raw), raw).toBeNull()
   })
+  it('lee el formato de EE. UU.: la coma agrupa miles', () => {
+    for (const [raw, want] of [
+      ['1,234', '1234'],
+      ['1,234,567', '1234567'],
+      ['$ 1,234.50', '1234.50'],
+      ['(3,000)', '-3000'],
+      ['1234.5', '1234.5'],
+    ] as const) {
+      expect(parseAmount(raw, 'us'), raw).toBe(want)
+    }
+    for (const raw of ['1.234,50', '12,5', '1.234.567']) expect(parseAmount(raw, 'us'), raw).toBeNull()
+  })
 })
 
-describe('parseDateCL', () => {
+describe('parseDate', () => {
+  it('lee mes/día cuando el archivo es de EE. UU.', () => {
+    expect(parseDate('9/5/2026', 'mdy')).toBe('2026-09-05')
+    expect(parseDate('9/5/2026', 'dmy')).toBe('2026-05-09')
+    expect(parseDate('2026-09-05', 'mdy')).toBe('2026-09-05')
+    expect(parseDate('13/05/2026', 'mdy')).toBeNull()
+  })
   it('lee fechas chilenas e ISO', () => {
     expect(parseDateCL('05/09/2026')).toBe('2026-09-05')
     expect(parseDateCL('5-9-2026')).toBe('2026-09-05')
@@ -85,7 +115,7 @@ describe('guessMapping + buildBatch', () => {
   })
 
   it('arma el lote: cargos como gastos, abonos como abonos, salta el total', () => {
-    const { batch, skipped } = buildBatch(cartola, guessMapping(cartola)!, ' Banco de Chile ')
+    const { batch, skipped } = buildBatch(cartola, guessMapping(cartola)!, CHILEAN_FORMATS, ' Banco de Chile ')
     expect(skipped).toBe(1)
     expect(batch.source).toBe('csv')
     expect(batch.issuer).toBe('Banco de Chile')
@@ -100,11 +130,46 @@ describe('guessMapping + buildBatch', () => {
     const rows = parseCsv('Fecha,Detalle,Monto\n2026-09-01,UBER,-8.500\n2026-09-02,REVERSO,8.500')
     const mapping = guessMapping(rows)!
     expect(mapping.amount).toEqual({ kind: 'signed', column: 2 })
-    expect(buildBatch(rows, mapping, 'x').batch.items.map((i) => [i.amount, i.kind])).toEqual([
+    expect(buildBatch(rows, mapping, CHILEAN_FORMATS, 'x').batch.items.map((i) => [i.amount, i.kind])).toEqual([
       ['8500', 'gasto'],
       ['8500', 'abono'],
     ])
     const card = { ...mapping, amount: { kind: 'charges', column: 2 } as const }
-    expect(buildBatch(rows, card, 'x').batch.items.map((i) => i.kind)).toEqual(['abono', 'gasto'])
+    expect(buildBatch(rows, card, CHILEAN_FORMATS, 'x').batch.items.map((i) => i.kind)).toEqual(['abono', 'gasto'])
+  })
+})
+
+describe('detectFormats', () => {
+  const mappingOf = (rows: string[][]) => guessMapping(rows)!
+
+  it('una cartola chilena se lee como chilena, con certeza', () => {
+    expect(detectFormats(cartola, mappingOf(cartola))).toEqual({ dates: 'dmy', numbers: 'cl', sure: true })
+  })
+
+  it('un archivo de EE. UU. se reconoce por un día sobre 12 y por la coma de miles', () => {
+    const rows = parseCsv('Fecha;Detalle;Monto\n9/5/2026;UBER;-1,234\n9/25/2026;NETFLIX;-8,990\n10/1/2026;SUELDO;1,500,000')
+    const mapping = mappingOf(rows)
+    const formats = detectFormats(rows, mapping)
+    expect(formats).toEqual({ dates: 'mdy', numbers: 'us', sure: true })
+    expect(buildBatch(rows, mapping, formats, 'x').batch.items.map((i) => [i.date, i.amount])).toEqual([
+      ['2026-09-05', '1234'],
+      ['2026-09-25', '8990'],
+      ['2026-10-01', '1500000'],
+    ])
+  })
+
+  it('las fechas ambiguas siguen al formato de los montos', () => {
+    const rows = parseCsv('Fecha;Detalle;Monto\n05/09/2026;UBER;-8,500\n07/09/2026;LIDER;-12,990')
+    expect(detectFormats(rows, mappingOf(rows))).toEqual({ dates: 'mdy', numbers: 'us', sure: true })
+  })
+
+  it('si nada lo dice no hay certeza: parte en chileno y pide revisar', () => {
+    const rows = parseCsv('Fecha;Detalle;Monto\n05/09/2026;UBER;-8500\n07/09/2026;LIDER;-12990')
+    expect(detectFormats(rows, mappingOf(rows))).toEqual({ dates: 'dmy', numbers: 'cl', sure: false })
+  })
+
+  it('las fechas ISO no dicen nada y no piden revisar', () => {
+    const rows = parseCsv('Fecha;Detalle;Monto\n2026-09-05;UBER;-8.500')
+    expect(detectFormats(rows, mappingOf(rows))).toEqual({ dates: 'dmy', numbers: 'cl', sure: true })
   })
 })

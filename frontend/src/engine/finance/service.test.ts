@@ -66,11 +66,17 @@ describe('cards', () => {
     expect(await finance.ListCards()).toHaveLength(1)
   })
 
-  it('día de corte fuera de rango cae al 24 y nombre vacío falla', async () => {
+  // Mirror of TestCardBillingDayValidation: 29–31 is kept, outside 1..31 is refused.
+  it('día de corte 1–31 y nombre vacío falla', async () => {
     const bad = await finance.CreateCard('  ', '0', 10, '')
     expect(bad.error?.code).toBe('VALIDATION_ERROR')
-    const def = await finance.CreateCard('CMR', '100000', 99, '')
-    expect(def.data?.billingDay).toBe(24)
+    const card = await finance.CreateCard('CMR', '100000', 31, '')
+    expect(card.data?.billingDay).toBe(31)
+    for (const day of [0, 32, 99, 1.5]) {
+      expect((await finance.CreateCard('Visa', '0', day, '')).error?.code).toBe('VALIDATION_ERROR')
+      expect((await finance.UpdateCard(card.data!.id, 'CMR', '100000', day, '')).error?.code).toBe('VALIDATION_ERROR')
+    }
+    expect((await finance.UpdateCard(card.data!.id, 'CMR', '100000', 29, '')).error).toBeUndefined()
   })
 })
 

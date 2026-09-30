@@ -5,7 +5,7 @@ import type { TransferMode } from '@/services/contract'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { shiftPeriod } from '@/lib/format'
+import { periodLabel, shiftPeriod } from '@/lib/format'
 import { transferAmount, transferSpan } from '@/lib/wording'
 import {
   Badge,
@@ -148,6 +148,13 @@ export function TransfersSection({ period }: { period: string }) {
   )
 }
 
+// firstEditableMonth proposes where an edit applies from: the month on screen
+// when the transfer covers it, else its first month (the edit reaches them all).
+function firstEditableMonth(t: Transfer, period: string): string {
+  const covers = period >= t.startPeriod && (t.endPeriod === '' || period <= t.endPeriod)
+  return covers ? period : t.startPeriod
+}
+
 function TransferForm({
   accounts,
   transfer,
@@ -169,6 +176,10 @@ function TransferForm({
   const [description, setDescription] = useState(transfer?.description ?? '')
   const [startPeriod, setStartPeriod] = useState(transfer?.startPeriod ?? defaultPeriod)
   const [monthly, setMonthly] = useState(transfer ? transfer.endPeriod !== transfer.startPeriod : true)
+  // An edit of a transfer that spans months applies from a month on (a
+  // calendar's "this and following"); from its first month it changes them all.
+  const spansMonths = transfer !== undefined && transfer.endPeriod !== transfer.startPeriod
+  const [changeFrom, setChangeFrom] = useState(transfer ? firstEditableMonth(transfer, defaultPeriod) : '')
   const [busy, setBusy] = useState(false)
   // Only the salary's own account can pass on "the rest of the salary".
   const source = accounts.find((a) => a.id === from)
@@ -179,9 +190,11 @@ function TransferForm({
     setBusy(true)
     const sent: TransferMode = followsSalary ? 'salary_rest' : 'fixed'
     try {
-      const res = transfer
-        ? await FinanceService.UpdateTransfer(transfer.id, from, to, description, sent, amount)
-        : await FinanceService.CreateTransfer(from, to, description, sent, amount, startPeriod, monthly)
+      const res = !transfer
+        ? await FinanceService.CreateTransfer(from, to, description, sent, amount, startPeriod, monthly)
+        : spansMonths && changeFrom !== transfer.startPeriod
+          ? await FinanceService.ChangeTransferFrom(transfer.id, from, to, description, sent, amount, changeFrom)
+          : await FinanceService.UpdateTransfer(transfer.id, from, to, description, sent, amount)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -229,11 +242,23 @@ function TransferForm({
         <Field label="Descripción (opcional)">
           <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Sueldo a Itaú" />
         </Field>
-        {transfer ? (
-          <p className="text-xs text-fg-subtle">
-            Cambia todos los meses que cubre ({transferSpan(transfer)}). Para cambiar el monto desde un mes, termínala y crea
-            otra.
-          </p>
+        {transfer && spansMonths ? (
+          <Field
+            label="Aplicar desde"
+            hint={`Los meses anteriores quedan como estaban. Para corregir todos los meses, elige ${periodLabel(transfer.startPeriod).toLowerCase()}.`}
+          >
+            <input
+              type="month"
+              className={inputCls}
+              value={changeFrom}
+              min={transfer.startPeriod}
+              max={transfer.endPeriod || undefined}
+              onChange={(e) => setChangeFrom(e.target.value)}
+              required
+            />
+          </Field>
+        ) : transfer ? (
+          <p className="text-xs text-fg-subtle">Cambia la transferencia de {transferSpan(transfer)}.</p>
         ) : (
           <>
             <Field label={monthly ? 'Desde el mes' : 'Mes'}>

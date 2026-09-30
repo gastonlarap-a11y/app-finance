@@ -3,7 +3,8 @@
 // card-statement import can never drift from the Go backend.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb } from '@/engine/testing/db'
-import { createFinanceService } from '@/engine/finance/service'
+import { bestUSDPayment, createFinanceService } from '@/engine/finance/service'
+import { Money } from '@/engine/decimal'
 import { createSession } from '@/engine/users/service'
 import { blankStatement, statementLine } from '@/engine/testing/cardStatement'
 import type { SqlDb } from '@/engine/db/types'
@@ -243,6 +244,30 @@ describe('ImportCardStatement', () => {
       date: '2026-08-11', description: 'PAGO DEUDA TC CTA', amount: '100000', hint: 'card_payment',
     })
     expect(staged.reconciled).toBe(1)
+  })
+
+  // Mirror of TestUSDPaymentIgnoresAnImplausibleRate.
+  it('un movimiento INTER más cercano que no puede pagar la deuda en dólares no fija la tasa', async () => {
+    await stageCartola(
+      finance,
+      { date: '2026-07-30', description: 'PAGO DEUDA INTER. TC CTA CLP', amount: '4000', hint: 'card_payment' },
+      { date: '2026-08-02', description: 'PAGO DEUDA INTER. TC CTA CLP', amount: '95000', hint: 'card_payment' },
+    )
+    expect((await importStatement(internationalStatement())).paymentsMatched).toBe(1)
+    expect((await list('conciliado')).map((it) => it.amount)).toEqual(['95000'])
+    expect((await pendingByDescription()).get('SERVICIO WEB SUB')?.suggestedAmountClp).toBe('19000')
+  })
+
+  // Mirror of TestBestUSDPayment.
+  it.each<[string, Array<[string, string]>, string, number]>([
+    ['sin tasa previa: el plausible más cercano', [['4000', '100'], ['95000', '100'], ['97000', '100']], '', 1],
+    ['el más parecido a la última tasa', [['150000', '100'], ['96000', '100']], '950', 1],
+    ['un empate conserva el más cercano en fecha', [['94000', '100'], ['96000', '100']], '950', 0],
+    ['ninguno plausible', [['4000', '100'], ['500000', '100']], '950', -1],
+    ['sin dólares pagados', [['95000', '0']], '', -1],
+  ])('bestUSDPayment: %s', (_name, pairs, ref, want) => {
+    const candidates = pairs.map(([clp, usd]) => ({ clp: Money.fromString(clp), usd: Money.fromString(usd) }))
+    expect(bestUSDPayment(candidates, ref)).toBe(want)
   })
 
   it.each<[string, (s: CardStatementInput) => void, string]>([

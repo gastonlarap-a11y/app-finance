@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { FinanceService, type StageSummary } from '@/services/finance'
-import { buildBatch, guessMapping, type AmountLayout, type CsvMapping } from '@/lib/statements/csv'
+import {
+  buildBatch,
+  detectFormats,
+  guessMapping,
+  type AmountLayout,
+  type CsvMapping,
+  type DateOrder,
+  type NumberFormat,
+} from '@/lib/statements/csv'
 import { formatCLP, formatDate } from '@/lib/format'
 import { Button, Callout, Field, Modal, Select, inputCls } from './ui'
 
@@ -32,6 +40,16 @@ const LAYOUTS: { kind: LayoutKind; label: string }[] = [
   { kind: 'charges', label: 'Una columna de cargos (tarjeta): negativo = abono' },
 ]
 
+const DATE_ORDERS: { value: DateOrder; label: string }[] = [
+  { value: 'dmy', label: 'Día/mes/año (Chile)' },
+  { value: 'mdy', label: 'Mes/día/año (EE. UU.)' },
+]
+
+const NUMBER_FORMATS: { value: NumberFormat; label: string }[] = [
+  { value: 'cl', label: '1.234,56 (Chile)' },
+  { value: 'us', label: '1,234.56 (EE. UU.)' },
+]
+
 // CsvImportDialog maps the columns of a bank's CSV export and stages its
 // movements in the inbox (they are confirmed there like any other source).
 export function CsvImportDialog({
@@ -54,6 +72,9 @@ export function CsvImportDialog({
   const [amountCol, setAmountCol] = useState(guess?.amount.kind === 'split' ? 2 : (guess?.amount.column ?? 2))
   const [chargeCol, setChargeCol] = useState(guess?.amount.kind === 'split' ? guess.amount.charge : 2)
   const [creditCol, setCreditCol] = useState(guess?.amount.kind === 'split' ? guess.amount.credit : 3)
+  // null = what the file's values tell (detectFormats); a pick overrides it.
+  const [dateOrder, setDateOrder] = useState<DateOrder | null>(null)
+  const [numberFormat, setNumberFormat] = useState<NumberFormat | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,7 +84,10 @@ export function CsvImportDialog({
   const amount: AmountLayout =
     layout === 'split' ? { kind: 'split', charge: chargeCol, credit: creditCol } : { kind: layout, column: amountCol }
   const mapping: CsvMapping = { headerRow, date, description, amount }
-  const { batch, skipped } = buildBatch(rows, mapping, issuer)
+  const detected = detectFormats(rows, mapping)
+  const formats = { dates: dateOrder ?? detected.dates, numbers: numberFormat ?? detected.numbers }
+  const unsure = !detected.sure && dateOrder === null && numberFormat === null
+  const { batch, skipped } = buildBatch(rows, mapping, formats, issuer)
 
   async function submit() {
     if (issuer.trim() === '') {
@@ -135,7 +159,32 @@ export function CsvImportDialog({
           ) : (
             columnSelect(amountCol, setAmountCol, 'Monto')
           )}
+          <Field label="Fechas">
+            <Select value={formats.dates} onChange={(e) => setDateOrder(e.target.value === 'mdy' ? 'mdy' : 'dmy')}>
+              {DATE_ORDERS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Números">
+            <Select value={formats.numbers} onChange={(e) => setNumberFormat(e.target.value === 'us' ? 'us' : 'cl')}>
+              {NUMBER_FORMATS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
         </div>
+
+        {unsure && (
+          <Callout tone="caution">
+            Por sus valores, este archivo podría usar fechas o montos al estilo chileno o de EE. UU. Revisa la vista previa y
+            cambia «Fechas» o «Números» si no calza con tu cartola.
+          </Callout>
+        )}
 
         <div className="rounded-lg bg-sunken p-3 text-sm ring-1 ring-inset ring-line">
           <p className="mb-2 text-fg">

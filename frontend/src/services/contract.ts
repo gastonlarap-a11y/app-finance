@@ -986,6 +986,7 @@ export interface FinanceServiceContract {
   SetInstallmentPaid(id: number, paid: boolean): Promise<OpResult>
   SetInstallmentAmount(id: number, amount: string): Promise<OpResult>
   PrepayExpense(expenseID: number, period: string): Promise<OpResult>
+  DeferExpense(expenseID: number, period: string): Promise<OpResult>
   SetExpenseCurrency(expenseID: number, currency: string, originalAmount: string, fxRate: string): Promise<OpResult>
   ListAccounts(period: string): Promise<AccountsResult>
   CreateAccount(name: string, kind: string, openingBalance: string, openingPeriod: string, receivesSalary: boolean): Promise<AccountResult>
@@ -1020,6 +1021,15 @@ export interface FinanceServiceContract {
     description: string,
     mode: string,
     amount: string,
+  ): Promise<TransferResult>
+  ChangeTransferFrom(
+    id: number,
+    fromAccountID: number,
+    toAccountID: number,
+    description: string,
+    mode: string,
+    amount: string,
+    period: string,
   ): Promise<TransferResult>
   EndTransfer(id: number, lastPeriod: string): Promise<OpResult>
   DeleteTransfer(id: number): Promise<OpResult>

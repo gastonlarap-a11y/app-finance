@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/uptrace/bun"
 
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
@@ -807,6 +808,21 @@ func reconcilePaymentLine(ctx context.Context, tx bun.Tx, uid int64, st *CardSta
 	if err := q.Scan(ctx); err != nil {
 		return 0, fmt.Errorf("finding cartola payments: %w", err)
 	}
+	if st.Kind == StatementInternational {
+		ref, err := latestFxRate(ctx, tx, uid)
+		if err != nil {
+			return 0, err
+		}
+		pays := make([]usdPayment, len(items))
+		for i, it := range items {
+			pays[i] = usdPayment{clp: it.Amount, usd: paid}
+		}
+		best := bestUSDPayment(pays, ref)
+		if best < 0 {
+			return 0, nil
+		}
+		items = items[best : best+1]
+	}
 	for _, it := range items {
 		if st.Kind == StatementNational && isInternationalPayment(it.Description) {
 			continue
@@ -848,13 +864,71 @@ func matchPaymentLine(ctx context.Context, tx bun.Tx, uid int64, item *ImportIte
 	if len(lines) == 0 {
 		return nil, nil
 	}
-	l := &lines[0]
-	if international {
-		if err := learnFxRate(ctx, tx, l.StatementID, item.Amount, l.InstallmentAmount.Abs()); err != nil {
-			return nil, err
-		}
+	if !international {
+		return &lines[0], nil
+	}
+	ref, err := latestFxRate(ctx, tx, uid)
+	if err != nil {
+		return nil, err
+	}
+	pays := make([]usdPayment, len(lines))
+	for i, l := range lines {
+		pays[i] = usdPayment{clp: item.Amount, usd: l.InstallmentAmount.Abs()}
+	}
+	best := bestUSDPayment(pays, ref)
+	if best < 0 {
+		return nil, nil
+	}
+	l := &lines[best]
+	if err := learnFxRate(ctx, tx, l.StatementID, item.Amount, l.InstallmentAmount.Abs()); err != nil {
+		return nil, err
 	}
 	return l, nil
+}
+
+// Plausible CLP-per-USD rates (the dollar has traded between ~400 and ~1.100
+// pesos this century): a cartola movement implying a rate outside them is
+// another international movement nearby, not the payment of the USD debt.
+var (
+	fxRateFloor   = decimal.NewFromInt(300)
+	fxRateCeiling = decimal.NewFromInt(3000)
+)
+
+// usdPayment pairs the pesos a cartola movement took with the dollars a USD
+// statement's payment line settled: one candidate match.
+type usdPayment struct{ clp, usd types.Decimal }
+
+// rate is the CLP-per-USD rate the pair implies, and whether it is plausible.
+func (p usdPayment) rate() (decimal.Decimal, bool) {
+	if !p.usd.IsPositive() {
+		return decimal.Zero, false
+	}
+	r := p.clp.Decimal.Div(p.usd.Decimal)
+	return r, r.GreaterThanOrEqual(fxRateFloor) && r.LessThanOrEqual(fxRateCeiling)
+}
+
+// bestUSDPayment picks, among candidates already ordered by date distance, the
+// one whose implied rate is plausible and closest to the last rate learned
+// (ref; "" = none yet, so the nearest in date). -1 when none is plausible.
+// Without it, any "INTER" movement within the window set the rate.
+func bestUSDPayment(candidates []usdPayment, ref string) int {
+	last, err := decimal.NewFromString(ref)
+	hasRef := ref != "" && err == nil
+	best := -1
+	var bestGap decimal.Decimal
+	for i, c := range candidates {
+		r, ok := c.rate()
+		if !ok {
+			continue
+		}
+		if !hasRef {
+			return i
+		}
+		if gap := r.Sub(last).Abs(); best < 0 || gap.LessThan(bestGap) {
+			best, bestGap = i, gap
+		}
+	}
+	return best
 }
 
 // learnFxRate stores the CLP-per-USD rate implied by paying `usd` with `clp`.

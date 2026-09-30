@@ -243,6 +243,7 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		{"SetCategoryRollover", func() finance.OpResult { return fin.SetCategoryRollover(ctx, cat.Data.ID, true) }},
 		{"PurgeTrashItem", func() finance.OpResult { return fin.PurgeTrashItem(ctx, "expense", expense.Data.ID) }},
 		{"PrepayExpense", func() finance.OpResult { return fin.PrepayExpense(ctx, expense.Data.ID, period) }},
+		{"DeferExpense", func() finance.OpResult { return fin.DeferExpense(ctx, expense.Data.ID, period) }},
 		{"SetExpenseCurrency", func() finance.OpResult { return fin.SetExpenseCurrency(ctx, expense.Data.ID, "USD", "1", "1") }},
 		{"SetInstallmentAmount", func() finance.OpResult {
 			return fin.SetInstallmentAmount(ctx, firstCuotaOf(t, bdb, expense.Data.ID), "1")
@@ -301,6 +302,9 @@ func TestCrossUserWritesAndReads(t *testing.T) {
 		}},
 		{"UpdateTransfer", func() finance.OpResult {
 			return finance.OpResult{Error: fin.UpdateTransfer(ctx, transfer.Data.ID, acct.Data.ID, savingsAcct.Data.ID, "x", finance.TransferFixed, "1").Error}
+		}},
+		{"ChangeTransferFrom", func() finance.OpResult {
+			return finance.OpResult{Error: fin.ChangeTransferFrom(ctx, transfer.Data.ID, acct.Data.ID, savingsAcct.Data.ID, "x", finance.TransferFixed, "1", period).Error}
 		}},
 		{"SetAccountReconciliation", func() finance.OpResult { return fin.SetAccountReconciliation(ctx, pastAcct.Data.ID, closed, "5") }},
 		{"DeleteAccountReconciliation", func() finance.OpResult { return fin.DeleteAccountReconciliation(ctx, pastAcct.Data.ID, closed) }},

@@ -128,7 +128,7 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
     e.preventDefault()
     setBusy(true)
     try {
-      const day = Math.min(28, Math.max(1, Number(billingDay) || 24))
+      const day = Math.min(31, Math.max(1, Number(billingDay) || 24))
       const res = card
         ? await FinanceService.UpdateCard(card.id, name, limit || '0', day, lastDigits)
         : await FinanceService.CreateCard(name, limit || '0', day, lastDigits)
@@ -159,9 +159,9 @@ function CardForm({ card, onClose, onSaved }: { card: Card | null; onClose: () =
         </Field>
         <Field
           label="Día de corte (factura)"
-          hint="Compras hasta el día anterior (inclusive) quedan en el mes actual. El día del corte y los siguientes van al mes siguiente."
+          hint="Compras hasta el día anterior (inclusive) quedan en el mes actual. El día del corte y los siguientes van al mes siguiente. Si el mes no tiene ese día (un 30 en febrero), el corte es su último día."
         >
-          <Input type="number" min="1" max="28" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
+          <Input type="number" min="1" max="31" value={billingDay} onChange={(e) => setBillingDay(e.target.value)} />
         </Field>
         <Field label="Últimos 4 dígitos (opcional)" hint="Permiten asociar a esta tarjeta los movimientos importados de estados de cuenta y cartolas.">
           <Input

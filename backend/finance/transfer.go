@@ -2,6 +2,9 @@ package finance
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -137,8 +140,7 @@ func (s *FinanceService) CreateTransfer(
 }
 
 // UpdateTransfer changes a transfer's accounts, description, mode and amount
-// for every month it covers (to change it from a month on, end it and create a
-// new one).
+// for every month it covers (from a month on: ChangeTransferFrom).
 func (s *FinanceService) UpdateTransfer(
 	ctx context.Context, id, fromAccountID, toAccountID int64, description, mode, amount string,
 ) TransferResult {
@@ -165,6 +167,61 @@ func (s *FinanceService) UpdateTransfer(
 		return TransferResult{Error: appErr(err)}
 	}
 	return TransferResult{Data: tr}
+}
+
+// ChangeTransferFrom changes a transfer from `period` on, the way a calendar
+// edits "this and following" events: the transfer ends the month before, and a
+// new one with the new accounts, description, mode and amount covers the rest
+// of its months, taking the bank movements linked to them. The months before
+// keep what they moved. From its first month it is UpdateTransfer.
+func (s *FinanceService) ChangeTransferFrom(
+	ctx context.Context, id, fromAccountID, toAccountID int64, description, mode, amount, period string,
+) TransferResult {
+	desc, amt, aerr := validTransfer(fromAccountID, toAccountID, description, mode, amount)
+	if aerr != nil {
+		return TransferResult{Error: aerr}
+	}
+	if !validPeriod(period) {
+		return TransferResult{Error: invalidPeriod()}
+	}
+	uid := s.uid()
+	old := new(Transfer)
+	err := s.db.NewSelect().Model(old).Where("id = ? AND user_id = ?", id, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TransferResult{Error: shared.NewError(shared.ErrNotFound, "transferencia no encontrada")}
+	}
+	if err != nil {
+		return TransferResult{Error: internalErr(err)}
+	}
+	if !old.activeIn(period) {
+		return TransferResult{Error: shared.NewError(shared.ErrValidation, "la transferencia no cubre "+period)}
+	}
+	if period == old.StartPeriod {
+		return s.UpdateTransfer(ctx, id, fromAccountID, toAccountID, description, mode, amount)
+	}
+	next := &Transfer{UserID: uid, FromAccountID: fromAccountID, ToAccountID: toAccountID, Description: desc,
+		Mode: mode, Amount: amt, StartPeriod: period, EndPeriod: old.EndPeriod}
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if aerr := ownAccounts(ctx, tx, uid, fromAccountID, toAccountID, mode); aerr != nil {
+			return aerr
+		}
+		if _, err := tx.NewUpdate().Model((*Transfer)(nil)).Set("end_period = ?", addMonths(period, -1)).
+			Where("id = ? AND user_id = ?", id, uid).Exec(ctx); err != nil {
+			return fmt.Errorf("ending the transfer: %w", err)
+		}
+		if _, err := tx.NewInsert().Model(next).Returning("*").Exec(ctx); err != nil {
+			return fmt.Errorf("creating the transfer from %s: %w", period, err)
+		}
+		if _, err := tx.NewUpdate().Model((*ImportItem)(nil)).Set("transfer_id = ?", next.ID).
+			Where("user_id = ? AND transfer_id = ? AND transfer_period >= ?", uid, id, period).Exec(ctx); err != nil {
+			return fmt.Errorf("moving the linked bank movements: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return TransferResult{Error: appErr(err)}
+	}
+	return TransferResult{Data: next}
 }
 
 // EndTransfer stops a monthly transfer after lastPeriod (its months up to then

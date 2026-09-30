@@ -3,28 +3,21 @@ import { FinanceService, KIND_CUOTAS, KIND_UNICO, type Card, type Expense, type 
 import { errMsg, failed } from '@/lib/result'
 import { errorText, useQuery } from '@/lib/useQuery'
 import { perInstallment, times, toPesos } from '@/lib/money'
-import { formatAmount, formatCLP, periodLabel, todayISO } from '@/lib/format'
+import { formatAmount, formatCLP, periodLabel, shiftPeriod, todayISO } from '@/lib/format'
+import { periodOf } from '@/engine/finance/period'
 import { Button, Callout, Field, LookIcon, Modal, MoneyInput, Select, inputCls } from './ui'
 import { AccountSelect, useAccounts } from './Accounts'
 import { useCategoryLooks, useMerchantCategories } from './useCategoryLooks'
 
 const MAX_CUOTAS = 120
 
-// Mirrors backend periodOf: a card purchase on/after the cutoff day rolls to the
-// next month. Preview only — the backend computes the real periods.
+// The engine's periodOf (a port of Go's): a card purchase on/after the cutoff
+// day rolls to the next month. Preview only — the backend computes the real
+// periods, from the card's statements when it has them.
 function computeFirstPeriod(dateStr: string, billingDay: number): string {
   if (!dateStr) return ''
-  const [y, m, d] = dateStr.split('-').map(Number)
-  let year = y ?? 0
-  let month = m ?? 1
-  if (billingDay > 0 && (d ?? 0) >= billingDay) {
-    month += 1
-    if (month > 12) {
-      month = 1
-      year += 1
-    }
-  }
-  return `${year}-${String(month).padStart(2, '0')}`
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return periodOf({ year: year ?? 0, month: month ?? 1, day: day ?? 1 }, billingDay)
 }
 
 // parseCuotas validates the installments field: a whole number 1..MAX_CUOTAS.
@@ -166,6 +159,14 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
     : isCuotas && selectedCard && date
       ? computeFirstPeriod(date, selectedCard.billingDay)
       : null
+  // A new purchase whose first cuota the bank postponed ("primera cuota en 3
+  // meses"): saved, then moved (DeferExpense). An existing plan moves from one
+  // of its cuotas (CuotaDialog).
+  const billedIn = firstPeriod ?? (date ? date.slice(0, 7) : null)
+  const canDefer = target.mode === 'create' && isCuotas && billedIn !== null
+  const [deferred, setDeferred] = useState(false)
+  const [deferTo, setDeferTo] = useState('')
+  const deferring = canDefer && deferred && deferTo !== '' && deferTo !== billedIn
 
   // Keep the expense's current category/merchant selectable even if it was
   // removed from the managed list (e.g. editing an old expense).
@@ -176,6 +177,10 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
     e.preventDefault()
     if (cuotas === null) {
       setError(`Las cuotas deben ser un número entero entre 1 y ${MAX_CUOTAS}.`)
+      return
+    }
+    if (deferring && billedIn !== null && deferTo < billedIn) {
+      setError(`La primera cuota no puede ser antes de ${periodLabel(billedIn).toLowerCase()}, el mes en que se factura la compra.`)
       return
     }
     setError(null)
@@ -204,6 +209,7 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
         failed(await FinanceService.SetExpenseCurrency(res.data.id, currency, foreign ? original : '', foreign ? rate : ''))
       }
       if (res.data && accountId !== initialAccount) failed(await FinanceService.SetExpenseAccount(res.data.id, accountId))
+      if (res.data && deferring) failed(await FinanceService.DeferExpense(res.data.id, deferTo))
       onSaved()
       onClose()
     } catch (err) {
@@ -397,7 +403,29 @@ export function ExpenseForm({ cards, categories, merchants, target, onClose, onS
           noneLabel={cardId !== '' ? 'La de la tarjeta' : 'Sin cuenta'}
         />
 
-        {firstPeriod && (
+        {canDefer && billedIn !== null && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-fg">
+              <input
+                type="checkbox"
+                className="size-4 accent-accent"
+                checked={deferred}
+                onChange={(e) => {
+                  setDeferred(e.target.checked)
+                  if (e.target.checked && deferTo === '') setDeferTo(shiftPeriod(billedIn, 1))
+                }}
+              />
+              El banco posterga la primera cuota
+            </label>
+            {deferred && (
+              <Field label="Primera cuota en" hint="Las cuotas siguen mes a mes desde ahí.">
+                <input type="month" className={inputCls} value={deferTo} min={billedIn} onChange={(e) => setDeferTo(e.target.value)} required />
+              </Field>
+            )}
+          </div>
+        )}
+
+        {firstPeriod && !(canDefer && deferred) && (
           <p className="text-xs text-fg-muted">
             Primera cuota en: <strong className="text-fg">{periodLabel(firstPeriod)}</strong>
             {statementPlaced && importItem.installmentNumber > 1 && (

@@ -11,10 +11,11 @@ export interface DateParts {
 
 // periodOf returns the billing period (YYYY-MM) a purchase falls into. When the
 // purchase is on a card and day >= billingDay (cutoff is exclusive), it rolls to
-// the next month. Pass billingDay <= 0 for non-card expenses (no roll).
+// the next month. A cutoff past the month's last day (the 30th in February)
+// falls on that last day. Pass billingDay <= 0 for non-card expenses (no roll).
 export function periodOf(date: DateParts, billingDay: number): string {
   let { year, month } = date
-  if (billingDay > 0 && date.day >= billingDay) {
+  if (billingDay > 0 && date.day >= Math.min(billingDay, daysIn(year, month))) {
     month += 1
     if (month > 12) {
       month = 1
@@ -22,6 +23,11 @@ export function periodOf(date: DateParts, billingDay: number): string {
     }
   }
   return fmtPeriod(year, month)
+}
+
+// daysIn is how many days month (1..12) of year has.
+export function daysIn(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 
 // wellFormed is the period format alone, without validPeriod's year range: the

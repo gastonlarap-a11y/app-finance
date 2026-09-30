@@ -6,14 +6,20 @@ const periodLayout = "2006-01" // YYYY-MM
 
 // periodOf returns the billing period (YYYY-MM) a purchase falls into. When the
 // purchase is on a card and date.Day >= billingDay (cutoff is exclusive), it rolls
-// to the next month. Pass billingDay <= 0 for non-card expenses (no roll).
+// to the next month. A cutoff past the month's last day (the 30th in February)
+// falls on that last day. Pass billingDay <= 0 for non-card expenses (no roll).
 func periodOf(date time.Time, billingDay int) string {
 	y, m, _ := date.Date()
 	t := time.Date(y, m, 1, 0, 0, 0, 0, time.UTC)
-	if billingDay > 0 && date.Day() >= billingDay {
+	if billingDay > 0 && date.Day() >= min(billingDay, daysIn(y, m)) {
 		t = t.AddDate(0, 1, 0)
 	}
 	return t.Format(periodLayout)
+}
+
+// daysIn is how many days month m of year y has.
+func daysIn(y int, m time.Month) int {
+	return time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
 // addMonths advances a YYYY-MM period by n months.

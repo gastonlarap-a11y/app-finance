@@ -2,6 +2,8 @@ package finance
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/uptrace/bun"
@@ -142,6 +144,63 @@ func (s *FinanceService) PrepayExpense(ctx context.Context, expenseID int64, per
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return shared.NewError(shared.ErrValidation, "el gasto no tiene cuotas pendientes")
+		}
+		return nil
+	})
+	if err != nil {
+		return OpResult{Error: appErr(err)}
+	}
+	return OpResult{}
+}
+
+// DeferExpense moves a plan so its first cuota falls in `period`: the bank
+// postponed it ("compra hoy, primera cuota en 3 meses"). Every cuota keeps its
+// distance to the first, so a plan's own shape (a prepayment) survives. The plan
+// cannot start before the purchase's billing month, and a paid cuota pins it:
+// money already paid does not move. Editing the expense keeps the months while
+// its date and card lead to the same billing month (replanInstallments).
+func (s *FinanceService) DeferExpense(ctx context.Context, expenseID int64, period string) OpResult {
+	if !validPeriod(period) {
+		return OpResult{Error: invalidPeriod()}
+	}
+	uid := s.uid()
+	ex := new(Expense)
+	err := s.db.NewSelect().Model(ex).Where("id = ? AND user_id = ?", expenseID, uid).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OpResult{Error: shared.NewError(shared.ErrNotFound, "gasto no encontrado")}
+	}
+	if err != nil {
+		return OpResult{Error: internalErr(err)}
+	}
+	// Before the transaction: the single connection cannot serve a second query.
+	cutoff, aerr := s.cutoffFor(ctx, uid, ex.CardID, true)
+	if aerr != nil {
+		cutoff = cardCutoff{} // the card row is gone: the purchase bills in its own month
+	}
+	if billed := cutoff.periodOf(ex.Date.UTC()); period < billed {
+		return OpResult{Error: shared.NewError(shared.ErrValidation,
+			"la primera cuota no puede ser antes del mes en que se factura la compra ("+billed+")")}
+	}
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var insts []Installment
+		if err := tx.NewSelect().Model(&insts).
+			Where("expense_id = ? AND user_id = ?", expenseID, uid).Order("number ASC").Scan(ctx); err != nil {
+			return fmt.Errorf("loading cuotas: %w", err)
+		}
+		if len(insts) == 0 {
+			return shared.NewError(shared.ErrValidation, "el gasto no tiene cuotas")
+		}
+		for _, inst := range insts {
+			if inst.Status == StatusPagado {
+				return shared.NewError(shared.ErrValidation, "el plan tiene cuotas pagadas: desmárcalas antes de moverlo")
+			}
+		}
+		shift := monthsBetween(insts[0].Period, period)
+		for _, inst := range insts {
+			if _, err := tx.NewUpdate().Model((*Installment)(nil)).Set("period = ?", addMonths(inst.Period, shift)).
+				Where("id = ? AND user_id = ?", inst.ID, uid).Exec(ctx); err != nil {
+				return fmt.Errorf("moving cuota %d: %w", inst.Number, err)
+			}
 		}
 		return nil
 	})

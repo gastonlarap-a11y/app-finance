@@ -32,6 +32,16 @@ describe('periodOf', () => {
   it('diciembre rueda a enero del año siguiente', () => {
     expect(periodOf(d(2026, 12, 31), 24)).toBe('2027-01')
   })
+  it.each([
+    ['corte 31: el 30 queda en el mes', d(2026, 1, 30), 31, '2026-01'],
+    ['corte 31: el 31 rueda', d(2026, 1, 31), 31, '2026-02'],
+    ['corte 30 en febrero cae el último día', d(2026, 2, 28), 30, '2026-03'],
+    ['corte 30 en febrero: el 27 queda en el mes', d(2026, 2, 27), 30, '2026-02'],
+    ['corte 29 en febrero bisiesto cae el 29', d(2028, 2, 28), 29, '2028-02'],
+    ['corte 31 en abril cae el 30', d(2026, 4, 30), 31, '2026-05'],
+  ])('%s', (_name, date, day, want) => {
+    expect(periodOf(date, day)).toBe(want)
+  })
 })
 
 describe('addMonths', () => {

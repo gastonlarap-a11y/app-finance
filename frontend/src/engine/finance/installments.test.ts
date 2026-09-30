@@ -122,4 +122,29 @@ describe('cuotas', () => {
     expect((await finance.PrepayExpense(ex.id, '2030-2')).error?.code).toBe('VALIDATION_ERROR')
     expect((await finance.PrepayExpense(ex.id, '2029-12')).error?.code).toBe('VALIDATION_ERROR') // before the first cuota
   })
+
+  // Mirror of TestDeferMovesTheWholePlan.
+  it('postergar mueve el plan entero; una edición lo conserva y una cuota pagada lo fija', async () => {
+    const card = (await finance.CreateCard('Visa', '1000000', 24, '')).data!.id
+    const ex = (await finance.CreateExpense('2030-01-26', 'Refrigerador', '', '', card, 'cuotas', '50000', 3)).data!
+    expect((await finance.DeferExpense(ex.id, '2030-05')).error).toBeUndefined()
+    const want = ['2030-05', '2030-06', '2030-07']
+    expect(cuotas(ex.id).map((c) => c.period)).toEqual(want)
+    expect(
+      (await finance.UpdateExpense(ex.id, '2030-01-26', 'Refrigerador Samsung', 'Hogar', '', card, 'cuotas', '50000', 3)).error,
+    ).toBeUndefined()
+    expect(cuotas(ex.id).map((c) => c.period)).toEqual(want)
+
+    for (const [id, period, code] of [
+      [ex.id, '2030-5', 'VALIDATION_ERROR'],
+      [ex.id, '2030-01', 'VALIDATION_ERROR'], // before the billing month
+      [999, '2030-05', 'NOT_FOUND'],
+    ] as const) {
+      expect((await finance.DeferExpense(id, period)).error?.code).toBe(code)
+    }
+    expect((await finance.DeferExpense(ex.id, '2030-02')).error).toBeUndefined()
+
+    await finance.SetInstallmentPaid(cuotas(ex.id)[0]!.id, true)
+    expect((await finance.DeferExpense(ex.id, '2030-06')).error?.code).toBe('VALIDATION_ERROR')
+  })
 })
