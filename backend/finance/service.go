@@ -139,28 +139,17 @@ func (s *FinanceService) GetSettings(ctx context.Context) SettingsResult {
 
 // ---------- salary (per month) ----------
 
-// salaryFor returns the salary saved for a period, or zero when none is set.
-func (s *FinanceService) salaryFor(ctx context.Context, uid int64, period string) (types.Decimal, error) {
-	ps := new(PeriodSalary)
-	err := s.db.NewSelect().Model(ps).Where("user_id = ? AND period = ?", uid, period).Scan(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
-		return types.Zero(), nil
-	}
-	if err != nil {
-		return types.Zero(), err
-	}
-	return ps.Amount, nil
-}
-
+// GetSalary returns a month's salary: the confirmed one, else the base salary
+// in effect (Expected), else zero.
 func (s *FinanceService) GetSalary(ctx context.Context, period string) SalaryResult {
 	if !validPeriod(period) {
 		return SalaryResult{Error: invalidPeriod()}
 	}
-	amt, err := s.salaryFor(ctx, s.uid(), period)
+	ms, err := s.salaryFor(ctx, s.uid(), period)
 	if err != nil {
 		return SalaryResult{Error: internalErr(err)}
 	}
-	return SalaryResult{Data: &PeriodSalary{Period: period, Amount: amt}}
+	return SalaryResult{Data: &PeriodSalary{Period: period, Amount: ms.amount, Expected: ms.expected}}
 }
 
 func (s *FinanceService) SetSalary(ctx context.Context, period, amount string) SalaryResult {
@@ -1303,11 +1292,19 @@ func (s *FinanceService) cumulativeBalanceBefore(ctx context.Context, uid int64,
 func (s *FinanceService) flowsBetween(ctx context.Context, uid int64, after, before string) (types.Decimal, error) {
 	// Only the amount column is read: this runs on every summary and walks the
 	// whole history, and full rows (timestamps parsed, structs allocated) made
-	// it the bulk of MonthlySummary's cost.
-	salaries, err := sumAmounts(ctx, s.db.NewSelect().Model((*PeriodSalary)(nil)).
-		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
+	// it the bulk of MonthlySummary's cost. Salaries (no timestamps) come
+	// month by month, the base salary filling the months without one.
+	first := ""
+	if after != "" {
+		first = addMonths(after, 1)
+	}
+	byMonth, err := s.salaryByMonth(ctx, uid, first, addMonths(before, -1))
 	if err != nil {
 		return types.Zero(), fmt.Errorf("salaries before %s: %w", before, err)
+	}
+	salaries := types.Zero()
+	for _, ms := range byMonth {
+		salaries = salaries.Add(ms.amount)
 	}
 	incomes, err := sumAmounts(ctx, s.db.NewSelect().Model((*Income)(nil)).
 		Where("user_id = ? AND period > ? AND period < ?", uid, after, before))
@@ -1385,18 +1382,19 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	}
 
 	sum := &MonthlySummary{
-		Period:       period,
-		Salary:       salary,
-		Acumulado:    acumulado,
-		Extras:       types.Zero(),
-		Gastos:       types.Zero(),
-		Pendiente:    types.Zero(),
-		Pagado:       types.Zero(),
-		Movimientos:  []Movimiento{},
-		PorCategoria: []CategoryTotal{},
-		PorTarjeta:   []CardDebt{},
-		Incomes:      incomes,
-		Presupuestos: []BudgetStatus{},
+		Period:         period,
+		Salary:         salary.amount,
+		SalaryExpected: salary.expected,
+		Acumulado:      acumulado,
+		Extras:         types.Zero(),
+		Gastos:         types.Zero(),
+		Pendiente:      types.Zero(),
+		Pagado:         types.Zero(),
+		Movimientos:    []Movimiento{},
+		PorCategoria:   []CategoryTotal{},
+		PorTarjeta:     []CardDebt{},
+		Incomes:        incomes,
+		Presupuestos:   []BudgetStatus{},
 
 		AcumuladoDesde: acumuladoDesde,
 	}
@@ -1639,13 +1637,9 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 		return nil, err
 	}
 
-	var salaries []PeriodSalary
-	if err := s.db.NewSelect().Model(&salaries).Where("user_id = ? AND period LIKE ?", uid, prefix+"%").Scan(ctx); err != nil {
+	salaryByMonth, err := s.salaryByMonth(ctx, uid, prefix+"01", prefix+"12")
+	if err != nil {
 		return nil, err
-	}
-	salaryByMonth := map[string]types.Decimal{}
-	for _, sal := range salaries {
-		salaryByMonth[sal.Period] = sal.Amount
 	}
 
 	var incomes []Income
@@ -1722,7 +1716,7 @@ func (s *FinanceService) yearSummary(ctx context.Context, uid int64, year int) (
 	}
 	for m := 1; m <= 12; m++ {
 		period := prefix + pad2(m)
-		ingresos := salaryByMonth[period].Add(extrasByMonth[period])
+		ingresos := salaryByMonth[period].amount.Add(extrasByMonth[period])
 		gastos := gastosByMonth[period]
 		ahorro := ahorroByMonth[period]
 		balance := ingresos.Sub(gastos).Sub(ahorro)

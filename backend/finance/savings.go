@@ -435,13 +435,12 @@ func (s *FinanceService) goalTransfers(ctx context.Context, uid int64, from, to 
 	}
 	salaryOf := map[string]types.Decimal{} // a salary_rest transfer follows the month's salary
 	if slices.ContainsFunc(transfers, func(t Transfer) bool { return t.Mode == TransferSalaryRest }) {
-		var salaries []PeriodSalary
-		if err := s.db.NewSelect().Model(&salaries).
-			Where("user_id = ? AND period >= ? AND period <= ?", uid, from, to).Scan(ctx); err != nil {
-			return nil, fmt.Errorf("salaries: %w", err)
+		salaries, err := s.salaryByMonth(ctx, uid, from, to)
+		if err != nil {
+			return nil, err
 		}
-		for _, sal := range salaries {
-			salaryOf[sal.Period] = sal.Amount
+		for m, ms := range salaries {
+			salaryOf[m] = ms.amount
 		}
 	}
 	isBacking := make(map[int64]bool, len(backing))

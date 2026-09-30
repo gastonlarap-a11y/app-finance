@@ -10,6 +10,7 @@ export type {
   Account,
   AccountView,
   AccountsSummary,
+  BaseSalary,
   BudgetStatus,
   Card,
   CardDebt,

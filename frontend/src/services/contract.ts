@@ -186,11 +186,23 @@ export interface Installment {
   expense?: Expense | null
 }
 
+// A month's salary: the one confirmed for it or, without one, the base salary
+// in effect (expected).
 export interface PeriodSalary {
   userId: number
   period: string
   amount: string
+  expected: boolean // the base salary, not confirmed for the month
 }
+
+// The base salary in effect at a month: expected every month from
+// effectiveFrom on until a later one takes over or it ends.
+export interface BaseSalary {
+  effectiveFrom: string // YYYY-MM
+  amount: string
+}
+
+export type BaseSalaryResult = Result<BaseSalary>
 
 export interface Settings {
   id: number
@@ -284,7 +296,8 @@ export interface CardDebt {
 
 export interface MonthlySummary {
   period: string
-  salary: string
+  salary: string // the confirmed one, or the expected base salary
+  salaryExpected: boolean // salary is the base salary, not confirmed for the month
   extras: string
   ingresos: string
   acumulado: string
@@ -891,6 +904,10 @@ export interface FinanceServiceContract {
   GetSettings(): Promise<SettingsResult>
   GetSalary(period: string): Promise<SalaryResult>
   SetSalary(period: string, amount: string): Promise<SalaryResult>
+  DeleteSalary(period: string): Promise<OpResult>
+  GetBaseSalary(period: string): Promise<BaseSalaryResult>
+  SetBaseSalary(fromPeriod: string, amount: string): Promise<OpResult>
+  EndBaseSalary(fromPeriod: string): Promise<OpResult>
 
   ListCards(): Promise<Card[]>
   CreateCard(name: string, creditLimit: string, billingDay: number, lastDigits: string): Promise<CardResult>

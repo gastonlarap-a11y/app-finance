@@ -243,6 +243,8 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     ok(await finance.SetAccountReconciliation(pastAcct.id, closed, '1000'))
     const merchant = ok(await finance.CreateMerchant('Farmacia del barrio')).data!
 
+    ok(await finance.SetBaseSalary('2026-03', '1000000'))
+
     ok(await users.CreateUser('Camila'))
     const writes: Array<() => Promise<OpResult>> = [
       () => finance.SetFixedExpenseAmount(fe.data!.id, period, '1'),
@@ -311,6 +313,9 @@ describe('aislamiento en escrituras por id y lecturas agregadas', () => {
     expect(ok(await finance.YearSummary(2030)).data?.categoriaMeses).toEqual([])
     const hersFeb = ok(await finance.MonthlySummary('2026-02')).data!
     expect([hersFeb.acumuladoDesde, hersFeb.acumulado]).toEqual(['', '0'])
+    // Gastón's base salary is his only.
+    expect(ok(await finance.MonthlySummary('2026-03')).data).toMatchObject({ salary: '0', salaryExpected: false })
+    expect(ok(await finance.GetBaseSalary('2026-03')).data).toBeUndefined()
     expect(await finance.UFMonthsNeeded()).toEqual([])
     expect(await finance.ListTransfers()).toEqual([])
     // The catalog lands in Camila's own profile, never in Gastón's (checked below).

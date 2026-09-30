@@ -386,15 +386,16 @@ func (s *FinanceService) accountFlows(ctx context.Context, uid int64, accs []Acc
 		return *r.Account
 	}
 
-	salaries, err := scan("salaries", `SELECT period, amount, NULL AS account, NULL AS card FROM period_salaries
-		WHERE user_id = ? AND period >= ? AND period <= ?`, uid, from, to)
+	// Each month's salary (the confirmed one, else the base salary) lands in the
+	// salary account; a salary_rest transfer follows it.
+	salaries, err := s.salaryByMonth(ctx, uid, from, to)
 	if err != nil {
 		return nil, nil, err
 	}
-	salaryOf := make(map[string]types.Decimal, len(salaries)) // a salary_rest transfer follows it
-	for _, r := range salaries {
-		add(salaryAcc, r.Period, r.Amount, types.Zero())
-		salaryOf[r.Period] = r.Amount
+	salaryOf := make(map[string]types.Decimal, len(salaries))
+	for m, ms := range salaries {
+		add(salaryAcc, m, ms.amount, types.Zero())
+		salaryOf[m] = ms.amount
 	}
 	incomes, err := scan("incomes", `SELECT period, amount, account_id AS account, NULL AS card FROM incomes
 		WHERE user_id = ? AND deleted_at IS NULL AND period >= ? AND period <= ?`, uid, from, to)
