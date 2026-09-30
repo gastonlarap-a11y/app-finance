@@ -30,7 +30,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@/services/finance', () => ({
   FinanceService: {
     ListTransfers: () => Promise.resolve(state.transfers),
-    ListAccounts: () => Promise.resolve({ data: { accounts: state.accounts, unassignedIngresos: '0', unassignedGastos: '0' } }),
+    ListAccounts: () => Promise.resolve({ data: { accounts: state.accounts, unassignedIngresos: '0', unassignedGastos: '0', cards: [] } }),
     CreateTransfer: (...args: unknown[]) => {
       state.created.push(args)
       return Promise.resolve({ data: { id: 1 } })

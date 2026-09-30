@@ -13,6 +13,7 @@ export type {
   BudgetStatus,
   Card,
   CardDebt,
+  CardOwed,
   CardResult,
   CardStatement,
   CardStatementDetail,

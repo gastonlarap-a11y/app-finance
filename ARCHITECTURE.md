@@ -254,6 +254,17 @@ cuotas and refunds to the expense's account or its card's, and fixed charges to 
 their card's. `AccountsSummary.Unassigned*` shows what no account claims. The app's
 `Disponible`/`Balance` do not change.
 
+**Card payments in the accounts view** (`cardpayment.go`, migration `20260929039`). A card purchase is
+spending of the month its statement bills it (month view, carried balance, budgets), but the money
+leaves the account that pays the card when that statement is paid — the card payment is a transfer on
+the day it is paid, as in YNAB, Monarch and Copilot. `accountFlows` books cuotas, fixed charges and
+refunds on a card in `paymentPeriod`: the month of the imported statement's «pagar hasta» (the
+earliest of the card's national/international statements of that month); else the card's
+`payment_day` (`SetCardPaymentDay`: the same month when it comes after the cutoff day, the next one
+otherwise); else the month after. It looks `cardPaymentLookback` months back for charges paid inside
+the range, and `AccountsSummary.Cards` (`CardOwed`) is what each card had billed and not yet paid at
+the month's close — the liability between the accounts' balances and the app's balance.
+
 **Transfers** (`transfer.go`) move money between two own accounts (the salary passed from the bank
 it lands in to the everyday one, topping up a digital wallet): one-off (`end_period =
 start_period`) or monthly (`end_period = ''`, ended with `EndTransfer`). They are neither spending

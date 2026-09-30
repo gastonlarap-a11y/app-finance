@@ -139,13 +139,15 @@ describe('transfers', () => {
     const mortgage = ok(await finance.CreateFixedExpense('Dividendo', 'Vivienda', null, '2026-09', '600000', 1, 'CLP')).data!
     const netflix = ok(await finance.CreateFixedExpense('Netflix', 'Suscripciones', card.id, '2026-09', '9000', 1, 'CLP')).data!
 
+    // A fixed charge on the card leaves the account when the card is paid:
+    // September's Netflix in October, next to October's mortgage.
     ok(await finance.SetFixedExpenseAccount(mortgage.id, chile.id))
-    expect((await account('2026-09', 'Banco de Chile')).gastos).toBe('600000')
-    expect((await account('2026-09', 'Itaú')).gastos).toBe('9000')
+    expect((await account('2026-10', 'Banco de Chile')).gastos).toBe('600000')
+    expect((await account('2026-10', 'Itaú')).gastos).toBe('9000')
     ok(await finance.SetFixedExpenseAccount(netflix.id, chile.id))
-    expect((await account('2026-09', 'Banco de Chile')).gastos).toBe('609000')
+    expect((await account('2026-10', 'Banco de Chile')).gastos).toBe('609000')
     ok(await finance.UpdateFixedExpense(mortgage.id, 'Dividendo casa', 'Vivienda', null))
-    expect((await account('2026-09', 'Banco de Chile')).gastos).toBe('609000')
+    expect((await account('2026-10', 'Banco de Chile')).gastos).toBe('609000')
     expect((await finance.SetFixedExpenseAccount(mortgage.id, 9999)).error?.code).toBe('NOT_FOUND')
   })
 })

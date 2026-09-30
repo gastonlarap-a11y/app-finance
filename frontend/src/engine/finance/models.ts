@@ -253,6 +253,7 @@ export function rowToCard(r: SqlRow): Card {
     billingDay: asNumber(r.billing_day),
     lastDigits: asString(r.last_digits),
     accountId: asNullableNumber(r.account_id),
+    paymentDay: asNullableNumber(r.payment_day),
     color: asString(r.color),
     createdAt: asString(r.created_at),
     deletedAt: asNullableString(r.deleted_at),
