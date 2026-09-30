@@ -1416,6 +1416,10 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 	if err != nil {
 		return nil, err
 	}
+	progressOf, err := s.cuotaProgressAt(ctx, uid, period, insts)
+	if err != nil {
+		return nil, err
+	}
 
 	catTotals := map[string]types.Decimal{}
 	gastoMesByCard := map[int64]types.Decimal{}
@@ -1451,6 +1455,9 @@ func (s *FinanceService) monthlySummary(ctx context.Context, uid int64, period s
 			Total:         inst.Total,
 			Amount:        inst.Amount,
 			Status:        inst.Status,
+		}
+		if p, ok := progressOf[inst.ExpenseID]; ok {
+			mv.SoFar, mv.Remaining, mv.RemainingCount = &p.soFar, &p.remaining, p.remainingCount
 		}
 		if ex := inst.Expense; ex != nil {
 			mv.ExpenseID = ex.ID

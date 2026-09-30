@@ -106,6 +106,12 @@ type Movimiento struct {
 	UFAmount *types.Decimal `json:"ufAmount"`
 	// Estimado: Amount rests on an estimated UF value (month not downloaded yet).
 	Estimado bool `json:"estimado"`
+	// A cuota of a plan (Total > 1): what its cuotas billed up to this month add
+	// up to, what the later ones will, and how many those are (nil and 0
+	// otherwise). By month, not by paid status: a prepaid plan is all "so far".
+	SoFar          *types.Decimal `json:"soFar"`
+	Remaining      *types.Decimal `json:"remaining"`
+	RemainingCount int            `json:"remainingCount"`
 	// Tags of the expense behind a cuota (always a list, empty when none).
 	Tags []string `json:"tags"`
 	// References are the bank's codes for the expense behind a cuota, one per

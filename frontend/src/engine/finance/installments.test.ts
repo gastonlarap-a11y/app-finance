@@ -82,6 +82,25 @@ describe('cuotas', () => {
     expect(cuotas(ex.id).map((c) => c.period)).toEqual([...prepaid, '2030-03'])
   })
 
+  it('cada fila de un plan dice cuánto llevas y cuánto falta, por mes', async () => {
+    const ex = (await finance.CreateExpense('2030-01-10', 'Notebook', '', '', null, 'cuotas', '100000', 4)).data!
+    await finance.CreateExpense('2030-02-05', 'Café', '', '', null, 'unico', '3000', 1)
+    const plan = cuotas(ex.id)
+    expect((await finance.SetInstallmentAmount(plan[3]!.id, '100001')).error).toBeUndefined()
+
+    const rows = async (period: string) => (await finance.MonthlySummary(period)).data!.movimientos
+    const feb = await rows('2030-02')
+    expect(feb.find((m) => m.expenseId === ex.id)).toMatchObject({ soFar: '200000', remaining: '200001', remainingCount: 2 })
+    expect(feb.find((m) => m.expenseId !== ex.id)).toMatchObject({ soFar: null, remaining: null, remainingCount: 0 })
+
+    await finance.SetInstallmentPaid(plan[0]!.id, true)
+    await finance.SetInstallmentPaid(plan[1]!.id, true)
+    expect((await finance.PrepayExpense(ex.id, '2030-03')).error).toBeUndefined()
+    const mar = (await rows('2030-03')).filter((m) => m.expenseId === ex.id)
+    expect(mar).toHaveLength(2)
+    for (const m of mar) expect(m).toMatchObject({ soFar: '400001', remaining: '0', remainingCount: 0 })
+  })
+
   it('se edita el monto de una cuota pendiente, nunca de una pagada', async () => {
     const ex = (await finance.CreateExpense('2030-01-10', 'Notebook', '', '', null, 'cuotas', '100000', 3)).data!
     const [first, second, third] = cuotas(ex.id)

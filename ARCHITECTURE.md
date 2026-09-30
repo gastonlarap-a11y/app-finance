@@ -250,7 +250,10 @@ no category may take that name (`validCategoryName`; migration 029 renamed an ex
 one pending cuota (uneven plans). When a bank movement confirms or merges into a plan,
 `settleLastCuota` makes the last cuota absorb the rounding, so the cuotas add up to the bank's total.
 `PrepayExpense` moves every pending cuota into `period` (the month the balance is paid), keeping each
-amount; paid cuotas stay where they are.
+amount; paid cuotas stay where they are. In the month view each cuota of a plan carries its progress
+(`Movimiento.SoFar/Remaining/RemainingCount`, `cuotaProgressAt`): what the plan's cuotas billed up to
+that month add up to and what is left — by each cuota's month and real amount, not by paid status, so
+a prepaid plan reads as all behind.
 
 **Receivables** (`receivable.go`, migration `20260927031`) cover shared expenses: the part of an
 expense someone else owes (`person`, `amount` ≤ the expense's cost, `expenseCost`). Settling one records a refund on that

@@ -26,6 +26,53 @@ func expenseCost(ctx context.Context, idb bun.IDB, uid, expenseID int64) (types.
 	return cost, nil
 }
 
+// cuotaProgress is where a plan stands at a month: what its cuotas billed up to
+// that month add up to, what the later ones will, and how many those are.
+type cuotaProgress struct {
+	soFar, remaining types.Decimal
+	remainingCount   int
+}
+
+// cuotaProgressAt is the progress at `period` of every plan (more than one
+// cuota) among the month's cuotas, by expense. It goes by each cuota's month,
+// not its number: a plan prepaid into this month is all "so far".
+func (s *FinanceService) cuotaProgressAt(ctx context.Context, uid int64, period string, insts []Installment) (map[int64]cuotaProgress, error) {
+	out := map[int64]cuotaProgress{}
+	var ids []int64
+	for _, inst := range insts {
+		if inst.Total > 1 {
+			ids = append(ids, inst.ExpenseID)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		ExpenseID int64         `bun:"expense_id"`
+		Period    string        `bun:"period"`
+		Amount    types.Decimal `bun:"amount"`
+	}
+	if err := s.db.NewSelect().Model((*Installment)(nil)).Column("expense_id", "period", "amount").
+		Where("user_id = ? AND expense_id IN (?)", uid, bun.List(ids)).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("loading plans: %w", err)
+	}
+	for _, r := range rows {
+		p := out[r.ExpenseID]
+		if r.Period <= period {
+			p.soFar = p.soFar.Add(r.Amount)
+		} else {
+			p.remaining = p.remaining.Add(r.Amount)
+			p.remainingCount++
+		}
+		out[r.ExpenseID] = p
+	}
+	for id, p := range out { // zero values print as 0, not as an empty decimal
+		p.soFar, p.remaining = types.Zero().Add(p.soFar), types.Zero().Add(p.remaining)
+		out[id] = p
+	}
+	return out, nil
+}
+
 // pendingCuotaOf loads a pending cuota of a live expense of the profile.
 func pendingCuotaOf(ctx context.Context, idb bun.IDB, uid, id int64) (*Installment, *shared.AppError) {
 	inst := new(Installment)

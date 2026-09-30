@@ -102,6 +102,58 @@ func TestEditKeepsPrepaidMonthsAndUnevenCuotas(t *testing.T) {
 	}
 }
 
+// A plan's row in the month says what its cuotas billed up to that month add
+// up to and what is left, by month and at the cuotas' real amounts.
+func TestCuotaProgressByMonth(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	ex := s.CreateExpense(ctx, "2030-01-10", "Notebook", "", "", nil, KindCuotas, "100000", 4) // Jan..Apr
+	mustOK(t, "CreateExpense", ex.Error)
+	mustOK(t, "single", s.CreateExpense(ctx, "2030-02-05", "Café", "", "", nil, KindUnico, "3000", 1).Error)
+	plan := cuotas(t, s, ex.Data.ID)
+	mustOK(t, "settled last cuota", s.SetInstallmentAmount(ctx, plan[3].ID, "100001").Error)
+
+	rows := func(period string) (planRows []Movimiento, single Movimiento) {
+		t.Helper()
+		for _, m := range monthly(t, s, period).Movimientos {
+			if m.ExpenseID == ex.Data.ID {
+				planRows = append(planRows, m)
+			} else {
+				single = m
+			}
+		}
+		return planRows, single
+	}
+	feb, oneOff := rows("2030-02")
+	if len(feb) != 1 || feb[0].SoFar == nil || feb[0].Remaining == nil {
+		t.Fatalf("February plan rows = %+v, want one with its progress", feb)
+	}
+	wantMoney(t, "so far (cuotas 1-2)", *feb[0].SoFar, "200000")
+	wantMoney(t, "remaining (cuotas 3-4)", *feb[0].Remaining, "200001")
+	if feb[0].RemainingCount != 2 {
+		t.Fatalf("remaining cuotas = %d, want 2", feb[0].RemainingCount)
+	}
+	if oneOff.SoFar != nil || oneOff.Remaining != nil || oneOff.RemainingCount != 0 {
+		t.Fatalf("a one-payment expense carries progress: %+v", oneOff)
+	}
+
+	// Paid off in March: everything is behind it.
+	mustOK(t, "pay cuota 1", s.SetInstallmentPaid(ctx, plan[0].ID, true).Error)
+	mustOK(t, "pay cuota 2", s.SetInstallmentPaid(ctx, plan[1].ID, true).Error)
+	mustOK(t, "PrepayExpense", s.PrepayExpense(ctx, ex.Data.ID, "2030-03").Error)
+	mar, _ := rows("2030-03")
+	if len(mar) != 2 {
+		t.Fatalf("March plan rows = %d, want cuotas 3 and 4", len(mar))
+	}
+	for _, m := range mar {
+		wantMoney(t, "so far after prepaying", *m.SoFar, "400001")
+		wantMoney(t, "nothing left", *m.Remaining, "0")
+		if m.RemainingCount != 0 {
+			t.Fatalf("remaining cuotas after prepaying = %d", m.RemainingCount)
+		}
+	}
+}
+
 func TestSetInstallmentAmountOnlyOnPendingCuotas(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

@@ -61,6 +61,7 @@ import {
   tbl,
   type MenuAction,
 } from './ui'
+import { CuotaProgress } from './CuotaProgress'
 import { ExpenseForm } from './ExpenseForm'
 import { IncomePanel } from './IncomePanel'
 import { ExportButton } from './ExportButton'
@@ -518,6 +519,7 @@ function MovementRow({
           <div className="min-w-0">
             <span className="line-clamp-2 max-w-[16rem] font-medium text-fg">{m.description}</span>
             <BankDescription text={m.bankDescription} />
+            <CuotaProgress m={m} />
             {m.currency !== '' && <span className="block text-[11px] text-fg-subtle">{formatAmount(m.originalAmount, m.currency)} en total</span>}
             <TagChips tags={m.tags} />
             <BankCodes codes={m.references} />
