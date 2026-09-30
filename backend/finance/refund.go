@@ -73,6 +73,9 @@ func insertRefund(ctx context.Context, tx bun.Tx, uid, expenseID int64, period, 
 	if err != nil {
 		return nil, fmt.Errorf("loading expense: %w", err)
 	}
+	if bought := ex.Date.UTC().Format(periodLayout); period < bought {
+		return nil, shared.NewError(shared.ErrValidation, "el reembolso no puede ser de antes de la compra ("+bought+")")
+	}
 	refunded, err := sumAmounts(ctx, tx.NewSelect().Model((*Refund)(nil)).Where("expense_id = ?", expenseID))
 	if err != nil {
 		return nil, fmt.Errorf("summing refunds: %w", err)

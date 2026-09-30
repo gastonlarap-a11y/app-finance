@@ -109,7 +109,7 @@ func (s *UsersService) DeleteUser(ctx context.Context, id int64) UserResult {
 			return err
 		}
 		if count <= 1 {
-			return shared.NewError(shared.ErrConflict, "no podés eliminar el último usuario")
+			return shared.NewError(shared.ErrConflict, "no puedes eliminar el último perfil")
 		}
 		res, err := tx.NewDelete().Model((*User)(nil)).Where("id = ?", id).Exec(ctx)
 		if err != nil {

@@ -206,4 +206,7 @@ func TestPrepayMovesOnlyPendingCuotas(t *testing.T) {
 	if r := s.PrepayExpense(ctx, ex.Data.ID, "2030-2"); r.Error == nil || r.Error.Code != shared.ErrValidation {
 		t.Fatalf("bad period = %+v, want VALIDATION", r.Error)
 	}
+	if r := s.PrepayExpense(ctx, ex.Data.ID, "2029-12"); r.Error == nil || r.Error.Code != shared.ErrValidation {
+		t.Fatalf("before the first cuota = %+v, want VALIDATION", r.Error)
+	}
 }

@@ -105,7 +105,7 @@ export function createUsersService(db: SqlDb, session: Session): UsersServiceCon
     async DeleteUser(id: number): Promise<UserResult> {
       const countRow = db.query('SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL')[0]
       if (asNumber(countRow?.n) <= 1) {
-        return { error: newError(ErrConflict, 'no podés eliminar el último usuario') }
+        return { error: newError(ErrConflict, 'no puedes eliminar el último perfil') }
       }
       db.exec('UPDATE users SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL', [new Date().toISOString(), id])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'usuario no encontrado') }

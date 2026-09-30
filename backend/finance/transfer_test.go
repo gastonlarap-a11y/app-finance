@@ -78,10 +78,10 @@ func TestTransfersMoveBalancesNotTotals(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListTransfers = %+v, %v; want the monthly one", list, err)
 	}
-	// Deleting an account takes its transfers along.
-	mustOK(t, "DeleteAccount", s.DeleteAccount(ctx, itau.Data.ID).Error)
-	if list, _ := s.ListTransfers(ctx); len(list) != 0 {
-		t.Fatalf("transfers after deleting their account = %+v", list)
+	// An account a transfer still moves money for is not deleted.
+	wantCode(t, "DeleteAccount with a transfer", s.DeleteAccount(ctx, itau.Data.ID).Error, shared.ErrConflict)
+	if list, _ := s.ListTransfers(ctx); len(list) != 1 {
+		t.Fatalf("transfers after a refused delete = %+v, want the monthly one kept", list)
 	}
 }
 

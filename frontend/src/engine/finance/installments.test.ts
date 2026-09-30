@@ -120,5 +120,6 @@ describe('cuotas', () => {
     expect((await finance.MonthlySummary('2030-02')).data!.gastos).toBe('300000')
     expect((await finance.PrepayExpense(999, '2030-02')).error?.code).toBe('NOT_FOUND')
     expect((await finance.PrepayExpense(ex.id, '2030-2')).error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.PrepayExpense(ex.id, '2029-12')).error?.code).toBe('VALIDATION_ERROR') // before the first cuota
   })
 })

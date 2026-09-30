@@ -2640,6 +2640,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     const row = db.query('SELECT * FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])[0]
     if (!row) return { error: newError(ErrNotFound, 'gasto no encontrado') }
     const ex = rowToExpense(row)
+    const bought = ex.date.slice(0, 7)
+    if (period < bought) return { error: newError(ErrValidation, `el reembolso no puede ser de antes de la compra (${bought})`) }
     const refunded = sumAmounts('SELECT amount FROM refunds WHERE expense_id = ?', [expenseID])
     const total = expenseCost(expenseID)
     if (refunded.add(parsed.amount).gt(total)) {
@@ -3139,6 +3141,29 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
     })
   }
 
+  // goalHeadroom mirrors Go: the most a withdrawal in `period` may take so the
+  // goal never holds less than zero at any month's close, then or later.
+  function goalHeadroom(goalID: number, period: string): Money {
+    const byMonth = new Map<string, Money>()
+    for (const r of db.query('SELECT period, amount FROM savings_contributions WHERE goal_id = ? ORDER BY period ASC', [goalID])) {
+      const m = asString(r.period)
+      byMonth.set(m, (byMonth.get(m) ?? Money.zero()).add(Money.fromString(asString(r.amount))))
+    }
+    const months = [...byMonth.keys()].sort()
+    let headroom = Money.zero()
+    let running = Money.zero()
+    for (const m of months) {
+      running = running.add(byMonth.get(m)!) // m comes from byMonth's own keys
+      if (m <= period) headroom = running
+    }
+    running = Money.zero()
+    for (const m of months) {
+      running = running.add(byMonth.get(m)!) // m comes from byMonth's own keys
+      if (m > period && running.cmp(headroom) < 0) headroom = running
+    }
+    return headroom
+  }
+
   // goalBalance is what a goal holds: its contributions minus its withdrawals.
   function goalBalance(goalID: number): Money {
     return sumAmounts('SELECT amount FROM savings_contributions WHERE goal_id = ?', [goalID])
@@ -3556,9 +3581,10 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           const old = rowToCategory(oldRow)
           db.exec('UPDATE categories SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [n, id, uid()])
           if (old.name !== n) {
-            // Like bun's soft-delete scoped UPDATE on desktop: only live rows.
+            // Rows in the trash too (mirrors Go): a restored one comes back under
+            // the category's current name and budget.
             for (const table of ['expenses', 'fixed_expenses', 'merchants']) {
-              db.exec(`UPDATE ${table} SET category = ? WHERE category = ? AND user_id = ? AND deleted_at IS NULL`, [
+              db.exec(`UPDATE ${table} SET category = ? WHERE category = ? AND user_id = ?`, [
                 n,
                 old.name,
                 uid(),
@@ -3632,7 +3658,8 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
           const old = rowToMerchant(oldRow)
           db.exec('UPDATE merchants SET name = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [n, id, uid()])
           if (old.name !== n) {
-            db.exec('UPDATE expenses SET merchant = ? WHERE merchant = ? AND user_id = ? AND deleted_at IS NULL', [
+            // Expenses in the trash too (mirrors Go), so a restored one keeps the current name.
+            db.exec('UPDATE expenses SET merchant = ? WHERE merchant = ? AND user_id = ?', [
               n,
               old.name,
               uid(),
@@ -3940,7 +3967,21 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       })
     },
 
+    // DeleteAccount mirrors Go: an account a transfer moves money to or from is
+    // refused (deleting it would erase those transfers from every month).
     async DeleteAccount(id: number): Promise<OpResult> {
+      const n = asNumber(
+        db.query('SELECT COUNT(*) AS n FROM transfers WHERE user_id = ? AND (from_account_id = ? OR to_account_id = ?)', [
+          uid(),
+          id,
+          id,
+        ])[0]?.n ?? 0,
+      )
+      if (n > 0) {
+        return {
+          error: newError(ErrConflict, `la cuenta tiene ${n} transferencia(s): termínalas o elimínalas antes de eliminar la cuenta`),
+        }
+      }
       db.exec('DELETE FROM accounts WHERE id = ? AND user_id = ?', [id, uid()])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'cuenta no encontrada') }
       return {}
@@ -4092,6 +4133,13 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       if (!validPeriod(period)) return { error: invalidPeriodError() }
       const live = db.query('SELECT 1 FROM expenses WHERE id = ? AND user_id = ? AND deleted_at IS NULL', [expenseID, uid()])
       if (live.length === 0) return { error: newError(ErrNotFound, 'gasto no encontrado') }
+      // A plan cannot be paid off before it started (mirrors Go).
+      const first = asString(
+        db.query('SELECT MIN(period) AS first FROM installments WHERE expense_id = ? AND user_id = ?', [expenseID, uid()])[0]?.first ?? '',
+      )
+      if (period < first) {
+        return { error: newError(ErrValidation, `no puedes pagar por adelantado antes de la primera cuota (${first})`) }
+      }
       db.exec('UPDATE installments SET period = ? WHERE expense_id = ? AND user_id = ? AND status = ?', [
         period,
         expenseID,
@@ -5187,9 +5235,11 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       return db.transaction((): SavingsContributionResult => {
         const notByHand = handGoalError(goalID)
         if (notByHand) return { error: notByHand }
-        const saved = goalBalance(goalID)
-        if (amt.gt(saved)) {
-          return { error: newError(ErrValidation, `no puedes retirar más de lo ahorrado en la meta (${saved.toString()})`) }
+        const headroom = goalHeadroom(goalID, period)
+        if (amt.gt(headroom)) {
+          return {
+            error: newError(ErrValidation, `no puedes retirar más de lo que la meta tenía ahorrado en ${period} (${headroom.toString()})`),
+          }
         }
         const row = db.query(
           `INSERT INTO savings_contributions (user_id, goal_id, period, amount, created_at)

@@ -5,7 +5,7 @@ import { periodAtom } from '@/atoms/finance'
 import { useInvalidate, useVersion } from '@/atoms/refresh'
 import { failed } from '@/lib/result'
 import { useQuery } from '@/lib/useQuery'
-import { isNegative, isZero } from '@/lib/money'
+import { isNegative, isZero, withSign } from '@/lib/money'
 import { currentPeriod, formatCLP, periodLabel } from '@/lib/format'
 import { Link } from './Link'
 import { TransfersSection } from './Transfers'
@@ -241,7 +241,7 @@ function AccountsSection({ period }: { period: string }) {
           <p className="mt-3 text-xs text-fg-subtle">
             Sin cuenta este mes: +{formatCLP(query.data.unassignedIngresos)} / −{formatCLP(query.data.unassignedGastos)}. Lo que
             compras con tarjeta sale de su cuenta el mes en que pagas el estado de cuenta. Eliminar una cuenta deja sus
-            movimientos sin cuenta.
+            movimientos sin cuenta y borra sus conciliaciones; si una transferencia la usa, termínala o elimínala antes.
           </p>
         </>
       )}
@@ -265,7 +265,9 @@ function AccountForm({
 }) {
   const [name, setName] = useState(account?.name ?? '')
   const [kind, setKind] = useState(account?.kind ?? 'corriente')
-  const [opening, setOpening] = useState(account?.openingBalance ?? '0')
+  // MoneyInput holds a magnitude; an overdrawn start is an explicit choice (as in the reconcile dialogs).
+  const [opening, setOpening] = useState(account?.openingBalance.replace(/^-/, '') ?? '0')
+  const [overdrawn, setOverdrawn] = useState(account ? isNegative(account.openingBalance) : false)
   const [openingPeriod, setOpeningPeriod] = useState(account?.openingPeriod ?? defaultPeriod)
   const [salary, setSalary] = useState(account?.receivesSalary ?? false)
   const [busy, setBusy] = useState(false)
@@ -274,10 +276,11 @@ function AccountForm({
     e.preventDefault()
     if (busy) return
     setBusy(true)
+    const balance = withSign(opening || '0', overdrawn)
     try {
       const res = account
-        ? await FinanceService.UpdateAccount(account.id, name, kind, opening || '0', openingPeriod, salary)
-        : await FinanceService.CreateAccount(name, kind, opening || '0', openingPeriod, salary)
+        ? await FinanceService.UpdateAccount(account.id, name, kind, balance, openingPeriod, salary)
+        : await FinanceService.CreateAccount(name, kind, balance, openingPeriod, salary)
       if (failed(res)) return
       onSaved()
       onClose()
@@ -314,6 +317,10 @@ function AccountForm({
             <input type="month" className={inputCls} value={openingPeriod} onChange={(e) => setOpeningPeriod(e.target.value)} required />
           </Field>
         </div>
+        <label className="flex items-center gap-2 text-sm text-fg-muted">
+          <input type="checkbox" className="size-4 accent-accent" checked={overdrawn} onChange={(e) => setOverdrawn(e.target.checked)} />
+          Saldo negativo (cuenta sobregirada)
+        </label>
         <p className="text-xs text-fg-subtle">
           Se pone una sola vez: desde ahí la app sigue sola mes a mes. Si después no calza con el banco, usa «Conciliar» en el panel
           Cuentas del Resumen.

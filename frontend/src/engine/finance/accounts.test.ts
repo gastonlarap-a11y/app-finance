@@ -48,6 +48,13 @@ describe('cuentas', () => {
     const after = await at('2030-01')
     expect([after.accounts.length, after.unassignedGastos]).toEqual([1, '6000'])
 
+    // An account a transfer moves money to or from is not deleted.
+    const savings = (await finance.CreateAccount('Ahorro', 'ahorro', '0', '2030-01', false)).data!
+    const tr = (await finance.CreateTransfer(checking.id, savings.id, 'Ahorro mensual', 'fixed', '10000', '2030-01', true)).data!
+    expect((await finance.DeleteAccount(savings.id)).error?.code).toBe('CONFLICT')
+    expect((await finance.DeleteTransfer(tr.id)).error).toBeUndefined()
+    expect((await finance.DeleteAccount(savings.id)).error).toBeUndefined()
+
     for (const [n, k, o, p] of [['', 'corriente', '0', '2030-01'], ['X', 'banco', '0', '2030-01'], ['X', 'vista', 'abc', '2030-01'], ['X', 'vista', '0', '2030-1']]) {
       expect((await finance.CreateAccount(n!, k!, o!, p!, false)).error?.code).toBe('VALIDATION_ERROR')
     }

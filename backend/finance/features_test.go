@@ -57,6 +57,33 @@ func TestRenameCategoryCascadesToFixedExpenses(t *testing.T) {
 	}
 }
 
+// Renaming a category or a merchant reaches the rows in the trash too: a
+// restored expense comes back under the current name, inside its budget.
+func TestRenamesReachTheTrash(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	cat := s.CreateCategory(ctx, "Comida")
+	mustOK(t, "CreateCategory", cat.Error)
+	mer := s.CreateMerchant(ctx, "Lider")
+	mustOK(t, "CreateMerchant", mer.Error)
+	ex := s.CreateExpense(ctx, "2030-01-10", "Compra", "Comida", "Lider", nil, KindUnico, "20000", 1)
+	mustOK(t, "CreateExpense", ex.Error)
+	mustOK(t, "SetCategoryBudget", s.SetCategoryBudget(ctx, cat.Data.ID, "2030-01", "50000").Error)
+	mustOK(t, "DeleteExpense", s.DeleteExpense(ctx, ex.Data.ID).Error)
+
+	mustOK(t, "UpdateCategory", s.UpdateCategory(ctx, cat.Data.ID, "Supermercado").Error)
+	mustOK(t, "UpdateMerchant", s.UpdateMerchant(ctx, mer.Data.ID, "Líder").Error)
+	mustOK(t, "RestoreExpense", s.RestoreExpense(ctx, ex.Data.ID).Error)
+
+	jan := monthly(t, s, "2030-01")
+	if len(jan.Movimientos) != 1 || jan.Movimientos[0].Category != "Supermercado" || jan.Movimientos[0].Merchant != "Líder" {
+		t.Fatalf("restored movement = %+v, want Supermercado / Líder", jan.Movimientos)
+	}
+	if len(jan.Presupuestos) != 1 || jan.Presupuestos[0].Spent.String() != "20000" {
+		t.Fatalf("budget = %+v, want the restored expense inside it", jan.Presupuestos)
+	}
+}
+
 func TestYearSummaryCategoryMonths(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

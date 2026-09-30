@@ -9,12 +9,16 @@ export interface OnboardingFacts {
   categories: number
   incomeThisMonth: boolean
   anyExpense: boolean // in the whole history, entered or imported
+  openingBalance: boolean // a reconciled close the carried balance restarts from
   backupOn: boolean // desktop: Drive connected or backup on close; web: an export was made
 }
 
-export type StepId = 'tarjeta' | 'categorias' | 'ingreso' | 'gasto' | 'respaldo'
+export type StepId = 'tarjeta' | 'categorias' | 'ingreso' | 'gasto' | 'saldo' | 'respaldo'
 
-export type StepAction = { kind: 'route'; route: Route; label: string } | { kind: 'quick-add'; label: string }
+export type StepAction =
+  | { kind: 'route'; route: Route; label: string }
+  | { kind: 'quick-add'; label: string }
+  | { kind: 'opening-balance'; label: string }
 
 export interface OnboardingStep {
   id: StepId
@@ -61,6 +65,16 @@ export function onboardingSteps(f: OnboardingFacts, web: boolean): OnboardingSte
         { kind: 'quick-add', label: 'Agregar gasto' },
         { kind: 'route', route: { page: 'importar', tab: 'estados' }, label: 'Importar estado de cuenta' },
       ],
+    },
+    {
+      // Cuotas already running when you start (an imported 5/12) fall in past
+      // months with no salary: the opening balance keeps them out of the carry.
+      id: 'saldo',
+      title: 'Anota con cuánto partes',
+      description: 'El saldo real con que empiezas el mes. Así lo de meses anteriores, como cuotas ya en curso, no descuadra lo que arrastras.',
+      done: f.openingBalance,
+      optional: true,
+      actions: [{ kind: 'opening-balance', label: 'Anotar saldo inicial' }],
     },
     {
       id: 'respaldo',

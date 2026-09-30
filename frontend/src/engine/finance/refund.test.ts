@@ -59,6 +59,7 @@ describe('reembolsos', () => {
       [ex.id, '2026-13', '1', 'VALIDATION_ERROR'],
       [999, '2026-01', '1', 'NOT_FOUND'],
       [ex.id, '2026-02', '300001', 'VALIDATION_ERROR'],
+      [ex.id, '2025-12', '1000', 'VALIDATION_ERROR'], // before the purchase
     ] as const) {
       expect((await finance.CreateRefund(expenseID, period, amount, '')).error?.code).toBe(code)
     }

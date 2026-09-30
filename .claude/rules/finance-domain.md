@@ -19,7 +19,8 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   balance (`cumulativeBalanceBefore`) but are reported as `Ahorro`, apart from `Gastos`, and never
   count against category budgets. Contributions of a trashed goal are excluded everywhere
   (`liveGoalContributions`), like installments of a deleted expense. A withdrawal is a negative
-  contribution (`WithdrawSavings`); a goal's balance never goes below zero. A goal that follows a
+  contribution (`WithdrawSavings`); a goal's balance never goes below zero at any month
+  (`goalHeadroom`). A goal that follows a
   savings account holds its balance, and the net transfers into it are the month's Ahorro
   (`goalTransfers`, summed by every savings helper — never read contributions alone).
 - **Salary**: read it only through `salaryByMonth` (Go `salary.go`, TS mirror) — the month's
@@ -39,6 +40,8 @@ Each rule holds in Go and in the web engine alike (Go⇄TS parity: `AGENTS.md`).
   deleted rows surface in the frontend "Papelera" (`TrashView.tsx`) with restore. Children of a
   trashed parent are frozen (no paying its cuotas, no deleting its contributions); an edit may keep
   a trashed card a row already has (`billingDayFor(…, allowTrashed)`), nothing new may use it.
+  A rename cascade (category, merchant) reaches trashed rows too (`WhereAllWithDeleted`; no
+  `deleted_at IS NULL` in TS), or a restore brings back a name that no longer exists.
   Deleting for good happens only from the trash (`PurgeTrashItem`/`EmptyTrash`, `users.PurgeUser`,
   which finds every `user_id` table at run time); children go by `ON DELETE CASCADE`.
 - **Views over the ledger, never a second ledger**: accounts (`account.go`) and due dates

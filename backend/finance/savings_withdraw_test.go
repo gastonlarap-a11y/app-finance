@@ -6,6 +6,24 @@ import (
 	"github.com/gastonlarap-a11y/app-finance/backend/shared"
 )
 
+// A withdrawal takes only what the goal held by its month, and never leaves a
+// later month's close below zero.
+func TestSavingsWithdrawalFollowsTheTimeline(t *testing.T) {
+	ctx := t.Context()
+	s := newTestService(t)
+	goal := s.CreateSavingsGoal(ctx, "Viaje", "500000", "")
+	mustOK(t, "CreateSavingsGoal", goal.Error)
+	id := goal.Data.ID
+	mustOK(t, "contribute Mar", s.AddSavingsContribution(ctx, id, "2026-03", "200000").Error)
+
+	wantCode(t, "before any contribution", s.WithdrawSavings(ctx, id, "2026-01", "1000").Error, shared.ErrValidation)
+	mustOK(t, "withdraw Apr", s.WithdrawSavings(ctx, id, "2026-04", "150000").Error)
+	// March holds 200.000, but April's close only 50.000: a March withdrawal of
+	// 100.000 would leave April at −50.000.
+	wantCode(t, "leaving a later month below zero", s.WithdrawSavings(ctx, id, "2026-03", "100000").Error, shared.ErrValidation)
+	mustOK(t, "within every month", s.WithdrawSavings(ctx, id, "2026-03", "50000").Error)
+}
+
 func TestSavingsWithdrawalGivesTheMoneyBack(t *testing.T) {
 	ctx := t.Context()
 	s := newTestService(t)

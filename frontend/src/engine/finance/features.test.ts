@@ -66,6 +66,18 @@ describe('renombrar categoría', () => {
     ok(await finance.UpdateCategory(cat.data!.id, 'Hogar'))
     expect((await finance.ListFixedExpenses())[0]?.category).toBe('Hogar')
   })
+
+  it('alcanza también a los gastos de la papelera', async () => {
+    const cat = ok(await finance.CreateCategory('Comida')).data!
+    const shop = ok(await finance.CreateMerchant('Lider')).data!
+    const ex = ok(await finance.CreateExpense('2030-01-05', 'Super', 'Comida', 'Lider', null, 'unico', '10000', 1)).data!
+    ok(await finance.DeleteExpense(ex.id))
+    ok(await finance.UpdateCategory(cat.id, 'Supermercado'))
+    ok(await finance.UpdateMerchant(shop.id, 'Líder'))
+    ok(await finance.RestoreExpense(ex.id))
+    const [back] = await finance.ListExpenses('2030-01')
+    expect([back?.category, back?.merchant]).toEqual(['Supermercado', 'Líder'])
+  })
 })
 
 describe('YearSummary.categoriaMeses', () => {

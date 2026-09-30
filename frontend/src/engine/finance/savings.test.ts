@@ -18,6 +18,17 @@ function ok<T extends { error?: unknown }>(r: T): T {
   return r
 }
 
+describe('retiros de ahorro en el tiempo', () => {
+  it('no retiran antes de los aportes ni dejan un mes posterior bajo cero', async () => {
+    const id = ok(await finance.CreateSavingsGoal('Viaje', '500000', '')).data!.id
+    ok(await finance.AddSavingsContribution(id, '2026-03', '200000'))
+    expect((await finance.WithdrawSavings(id, '2026-01', '1000')).error?.code).toBe('VALIDATION_ERROR')
+    ok(await finance.WithdrawSavings(id, '2026-04', '150000'))
+    expect((await finance.WithdrawSavings(id, '2026-03', '100000')).error?.code).toBe('VALIDATION_ERROR')
+    ok(await finance.WithdrawSavings(id, '2026-03', '50000'))
+  })
+})
+
 describe('retiros de ahorro', () => {
   it('devuelven la plata al mes y al arrastre', async () => {
     const id = ok(await finance.CreateSavingsGoal('Viaje', '500000', '2026-06')).data!.id
