@@ -231,7 +231,12 @@ month once the user reconciles. The "saldo inicial" is the same record on the mo
 one tracked. `MonthlySummary.Conciliacion` shows real vs computed (`Balance`) and the difference;
 `AcumuladoDesde` says which close the carried balance comes from. `YearSummary` and
 `CommitmentsForecast` reset their running balance at a reconciled close (`YearMonth.Conciliado`).
-A month that has not started cannot be reconciled.
+A month that has not started cannot be reconciled. With accounts, the same close can come from them
+(`AccountsClosing`, net worth as the sum of accounts with cards as liabilities): once every account
+that counts is reconciled that month, the sum of their real balances minus what the cards owed at the
+close (`AccountsSummary.Cards`), leaving apart the accounts savings goals follow (already Ahorro). The
+Conciliar dialog offers it («Usar este saldo») and names the accounts still missing; it is never
+recorded on its own, and the month's unassigned movements are shown since the sum cannot hold them.
 
 **Budget rules** (`budget.go`, migrations `20260927029`–`030`). A budget row is either a cap
 (`capped = 1`, and `0` is a real cap: "no gastar en X") or the end of one (`RemoveCategoryBudget`

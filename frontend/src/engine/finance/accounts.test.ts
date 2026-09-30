@@ -102,3 +102,38 @@ describe('pago de la tarjeta', () => {
     expect((await finance.ListCards())[0]?.paymentDay).toBeNull()
   })
 })
+
+// Mirror of TestAccountsClosing (accountreconciliation_test.go): the accounts'
+// real closing balances minus what the cards owed, savings goals' accounts apart.
+describe('cierre según tus cuentas', () => {
+  it('suma los saldos reales y resta lo que deben las tarjetas', async () => {
+    const itau = (await finance.CreateAccount('Itaú', 'corriente', '1000000', '2026-08', false)).data!
+    const mp = (await finance.CreateAccount('Mercado Pago', 'digital', '0', '2026-08', false)).data!
+    const ahorro = (await finance.CreateAccount('Cuenta de ahorro', 'ahorro', '2000000', '2026-08', false)).data!
+    await finance.CreateAccount('Cuenta nueva', 'vista', '0', '2026-10', false)
+    const goal = (await finance.CreateSavingsGoal('Pie departamento', '9000000', '')).data!
+    expect((await finance.SetSavingsGoalAccount(goal.id, ahorro.id)).error).toBeUndefined()
+    const card = (await finance.CreateCard('Visa', '2000000', 24, '')).data!
+    expect((await finance.SetCardAccount(card.id, itau.id)).error).toBeUndefined()
+    await finance.CreateExpense('2026-08-10', 'Zapatillas', '', '', card.id, 'unico', '100000', 1)
+
+    const closing = async () => {
+      const r = await finance.AccountsClosing('2026-08')
+      expect(r.error).toBeUndefined()
+      return r.data!
+    }
+    expect(await closing()).toMatchObject({ complete: false, missing: ['Itaú', 'Mercado Pago'] })
+    expect((await finance.SetAccountReconciliation(itau.id, '2026-08', '990000')).error).toBeUndefined()
+    expect((await finance.SetAccountReconciliation(mp.id, '2026-08', '20000')).error).toBeUndefined()
+    expect(await closing()).toMatchObject({
+      complete: true,
+      missing: [],
+      accounts: '1010000',
+      cardsOwed: '100000',
+      total: '910000',
+      saved: '2000000',
+    })
+    expect((await finance.AccountsClosing('2099-12')).error?.code).toBe('VALIDATION_ERROR')
+    expect((await finance.AccountsClosing('2026-13')).error?.code).toBe('VALIDATION_ERROR')
+  })
+})

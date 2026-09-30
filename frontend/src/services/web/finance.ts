@@ -9,6 +9,7 @@ export const FinanceService = remoteService<FinanceServiceContract>('finance')
 export type {
   Account,
   AccountView,
+  AccountsClosing,
   AccountsSummary,
   BaseSalary,
   BudgetStatus,

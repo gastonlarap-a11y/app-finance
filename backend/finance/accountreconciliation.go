@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -77,6 +78,79 @@ func (s *FinanceService) DeleteAccountReconciliation(ctx context.Context, accoun
 	res, err := s.db.NewDelete().Model((*AccountReconciliation)(nil)).
 		Where("user_id = ? AND account_id = ? AND period = ?", s.uid(), accountID, period).Exec(ctx)
 	return OpResult{Error: requireOne(res, err, "esa cuenta no tiene conciliación en ese mes")}
+}
+
+// AccountsClosing is the app's balance at a month's close as the bank shows it
+// through the accounts — net worth as the sum of accounts, cards as
+// liabilities: the accounts' real closing balances minus what the cards owed
+// then. Accounts a live savings goal follows stay apart: their money is Ahorro,
+// already out of the app's balance. The user decides whether to record it as
+// the month's reconciliation; nothing is derived on its own.
+type AccountsClosing struct {
+	Complete           bool          `json:"complete"`           // every account that counts is reconciled that month
+	Missing            []string      `json:"missing"`            // accounts still to reconcile that month, by name
+	Accounts           types.Decimal `json:"accounts"`           // Σ real closing balances outside savings goals
+	CardsOwed          types.Decimal `json:"cardsOwed"`          // what the cards had billed and not paid at the close
+	Total              types.Decimal `json:"total"`              // accounts − cardsOwed
+	Saved              types.Decimal `json:"saved"`              // Σ balances of the accounts goals follow (left out)
+	UnassignedIngresos types.Decimal `json:"unassignedIngresos"` // the month's movements no account claims: not in the sum
+	UnassignedGastos   types.Decimal `json:"unassignedGastos"`
+}
+
+type AccountsClosingResult struct {
+	Data  *AccountsClosing `json:"data,omitempty"`
+	Error *shared.AppError `json:"error,omitempty"`
+}
+
+// AccountsClosing adds up the accounts' real balances at the close of `period`
+// (see the type). A month that has not started has no close.
+func (s *FinanceService) AccountsClosing(ctx context.Context, period string) AccountsClosingResult {
+	if !validPeriod(period) {
+		return AccountsClosingResult{Error: invalidPeriod()}
+	}
+	if period > currentPeriod() {
+		return AccountsClosingResult{Error: shared.NewError(shared.ErrValidation, "un mes que aún no empieza no tiene cierre")}
+	}
+	uid := s.uid()
+	sum, err := s.accountsSummary(ctx, uid, period)
+	if err != nil {
+		return AccountsClosingResult{Error: internalErr(err)}
+	}
+	var backing []int64
+	if err := s.db.NewSelect().Model((*SavingsGoal)(nil)).Column("account_id").
+		Where("user_id = ? AND account_id IS NOT NULL", uid).Scan(ctx, &backing); err != nil {
+		return AccountsClosingResult{Error: internalErr(err)}
+	}
+	out := &AccountsClosing{
+		Missing: []string{}, Accounts: types.Zero(), CardsOwed: types.Zero(), Saved: types.Zero(),
+		UnassignedIngresos: sum.UnassignedIngreso, UnassignedGastos: sum.UnassignedGastos,
+	}
+	counted := 0
+	for _, a := range sum.Accounts {
+		if a.OpeningPeriod > period {
+			continue
+		}
+		if slices.Contains(backing, a.ID) {
+			balance := a.Balance
+			if a.Conciliacion != nil {
+				balance = a.Conciliacion.SaldoReal
+			}
+			out.Saved = out.Saved.Add(balance)
+			continue
+		}
+		counted++
+		if a.Conciliacion == nil {
+			out.Missing = append(out.Missing, a.Name)
+			continue
+		}
+		out.Accounts = out.Accounts.Add(a.Conciliacion.SaldoReal)
+	}
+	for _, c := range sum.Cards {
+		out.CardsOwed = out.CardsOwed.Add(c.Owed)
+	}
+	out.Complete = counted > 0 && len(out.Missing) == 0
+	out.Total = out.Accounts.Sub(out.CardsOwed)
+	return AccountsClosingResult{Data: out}
 }
 
 // accountReconciliationsUpTo returns uid's account reconciliations up to

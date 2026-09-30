@@ -1,6 +1,7 @@
 import { useState, type SubmitEvent } from 'react'
-import { FinanceService, type MonthlySummary } from '@/services/finance'
+import { FinanceService, type AccountsClosing, type MonthlySummary } from '@/services/finance'
 import { failed } from '@/lib/result'
+import { useQuery } from '@/lib/useQuery'
 import { compare, isNegative, isZero, subtract } from '@/lib/money'
 import { formatCLP, periodLabel, shiftPeriod } from '@/lib/format'
 import { Button, Field, Modal, MoneyInput } from './ui'
@@ -34,6 +35,16 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
   const [busy, setBusy] = useState(false)
 
   const amount = magnitude === '' ? '' : negative && !isZero(magnitude) ? `-${magnitude}` : magnitude
+  // The same close as the bank shows it through the accounts, when they are all reconciled.
+  const closing = useQuery(`accounts-closing:${target}`, async () => {
+    const r = await FinanceService.AccountsClosing(target)
+    if (r.error) throw new Error(r.error.message)
+    return r.data ?? null
+  })
+  function applyClosing(total: string) {
+    setMagnitude(total.replace(/^-/, ''))
+    setNegative(isNegative(total))
+  }
   // What the app computes for the target month: the balance at the close of the
   // month shown, or the carried balance it starts with.
   const computed = mode === 'cierre' ? (summary.conciliacion?.calculado ?? summary.balance) : summary.acumulado
@@ -75,6 +86,11 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
           <input type="checkbox" className="size-4 accent-accent" checked={negative} onChange={(e) => setNegative(e.target.checked)} />
           Saldo negativo (cuenta sobregirada)
         </label>
+        {closing.status === 'error' ? (
+          <p className="text-xs text-negative-fg">No se pudo calcular desde tus cuentas: {closing.error}</p>
+        ) : (
+          closing.data && <FromAccounts closing={closing.data} onUse={applyClosing} />
+        )}
         <dl className="grid grid-cols-2 gap-1 rounded-lg bg-sunken p-3 text-sm">
           <dt className="text-fg-muted">{mode === 'cierre' ? 'Calculado por la app' : 'Arrastre calculado'}</dt>
           <dd className="text-right tabular-nums text-fg">{formatCLP(computed)}</dd>
@@ -110,5 +126,44 @@ export function ReconcileDialog({ mode, summary, onClose, onSaved }: Props) {
         </div>
       </form>
     </Modal>
+  )
+}
+
+// FromAccounts offers the month's close as the bank shows it through the
+// accounts — their real closing balances minus what the cards owed — once
+// every account that counts is reconciled, or says which ones are missing.
+// Nothing when the profile has no accounts.
+function FromAccounts({ closing: c, onUse }: { closing: AccountsClosing; onUse: (total: string) => void }) {
+  if (!c.complete) {
+    if (c.missing.length === 0) return null
+    return (
+      <p className="text-xs text-fg-subtle">
+        Para calcularlo desde tus cuentas, concilia también {c.missing.join(', ')} en el panel Cuentas.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-2 rounded-lg bg-sunken p-3 text-sm ring-1 ring-inset ring-line">
+      <p className="text-fg-muted">
+        Según tus cuentas conciliadas: <span className="tabular-nums">{formatCLP(c.accounts)}</span>
+        {!isZero(c.cardsOwed) && (
+          <>
+            {' '}
+            − tarjetas por pagar <span className="tabular-nums">{formatCLP(c.cardsOwed)}</span>
+          </>
+        )}{' '}
+        = <strong className="tabular-nums text-fg">{formatCLP(c.total)}</strong>
+        {!isZero(c.saved) && <> (sin contar {formatCLP(c.saved)} de ahorro, que ya es Ahorro)</>}.
+      </p>
+      {(!isZero(c.unassignedIngresos) || !isZero(c.unassignedGastos)) && (
+        <p className="text-xs text-caution-fg">
+          Este mes hay movimientos sin cuenta (+{formatCLP(c.unassignedIngresos)} / −{formatCLP(c.unassignedGastos)}): la suma de
+          tus cuentas no los incluye.
+        </p>
+      )}
+      <Button size="sm" variant="secondary" onClick={() => onUse(c.total)}>
+        Usar este saldo
+      </Button>
+    </div>
   )
 }

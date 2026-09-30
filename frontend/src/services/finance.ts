@@ -14,6 +14,7 @@ export const FinanceService: FinanceServiceContract = Bound
 export type {
   Account,
   AccountView,
+  AccountsClosing,
   AccountsSummary,
   BaseSalary,
   BudgetStatus,

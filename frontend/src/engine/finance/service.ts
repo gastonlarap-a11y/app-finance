@@ -3,6 +3,7 @@
 // (sqlite-wasm) instead of the Go backend. Every query filters by the active
 // user id (session.active()), mirroring the desktop invariant.
 import type {
+  AccountsClosingResult,
   AccountsSummary,
   AppError,
   BaseSalaryResult,
@@ -4802,6 +4803,46 @@ export function createFinanceService(db: SqlDb, session: ActiveSession): Finance
       db.exec('DELETE FROM account_reconciliations WHERE user_id = ? AND account_id = ? AND period = ?', [uid(), accountID, period])
       if (db.changes() === 0) return { error: newError(ErrNotFound, 'esa cuenta no tiene conciliación en ese mes') }
       return {}
+    },
+
+    // AccountsClosing mirrors Go: the accounts' real closing balances minus
+    // what the cards owed then; accounts savings goals follow stay apart.
+    async AccountsClosing(period: string): Promise<AccountsClosingResult> {
+      if (!validPeriod(period)) return { error: invalidPeriodError() }
+      if (period > currentPeriod()) return { error: newError(ErrValidation, 'un mes que aún no empieza no tiene cierre') }
+      const sum = accountsSummary(period)
+      const backing = new Set(
+        db
+          .query('SELECT account_id FROM savings_goals WHERE user_id = ? AND account_id IS NOT NULL AND deleted_at IS NULL', [uid()])
+          .map((r) => asNumber(r.account_id)),
+      )
+      const missing: string[] = []
+      let accounts = Money.zero()
+      let saved = Money.zero()
+      let counted = 0
+      for (const a of sum.accounts) {
+        if (a.openingPeriod > period) continue
+        if (backing.has(a.id)) {
+          saved = saved.add(Money.fromString(a.conciliacion?.saldoReal ?? a.balance))
+          continue
+        }
+        counted++
+        if (!a.conciliacion) missing.push(a.name)
+        else accounts = accounts.add(Money.fromString(a.conciliacion.saldoReal))
+      }
+      const cardsOwed = sum.cards.reduce((acc, c) => acc.add(Money.fromString(c.owed)), Money.zero())
+      return {
+        data: {
+          complete: counted > 0 && missing.length === 0,
+          missing,
+          accounts: accounts.toString(),
+          cardsOwed: cardsOwed.toString(),
+          total: accounts.sub(cardsOwed).toString(),
+          saved: saved.toString(),
+          unassignedIngresos: sum.unassignedIngresos,
+          unassignedGastos: sum.unassignedGastos,
+        },
+      }
     },
 
     // ---------- category budgets (presupuestos) ----------

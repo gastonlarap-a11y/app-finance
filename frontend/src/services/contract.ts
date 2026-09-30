@@ -110,6 +110,22 @@ export interface AccountsSummary {
   cards: CardOwed[] // cards with something billed and not yet paid, by name
 }
 
+// The app's balance at a month's close as the bank shows it through the
+// accounts: their real closing balances minus what the cards owed then. The
+// accounts savings goals follow stay apart (their money is already Ahorro).
+export interface AccountsClosing {
+  complete: boolean // every account that counts is reconciled that month
+  missing: string[] // accounts still to reconcile that month, by name
+  accounts: string // Σ real closing balances outside savings goals
+  cardsOwed: string
+  total: string // accounts − cardsOwed
+  saved: string // Σ balances of the accounts goals follow (left out)
+  unassignedIngresos: string // the month's movements no account claims: not in the sum
+  unassignedGastos: string
+}
+
+export type AccountsClosingResult = Result<AccountsClosing>
+
 export interface AccountResult {
   data?: Account | null
   error?: AppError | null
@@ -1003,6 +1019,7 @@ export interface FinanceServiceContract {
   DeleteTransfer(id: number): Promise<OpResult>
   SetAccountReconciliation(accountID: number, period: string, balance: string): Promise<OpResult>
   DeleteAccountReconciliation(accountID: number, period: string): Promise<OpResult>
+  AccountsClosing(period: string): Promise<AccountsClosingResult>
   LatestFxRate(): Promise<FxRateResult>
   CreateRefund(expenseID: number, period: string, amount: string, description: string): Promise<RefundResult>
   CreateReceivable(expenseID: number, person: string, amount: string): Promise<ReceivableResult>
