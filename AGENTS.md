@@ -52,7 +52,9 @@ harmless noise.
 
 ## Versions (beta — keep aligned)
 
-- Go toolchain: `go 1.27` in `go.mod` (CI reads it via `go-version-file`). Node 24 LTS
+- Go toolchain: language `go 1.27.0` + `toolchain go1.27.2` in `go.mod` — CI's setup-go builds with
+  the `toolchain` line; bump it to each security patch (`go get toolchain@go1.27.N`) when govulncheck
+  flags the standard library. Node 24 LTS
   (`frontend/.nvmrc`). TypeScript stays on 5.9 until typescript-eslint supports TS 7 (7.1 API).
 - Go library: `github.com/wailsapp/wails/v3 v3.0.0-beta.25` (pinned in `go.mod`; excluded from
   Dependabot — bump lib, CLI and `@wailsio/runtime` together by hand).
