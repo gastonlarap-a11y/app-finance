@@ -34,6 +34,15 @@ Overview and commands: `ARCHITECTURE.md` §13 "Code map".
   short participant labels — all tables share one SQLite lifeline) and never emit an empty card
   (`null` items fail the schema). Cite only files clean at `HEAD`, and pin `meta.repository` only
   with at least one citation and only when the root is the checkout's top.
+- **Viewer and Ask** (`internal/viewer`), security invariants: listen on 127.0.0.1 only; every
+  request passes `guard` (per-launch token → HttpOnly SameSite=Strict cookie, Host is this
+  server, POST needs this Origin and a JSON body); pages carry `pageCSP` (no inline script),
+  Archify files are served only by listed name with `diagramCSP` (sandboxed, opaque origin).
+  `claude` runs from `Asker.args` only: `--restricted`, `--tools Read,Grep,Glob`,
+  `--strict-mcp-config`, `dontAsk`, `//`-anchored deny rules (`/path` rules anchor at the settings
+  source and an inline `--settings` has none — that gap leaked `config.toml` once), the question
+  on stdin, session IDs validated, paid-auth env vars stripped, never `--bare`. Changing any of it
+  needs `CODEMAP_LIVE_CLAUDE=1 go test -run TestLiveClaude ./tools/codemap/internal/viewer/`.
 - **MCP**: every tool is read-only (`ReadOnlyHint`) and answers within `graph.MaxChars`. The
   server is registered in `.mcp.json`, mirrored by hand in `.codex/config.toml`, and enabled in
   `.claude/settings.json` (`enabledMcpjsonServers`).

@@ -1,0 +1,29 @@
+{{template "head" .}}
+{{with .Body}}
+<h1>Flujo desde {{.Root.Node.Name}}</h1>
+<p class="muted">
+  Destino: {{if .Target}}{{.Target}}{{else}}desktop y web{{end}} ·
+  {{if .Full}}todas las ramas{{else}}solo ramas que llegan a datos o al límite Go⇄TS{{end}} ·
+  <a href="{{traceHref .Root.Node .Target}}{{if not .Full}}&amp;full=1{{end}}">{{if .Full}}ver solo datos{{else}}ver todas las ramas{{end}}</a>
+</p>
+<div class="tree">
+  <p>{{template "nodelink" .Root.Node}}</p>
+  {{template "tree" .Root}}
+  {{if not .Root.Children}}<p class="muted">No llega a ninguna tabla ni al límite Go⇄TS.</p>{{end}}
+</div>
+{{end}}
+{{template "foot" .}}
+
+{{define "tree"}}{{if or .Children .Truncated}}
+<ul>
+  {{range .Children}}
+  <li>
+    <span class="edge">{{if eq .Via.Kind.String "dispatch"}}[{{.Via.Target}}]{{else}}{{.Via.Kind}}{{end}}</span>
+    {{template "nodelink" .Node}}{{if not .Via.At.IsZero}} <span class="loc">@{{loc .Via.At}}</span>{{end}}
+    {{if .Repeat}}<span class="muted">(expandido arriba)</span>{{end}}
+    {{template "tree" .}}
+  </li>
+  {{end}}
+  {{if .Truncated}}<li class="muted">… límite de profundidad o tamaño: traza desde un nodo más abajo</li>{{end}}
+</ul>
+{{end}}{{end}}

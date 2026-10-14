@@ -1,0 +1,47 @@
+{{template "head" .}}
+{{with .Body}}
+<h1>Mapa del código</h1>
+<p class="muted">Go: {{kindCounts .Overview.GoKinds}}<br>TS: {{kindCounts .Overview.TSKinds}}<br>{{.Overview.Tables}} tablas · {{.Overview.Edges}} relaciones</p>
+
+<section>
+  <h2>Servicios Wails (Go → TS)</h2>
+  <table>
+    <thead><tr><th>Servicio</th><th>Paquete</th><th>Métodos</th><th>Contrato</th><th>Sin uso desde la UI</th></tr></thead>
+    <tbody>
+    {{range .Services}}
+      <tr>
+        <td>{{if .Node}}<a href="{{href .Node}}">{{.Summary.Name}}</a>{{else}}{{.Summary.Name}}{{end}}</td>
+        <td><code>{{.Summary.Dir}}</code></td>
+        <td>{{.Summary.Methods}}</td>
+        <td>{{.Summary.Contract}}</td>
+        <td>{{range .Summary.NoUI}}<code>{{.}}</code> {{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Tablas</h2>
+  <table>
+    <thead><tr><th>Tabla</th><th>Escriben (Go · TS)</th><th>Leen (Go · TS)</th></tr></thead>
+    <tbody>
+    {{range .Overview.TableUse}}
+      <tr><td><a href="{{href .Table}}">{{.Table.Name}}</a></td><td>{{.GoWriters}} · {{.TSWriters}}</td><td>{{.GoReaders}} · {{.TSReaders}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+
+<section class="two">
+  <div>
+    <h2>Paquetes Go</h2>
+    <ul class="plain">{{range .Overview.Packages}}<li><code>{{.Dir}}</code> <span class="muted">{{kindCounts .Counts}}</span></li>{{end}}</ul>
+  </div>
+  <div>
+    <h2>Frontend</h2>
+    <ul class="plain">{{range .Overview.Frontend}}<li><code>{{.Dir}}</code> <span class="muted">{{kindCounts .Counts}}</span></li>{{end}}</ul>
+  </div>
+</section>
+{{end}}
+{{template "foot" .}}

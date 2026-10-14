@@ -1,0 +1,15 @@
+{{template "head" .}}
+<h1>Diagramas</h1>
+<p class="muted">Generados con Archify desde el grafo; las citas apuntan al commit actual. Se guardan en <code>.codemap/diagrams</code> (fuera de git).</p>
+<p class="actions">
+  <button type="button" data-diagram="architecture">Generar arquitectura</button>
+</p>
+<p id="diagram-status" class="muted" role="status"></p>
+{{with .Body}}
+<ul class="plain">
+  {{range .}}<li><a href="/diagrams/view?name={{.Name}}">{{.Name}}</a> <span class="muted">{{.Modified.Format "2006-01-02 15:04"}}</span></li>{{end}}
+</ul>
+{{else}}
+<p>Aún no hay diagramas. Genera la arquitectura, o el flujo de un símbolo desde su página.</p>
+{{end}}
+{{template "foot" .}}

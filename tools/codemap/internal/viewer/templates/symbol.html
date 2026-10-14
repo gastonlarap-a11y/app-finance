@@ -1,0 +1,79 @@
+{{template "head" .}}
+{{with .Body}}
+<h1>{{.Node.Name}} <span class="tag">{{tag .Node}}</span></h1>
+<p class="loc">{{loc .Node.Pos}}</p>
+{{with .Node.Signature}}<pre class="sig">{{.}}</pre>{{end}}
+{{with .Node.Doc}}<p>{{.}}</p>{{end}}
+{{with .Parent}}<p class="muted">Dentro de {{template "nodelink" .}}</p>{{end}}
+
+<p class="actions">
+  {{if .Reachable}}
+  <a class="button" href="{{traceHref .Node "desktop"}}">Flujo desktop</a>
+  <a class="button" href="{{traceHref .Node "web"}}">Flujo web</a>
+  {{else}}
+  <a class="button" href="{{traceHref .Node ""}}">Flujo</a>
+  {{end}}
+  <a class="button" href="{{impactHref .Node}}">Impacto</a>
+  <button type="button" class="secondary" data-diagram="sequence" data-from="{{.Node.ID}}" data-target="desktop">Diagrama (desktop)</button>
+  <button type="button" class="secondary" data-diagram="sequence" data-from="{{.Node.ID}}" data-target="web">Diagrama (web)</button>
+</p>
+<p id="diagram-status" class="muted" role="status"></p>
+
+{{with .Hub}}
+<section>
+  <h2>Espejos Go⇄TS (cambian juntos)</h2>
+  <ul class="plain">
+    <li>contrato · {{template "nodelink" .}}</li>
+    {{range $.Body.Mirrors}}<li>{{.Target}} · {{template "nodelink" .Node}}</li>{{end}}
+  </ul>
+</section>
+{{end}}
+
+{{with .Members}}
+<section>
+  <h2>Miembros ({{len .}})</h2>
+  <ul class="plain">{{range .}}<li>{{template "nodelink" .}}</li>{{end}}</ul>
+</section>
+{{end}}
+
+<section>
+  <h2>Llamado por ({{len .Callers}})</h2>
+  {{with .Callers}}
+  <ul class="plain">
+    {{range .}}<li><span class="edge">{{.Edge.Kind}}</span> {{template "nodelink" .Node}} <span class="loc">@{{loc .Edge.At}}</span>{{if .ViaContract}} <span class="muted">(vía contrato)</span>{{end}}</li>{{end}}
+  </ul>
+  {{else}}<p class="muted">Nadie lo llama fuera de los tests.</p>{{end}}
+</section>
+
+<section>
+  <h2>Llama a ({{len .Callees}})</h2>
+  {{with .Callees}}
+  <ul class="plain">{{range .}}<li><span class="edge">{{.Edge.Kind}}</span> {{template "nodelink" .Node}} <span class="loc">@{{loc .Edge.At}}</span></li>{{end}}</ul>
+  {{else}}<p class="muted">—</p>{{end}}
+</section>
+
+{{range .Tables}}
+<section>
+  <h2>Tablas{{with .Target}} ({{.}}){{end}}</h2>
+  {{with .Uses}}
+  <ul class="plain">{{range .}}<li>{{verbs .}} <a href="{{href .Table}}">{{.Table.Name}}</a> <span class="muted">{{if .Direct}}directo{{else if .Via}}vía {{.Via.Name}}{{end}}</span></li>{{end}}</ul>
+  {{else}}<p class="muted">Ninguna.</p>{{end}}
+</section>
+{{end}}
+
+{{with .Node.Unresolved}}
+<section>
+  <h2>Sin resolver</h2>
+  <p class="muted">Tabla o llamada armada en tiempo de ejecución:</p>
+  <ul class="plain">{{range .}}<li class="loc">{{loc .}}</li>{{end}}</ul>
+</section>
+{{end}}
+
+{{with .Tests}}
+<section>
+  <h2>Tests que lo llaman directamente</h2>
+  <ul class="plain">{{range sortedTests .}}<li><code>{{.}}</code></li>{{end}}</ul>
+</section>
+{{end}}
+{{end}}
+{{template "foot" .}}

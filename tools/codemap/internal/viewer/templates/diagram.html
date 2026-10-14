@@ -1,0 +1,5 @@
+{{template "head" .}}
+<h1>{{.Body}}</h1>
+<p class="muted"><a href="/diagrams">← Diagramas</a></p>
+<iframe class="diagram" src="/diagram-file/{{.Body}}" title="Diagrama {{.Body}}"></iframe>
+{{template "foot" .}}

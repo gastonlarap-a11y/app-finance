@@ -1,0 +1,53 @@
+{{define "head"}}<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · codemap</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">codemap</a>
+  <nav>
+    <a href="/">Mapa</a>
+    <a href="/diagrams">Diagramas</a>
+  </nav>
+  <form class="search" action="/search" method="get" role="search">
+    <input type="search" name="q" value="{{.Query}}" placeholder="Buscar símbolo o tabla (CreateExpense, ExpenseForm, expenses…)" aria-label="Buscar símbolo o tabla" required>
+  </form>
+</header>
+<div class="layout">
+<main>
+{{range .Notes}}<p class="note" role="status">⚠ Índice parcial: {{.}}</p>{{end}}
+{{end}}
+
+{{define "foot"}}
+</main>
+<aside class="ask" id="ask" data-symbol="{{with .Symbol}}{{.ID}}{{end}}" aria-labelledby="ask-title">
+  <h2 id="ask-title">Preguntar a la IA</h2>
+  {{with .Symbol}}<p class="muted">Contexto: <code>{{.Name}}</code></p>{{end}}
+  {{if .AskOff}}
+  <p class="muted">{{.AskOff}}</p>
+  {{else}}
+  <form id="ask-form">
+    <label for="ask-question" class="sr-only">Pregunta</label>
+    <textarea id="ask-question" name="question" rows="4" maxlength="4000" required placeholder="¿Qué pasa cuando el usuario guarda un gasto en el iPad?"></textarea>
+    <div class="row">
+      <button type="submit" id="ask-send">Preguntar</button>
+      <button type="button" id="ask-new" class="secondary">Nueva conversación</button>
+    </div>
+    <p id="ask-status" class="muted" role="status"></p>
+  </form>
+  <div id="ask-output" class="answer" aria-live="polite"></div>
+  <p class="muted small">Usa tu Claude Code en modo solo lectura, con las herramientas de codemap.</p>
+  {{end}}
+</aside>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
+{{end}}
+
+{{define "nodelink"}}<a href="{{href .}}">{{.Name}}</a> <span class="tag">{{tag .}}</span> <span class="loc">{{loc .Pos}}</span>{{end}}

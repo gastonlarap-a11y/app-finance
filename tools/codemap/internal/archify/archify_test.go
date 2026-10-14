@@ -265,6 +265,23 @@ func TestSequence(t *testing.T) {
 		})
 	}
 
+	t.Run("an implementation is drawn from its contract member, on the requested build", func(t *testing.T) {
+		d, err := Sequence(g, g.Nodes["go:pkg.Svc.Save"], cleanRepo(), SequenceOptions{Output: "s.html", Target: graph.TargetWeb})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parts []string
+		for _, p := range d.Participants {
+			parts = append(parts, p.Label)
+		}
+		if !slices.Equal(parts, []string{"Contrato", "Motor TS", "SQLite"}) {
+			t.Errorf("participants = %v: the web flow of a Go method goes through its contract to the engine", parts)
+		}
+		if d.Meta.Legend == nil || d.Meta.Legend.Entries["dashed"].Label != "lectura de tabla" {
+			t.Errorf("legend = %+v: a dashed read must not be labelled async", d.Meta.Legend)
+		}
+	})
+
 	t.Run("a flow without data is an error", func(t *testing.T) {
 		if _, err := Sequence(g, g.Nodes["ts:app"], cleanRepo(), SequenceOptions{Target: graph.TargetDesktop}); err != nil {
 			t.Fatalf("App reaches the table through Form: %v", err)

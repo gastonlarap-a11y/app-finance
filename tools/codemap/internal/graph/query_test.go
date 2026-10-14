@@ -144,6 +144,24 @@ func TestTrace(t *testing.T) {
 	}
 }
 
+func TestTraceOfAnImplementationOnTheOtherBuild(t *testing.T) {
+	g := fixtureGraph()
+	goSave := g.Nodes["go:pkg.Svc.Save"]
+
+	web := g.Trace(goSave, TraceOptions{Target: TargetWeb})
+	var got []string
+	flatten(web, 0, &got)
+	if web.Node.Name != "SvcContract.Save" || !slices.Equal(got, []string{"[web]createSvc.service.Save", " things", " things"}) {
+		t.Errorf("web trace of the Go method starts at %s:\n%s", web.Node.Name, strings.Join(got, "\n"))
+	}
+	if own := g.Trace(goSave, TraceOptions{Target: TargetDesktop}); own.Node != goSave {
+		t.Errorf("its own build traces the method itself, got %s", own.Node.Name)
+	}
+	if both := g.Trace(goSave, TraceOptions{}); both.Node != goSave {
+		t.Errorf("without a target the method itself is traced, got %s", both.Node.Name)
+	}
+}
+
 func TestTables(t *testing.T) {
 	g := fixtureGraph()
 	desktop := g.Tables(g.Nodes["ts:form"], TargetDesktop)

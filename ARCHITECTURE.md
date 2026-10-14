@@ -514,6 +514,7 @@ strings say which are read or written).
 | `impact finance.FinanceService.softDelete` | Callers up to the UI + the exact tests to run |
 | `diagram architecture` | [Archify](https://github.com/tt-a1i/archify) overview → `.codemap/diagrams/` (gitignored) |
 | `diagram sequence ExpenseForm.submit -target web` | Archify sequence of one flow on one build |
+| `serve` (`task codemap:serve`) | Local viewer: search, symbol pages, flows, impact, diagrams, and «Preguntar a la IA» |
 | `mcp` | The same answers as MCP tools (registered in `.mcp.json` and `.codex/config.toml`); `task codemap:warm` compiles it ahead of the agents' startup timeout |
 
 Diagrams are written deterministically from the graph (no model in the loop) and
@@ -522,6 +523,16 @@ rendered by the user's Archify install (`npx skills add tt-a1i/archify -g`, 3.1+
 citation against the committed `HEAD` (changed files are not cited), then writes
 a self-contained HTML viewer; `-finalize` adds Archify's real-browser check.
 Without Archify the JSON is still written.
+
+«Preguntar a la IA» runs the user's own `claude` CLI headless (their
+subscription; `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` are stripped so it never
+bills an API key): `--restricted` (no Bash/WebFetch, settings files and hooks
+ignored, file tools confined to the repo), `Read`/`Grep`/`Glob` plus the
+codemap MCP tools only, `dontAsk`, and `//`-anchored deny rules for secrets and
+personal data (`config.toml`, `.env`, `*.db`, `*.csv`, `*.pdf`, `*.xlsx`,
+`logs/`). The viewer listens on 127.0.0.1 only and requires its per-launch
+token (an HttpOnly, SameSite=Strict cookie), its own Host and, for POSTs, its
+own Origin with a JSON body; Archify diagrams render in a sandboxed iframe.
 
 ## 14. Multi-user profiles (no login)
 

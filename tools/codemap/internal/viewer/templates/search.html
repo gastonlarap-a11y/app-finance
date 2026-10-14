@@ -1,0 +1,10 @@
+{{template "head" .}}
+<h1>{{.Title}}</h1>
+{{with .Body}}
+<ul class="plain results">
+  {{range .}}<li>{{template "nodelink" .}}</li>{{end}}
+</ul>
+{{else}}
+<p>Sin resultados. Prueba con parte del nombre (camel humps: <code>CE</code> encuentra <code>CreateExpense</code>).</p>
+{{end}}
+{{template "foot" .}}

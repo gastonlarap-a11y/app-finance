@@ -30,6 +30,17 @@ type Meta struct {
 	Repository     *Repository `json:"repository,omitempty"`
 	ViewBox        []float64   `json:"viewBox,omitempty"`
 	ColumnFit      string      `json:"column_fit,omitempty"`
+	Legend         *Legend     `json:"legend,omitempty"`
+}
+
+// Legend renames what each relationship style means in this diagram.
+type Legend struct {
+	Entries map[string]LegendEntry `json:"entries"`
+}
+
+// LegendEntry is the label of one style.
+type LegendEntry struct {
+	Label string `json:"label"`
 }
 
 // Repository pins the commit every source citation is checked against.

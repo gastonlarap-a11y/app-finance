@@ -53,14 +53,15 @@ func parseDiagram(positional []string, target string, finalize bool) (diagramReq
 
 // runDiagram writes the Archify JSON under .codemap/diagrams and renders it
 // with the installed Archify CLI; without Archify, it says how to get it.
-func runDiagram(ctx context.Context, root string, g *graph.Graph, req diagramRequest, out io.Writer) error {
+// It returns the HTML file name when one was rendered.
+func runDiagram(ctx context.Context, root string, g *graph.Graph, req diagramRequest, out io.Writer) (string, error) {
 	// A diagram of a partial index would look complete: say so first.
 	if _, err := io.WriteString(out, withNotes(g, "")); err != nil {
-		return err
+		return "", err
 	}
 	repo, err := archify.ReadRepo(ctx, root)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var slug string
 	var doc any
@@ -71,20 +72,20 @@ func runDiagram(ctx context.Context, root string, g *graph.Graph, req diagramReq
 	case archify.TypeSequence:
 		nodes := g.Resolve(req.from)
 		if len(nodes) != 1 {
-			return errors.New(strings.TrimSpace(graph.CandidatesText(req.from, nodes)))
+			return "", errors.New(strings.TrimSpace(graph.CandidatesText(req.from, nodes)))
 		}
 		n := nodes[0]
 		slug = "sequence-" + slugify(n.Name) + "-" + req.target
 		seq, err := archify.Sequence(g, n, repo, archify.SequenceOptions{Output: diagramDir + "/" + slug + ".html", Target: req.target})
 		if err != nil {
-			return fmt.Errorf("%s (%s): %w", n.Name, req.target, err)
+			return "", fmt.Errorf("%s (%s): %w", n.Name, req.target, err)
 		}
 		doc = seq
 	}
 
 	jsonRel, htmlRel := diagramDir+"/"+slug+".json", diagramDir+"/"+slug+".html"
 	if err := writeJSON(filepath.Join(root, filepath.FromSlash(jsonRel)), doc); err != nil {
-		return err
+		return "", err
 	}
 	fmt.Fprintf(out, "JSON: %s\n", filepath.Join(root, filepath.FromSlash(jsonRel)))
 	if len(repo.Dirty) > 0 && repo.Meta != nil {
@@ -94,10 +95,10 @@ func runDiagram(ctx context.Context, root string, g *graph.Graph, req diagramReq
 	cli, err := archify.FindCLI(root, os.Getenv)
 	if errors.Is(err, archify.ErrNotInstalled) {
 		_, err := fmt.Fprintf(out, "Sin render: %s.\n", archify.InstallHint)
-		return err
+		return "", err
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	cmd := archify.Deliver
 	if req.finalize {
@@ -105,10 +106,10 @@ func runDiagram(ctx context.Context, root string, g *graph.Graph, req diagramReq
 	}
 	report, err := cli.Render(ctx, cmd, req.kind, root, jsonRel, htmlRel)
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, graph.Clip(report, 4000))
+		return "", fmt.Errorf("%w\n%s", err, graph.Clip(report, 4000))
 	}
 	_, err = fmt.Fprintf(out, "HTML: %s (archify %s %s)\n", filepath.Join(root, filepath.FromSlash(htmlRel)), cli.Version, cmd)
-	return err
+	return slug + ".html", err
 }
 
 func writeJSON(path string, doc any) error {

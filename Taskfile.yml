@@ -90,6 +90,11 @@ tasks:
     cmds:
       - go run ./tools/codemap {{.CLI_ARGS}}
 
+  codemap:serve:
+    summary: "Local code-map viewer on 127.0.0.1 with Ask-the-AI (your claude CLI, read-only)"
+    cmds:
+      - go run ./tools/codemap serve
+
   codemap:warm:
     summary: Compiles tools/codemap once so its MCP server starts within the agents' startup timeout
     cmds:

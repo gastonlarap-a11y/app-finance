@@ -243,8 +243,13 @@ func follows(e Edge, target string) bool {
 }
 
 // Trace walks the flow forward from a symbol: UI → contract → Go bound
-// method (desktop) and web engine → helpers → tables.
+// method (desktop) and web engine → helpers → tables. Asked for the other
+// build's flow, an implementation (a Go bound method and web, an engine
+// method and desktop) is traced from its contract member instead.
 func (g *Graph) Trace(from *Node, opt TraceOptions) *TraceNode {
+	if hub := g.Hub(from); opt.Target != "" && hub != nil && hub != from && g.dispatchTarget(hub, from) != opt.Target {
+		from = hub
+	}
 	if opt.Depth <= 0 {
 		opt.Depth = 8
 	}
@@ -413,6 +418,16 @@ func (g *Graph) Hub(n *Node) *Node {
 		}
 	}
 	return nil
+}
+
+// dispatchTarget is the build on which hub dispatches to impl.
+func (g *Graph) dispatchTarget(hub, impl *Node) string {
+	for _, e := range g.Out[hub.ID] {
+		if e.Kind == EdgeDispatch && e.To == impl.ID {
+			return e.Target
+		}
+	}
+	return ""
 }
 
 // Mirror is one implementation of a contract member on one build.

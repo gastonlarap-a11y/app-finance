@@ -11,6 +11,7 @@
 //	codemap impact NAME                   who breaks if NAME changes, and the tests to run
 //	codemap diagram architecture|sequence NAME   Archify diagrams under .codemap/diagrams
 //	codemap mcp                           the same answers as MCP tools over stdio
+//	codemap serve                         local web viewer, with "Ask the AI" (your claude CLI)
 //
 // NAME is a name or a trailing part of it (CreateExpense, ExpenseForm.submit),
 // a node ID, or file:line. Every command takes -root (default: the nearest
@@ -45,6 +46,7 @@ commands:
   diagram sequence [-target desktop|web] [-finalize] NAME
                                             Archify sequence of one flow → .codemap/diagrams/
   mcp                                       the same answers as MCP tools over stdio (.mcp.json)
+  serve [-port N] [-model M]                local web viewer on 127.0.0.1, with "Preguntar a la IA"
 
 every command accepts -root DIR (default: nearest parent holding go.mod)`
 
@@ -73,6 +75,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	depth := fs.Int("depth", 0, "trace/impact: maximum depth")
 	full := fs.Bool("full", false, "trace: keep branches that never reach data")
 	finalize := fs.Bool("finalize", false, "diagram: also run Archify's real-browser check (needs Chrome)")
+	port := fs.Int("port", 0, "serve: port on 127.0.0.1 (0 picks a free one)")
+	model := fs.String("model", "", "serve: Claude model for Ask (default: your CLI's)")
 	// Flags may come before or after the name (`trace X -target web`): the
 	// flag package stops at the first positional argument, so keep going.
 	var positional []string
@@ -101,6 +105,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	switch cmd {
 	case "mcp":
 		return serveMCP(ctx, dir)
+	case "serve":
+		return serveViewer(ctx, dir, *port, *model, out)
 	case "diagram":
 		req, err := parseDiagram(positional, *target, *finalize)
 		if err != nil {
@@ -110,7 +116,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return runDiagram(ctx, dir, g, req, out)
+		_, err = runDiagram(ctx, dir, g, req, out)
+		return err
 	case "overview":
 		g, err := build()
 		if err != nil {

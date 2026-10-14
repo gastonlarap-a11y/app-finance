@@ -32,7 +32,13 @@ var ErrNoFlow = errors.New("el flujo no llega a ninguna tabla ni al contrato en 
 // contract member, the contract dispatches to the Go service (desktop) or the
 // TS engine (web), and the code behind it reads and writes tables. Calls
 // between functions of the same layer stay inside its lifeline.
+//
+// An implementation of a contract member (a Go bound method, an engine
+// method) is drawn from that member, so the requested build is the one shown.
 func Sequence(g *graph.Graph, from *graph.Node, repo Repo, opt SequenceOptions) (SequenceDiagram, error) {
+	if hub := g.Hub(from); hub != nil {
+		from = hub
+	}
 	b := &seqBuilder{
 		g: g, repo: repo, ids: ids{}, byKey: map[string]int{}, y: firstMessageY,
 		touched: map[string]bool{}, tables: map[string]bool{},
@@ -59,6 +65,13 @@ func Sequence(g *graph.Graph, from *graph.Node, repo Repo, opt SequenceOptions) 
 			Locale:         "es",
 			QualityProfile: "standard",
 			Repository:     repo.pinned(cited),
+			// Archify's default legend calls a dashed line "async": here it is a read.
+			Legend: &Legend{Entries: map[string]LegendEntry{
+				"emphasis": {Label: "llamada al contrato"},
+				"default":  {Label: "llamada / escritura"},
+				"dashed":   {Label: "lectura de tabla"},
+				"return":   {Label: "respuesta"},
+			}},
 		},
 		Participants: b.participants,
 		Segments:     b.segments,

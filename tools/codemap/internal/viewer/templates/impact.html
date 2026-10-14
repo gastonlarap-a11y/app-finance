@@ -1,0 +1,37 @@
+{{template "head" .}}
+{{with .Body}}{{with .Impact}}
+<h1>Impacto de cambiar {{.Root.Name}}</h1>
+<p class="loc">{{loc .Root.Pos}}</p>
+
+{{with .Hub}}
+<section>
+  <h2>Cambian juntos (paridad Go⇄TS)</h2>
+  <ul class="plain">
+    <li>contrato · {{template "nodelink" .}}</li>
+    {{range $.Body.Impact.Mirrors}}<li>{{.Target}} · {{template "nodelink" .Node}}</li>{{end}}
+  </ul>
+</section>
+{{end}}
+
+{{range $i, $level := .Levels}}
+<section>
+  <h2>Nivel {{inc $i}} ({{len $level}})</h2>
+  <ul class="plain">{{range $level}}<li>{{template "nodelink" .}}</li>{{end}}</ul>
+</section>
+{{else}}
+<p class="muted">Nadie lo llama fuera de los tests.</p>
+{{end}}
+
+{{with .UI}}
+<section>
+  <h2>UI afectada</h2>
+  <ul class="plain">{{range .}}<li>{{template "nodelink" .}}</li>{{end}}</ul>
+</section>
+{{end}}
+{{end}}
+<section>
+  <h2>Tests a correr</h2>
+  <pre>{{.Commands}}</pre>
+</section>
+{{end}}
+{{template "foot" .}}
