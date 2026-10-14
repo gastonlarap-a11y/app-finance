@@ -495,6 +495,25 @@ regenerate the platform assets with `wails3 task common:update:build-assets`.
 > Use `wails3` / `task` only — never `wails` (the v2 CLI), which can't read a v3
 > `go.mod` and aborts.
 
+### Code map (`tools/codemap`, dev only)
+
+A map of this repository for people and AI agents, never linked into the app. It
+indexes both languages with their own compilers — Go with `go/packages` +
+`go/types`, TypeScript with the frontend's `typescript` through
+`frontend/scripts/codemap-ts.ts` — and links them where Wails does: each member
+of `services/contract.ts` dispatches to the Go bound method (desktop) and to the
+web engine's implementation, so one flow reads UI → contract → Go / engine →
+SQL tables (tables come from replaying the migrations; bun queries and SQL
+strings say which are read or written).
+
+| Command (`go run ./tools/codemap …`, or `task codemap -- …`) | Does |
+|---|---|
+| `overview` | Bound services, packages, frontend areas, table writers/readers |
+| `trace ExpenseForm.submit` | Flow down to the tables, desktop and web side by side |
+| `symbol CreateExpense` | Mirrors that change together, callers, callees, tables |
+| `impact finance.FinanceService.softDelete` | Callers up to the UI + the exact tests to run |
+| `mcp` | The same answers as MCP tools (registered in `.mcp.json` and `.codex/config.toml`); `task codemap:warm` compiles it ahead of the agents' startup timeout |
+
 ## 14. Multi-user profiles (no login)
 
 The app supports several profiles over a **single** SQLite database — there is no auth. Every

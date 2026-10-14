@@ -83,6 +83,18 @@ tasks:
       - task: test
       - npm --prefix frontend run build:web
 
+  # ---- code map (tools/codemap, dev only — ARCHITECTURE.md §13) ----
+
+  codemap:
+    summary: "Code map CLI: task codemap -- overview | search Q | symbol NAME | trace NAME | impact NAME"
+    cmds:
+      - go run ./tools/codemap {{.CLI_ARGS}}
+
+  codemap:warm:
+    summary: Compiles tools/codemap once so its MCP server starts within the agents' startup timeout
+    cmds:
+      - go build -o bin/codemap ./tools/codemap
+
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:

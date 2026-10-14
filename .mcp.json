@@ -4,6 +4,11 @@
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/readonly",
       "headersHelper": "printf '{\"Authorization\":\"Bearer %s\"}' \"$(gh auth token)\""
+    },
+    "codemap": {
+      "type": "stdio",
+      "command": "go",
+      "args": ["run", "github.com/gastonlarap-a11y/app-finance/tools/codemap", "mcp"]
     }
   }
 }

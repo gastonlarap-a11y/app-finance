@@ -8,3 +8,10 @@ approval_policy = "on-request"
 [mcp_servers.github]
 url = "https://api.githubcopilot.com/mcp/readonly"
 bearer_token_env_var = "GITHUB_PAT"
+
+# Same server as .mcp.json: the code map (tools/codemap), read-only. `go run` compiles it on the
+# first start (`task codemap:warm` does it ahead of time), hence the longer startup timeout.
+[mcp_servers.codemap]
+command = "go"
+args = ["run", "github.com/gastonlarap-a11y/app-finance/tools/codemap", "mcp"]
+startup_timeout_sec = 60

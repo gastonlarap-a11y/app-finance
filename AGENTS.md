@@ -37,6 +37,9 @@ cd frontend && npx playwright install chromium                # once per machine
 
 # Packaging and releases (tag vX.Y.Z → .github/workflows/release.yml) → `release` skill (user-invoked)
 
+# Code map (dev tool, also the `codemap` MCP server): flows UI → contract → Go/engine → tables
+go run ./tools/codemap trace ExpenseForm.submit   # or overview | search Q | symbol NAME | impact NAME
+
 # Bindings and toolchain
 wails3 generate bindings -ts   # regenerate TS bindings after changing exported Go signatures
 wails3 doctor         # verify toolchain after any version/dependency change
@@ -110,6 +113,7 @@ Codex and Antigravity: read the file before changing any path listed in its `pat
 - `desktop-runtime.md` — `main.go`, in-app updates, shared packages, Wails build tooling.
 - `frontend-app.md` — data loading, dialogs, export, web/PWA target; `frontend-ui.md` — UI look.
 - `ci-workflows.md` — GitHub Actions workflows; `agent-config.md` — this file and agent config.
+- `codemap.md` — the code map dev tool (`tools/codemap`, its TS extractor and MCP server).
 
 ## Git
 

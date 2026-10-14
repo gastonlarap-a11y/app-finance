@@ -35,16 +35,30 @@ type Options struct {
 }
 
 func (o Options) withDefaults() Options {
+	// Every path the index reports is relative to Root: resolve the paths once,
+	// or a relative Root would make every file look outside the repository.
+	o.Root = absPath(o.Root)
 	if o.Frontend == "" {
 		o.Frontend = filepath.Join(o.Root, "frontend")
 	}
+	o.Frontend = absPath(o.Frontend)
 	if o.Script == "" {
 		o.Script = filepath.Join(o.Frontend, "scripts", "codemap-ts.ts")
 	}
+	o.Script = absPath(o.Script)
 	if o.Node == "" {
 		o.Node = "node"
 	}
 	return o
+}
+
+// absPath is path made absolute; filepath.Abs only fails when the working
+// directory is gone, and then the path is kept as given.
+func absPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // recheckEvery bounds how often Graph walks the tree looking for changes.

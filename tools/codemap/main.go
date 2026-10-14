@@ -9,6 +9,7 @@
 //	codemap symbol NAME                   explain one symbol: mirrors, callers, callees, tables
 //	codemap trace [-target T] [-full] NAME   flow from NAME down to the tables
 //	codemap impact NAME                   who breaks if NAME changes, and the tests to run
+//	codemap mcp                           the same answers as MCP tools over stdio
 //
 // NAME is a name or a trailing part of it (CreateExpense, ExpenseForm.submit),
 // a node ID, or file:line. Every command takes -root (default: the nearest
@@ -39,6 +40,7 @@ commands:
   trace [-target desktop|web] [-depth N] [-full] NAME
                                             flow from NAME down to the tables
   impact [-depth N] NAME                    upstream callers, UI reached, tests to run
+  mcp                                       the same answers as MCP tools over stdio (.mcp.json)
 
 every command accepts -root DIR (default: nearest parent holding go.mod)`
 
@@ -89,6 +91,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 
 	var text string
 	switch cmd {
+	case "mcp":
+		return serveMCP(ctx, dir)
 	case "overview":
 		g, err := build()
 		if err != nil {

@@ -39,7 +39,8 @@
     ]
   },
   "enabledMcpjsonServers": [
-    "github"
+    "github",
+    "codemap"
   ],
   "hooks": {
     "Stop": [
