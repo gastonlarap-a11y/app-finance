@@ -28,6 +28,12 @@ Overview and commands: `ARCHITECTURE.md` §13 "Code map".
   bun, migrations with create/rename/drop, a contract with binding + engine). A new code pattern
   the index must understand goes into the fixture with its test. Node-backed tests skip without
   `frontend/node_modules` unless `CODEMAP_REQUIRE_NODE=1` (CI sets it after `npm ci`).
+- **Archify** (`internal/archify`): emits only `architecture` and `sequence` at `schema_version` 1
+  for Archify 3.1+ (`FindCLI` enforces it), `quality_profile: standard`, `locale: es`. Respect
+  Archify's layout rules (origin near `[40,40]`, canvas ≤ 1240px, label gaps, no self-messages,
+  short participant labels — all tables share one SQLite lifeline) and never emit an empty card
+  (`null` items fail the schema). Cite only files clean at `HEAD`, and pin `meta.repository` only
+  with at least one citation and only when the root is the checkout's top.
 - **MCP**: every tool is read-only (`ReadOnlyHint`) and answers within `graph.MaxChars`. The
   server is registered in `.mcp.json`, mirrored by hand in `.codex/config.toml`, and enabled in
   `.claude/settings.json` (`enabledMcpjsonServers`).

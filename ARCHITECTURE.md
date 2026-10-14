@@ -512,7 +512,16 @@ strings say which are read or written).
 | `trace ExpenseForm.submit` | Flow down to the tables, desktop and web side by side |
 | `symbol CreateExpense` | Mirrors that change together, callers, callees, tables |
 | `impact finance.FinanceService.softDelete` | Callers up to the UI + the exact tests to run |
+| `diagram architecture` | [Archify](https://github.com/tt-a1i/archify) overview → `.codemap/diagrams/` (gitignored) |
+| `diagram sequence ExpenseForm.submit -target web` | Archify sequence of one flow on one build |
 | `mcp` | The same answers as MCP tools (registered in `.mcp.json` and `.codex/config.toml`); `task codemap:warm` compiles it ahead of the agents' startup timeout |
+
+Diagrams are written deterministically from the graph (no model in the loop) and
+rendered by the user's Archify install (`npx skills add tt-a1i/archify -g`, 3.1+;
+`ARCHIFY_BIN` overrides): `deliver` validates the JSON and every `file:line`
+citation against the committed `HEAD` (changed files are not cited), then writes
+a self-contained HTML viewer; `-finalize` adds Archify's real-browser check.
+Without Archify the JSON is still written.
 
 ## 14. Multi-user profiles (no login)
 

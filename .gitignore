@@ -22,6 +22,10 @@ bin/
 # Task runner checksums (caché de builds, no código)
 .task/
 
+# Diagramas generados por tools/codemap (Archify los fija a un commit: versionarlos los dejaría
+# desfasados con el siguiente)
+/.codemap/
+
 # Frontend: generated bindings (wails3 generate bindings -ts) y build
 frontend/dist/
 frontend/node_modules/

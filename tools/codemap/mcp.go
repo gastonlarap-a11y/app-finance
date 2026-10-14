@@ -29,7 +29,12 @@ Go⇄TS link through frontend/src/services/contract.ts, and the SQL tables each 
 - codemap_search: find a symbol when you only know part of its name.
 
 Names accept a trailing part (CreateExpense, ExpenseForm.submit), an ID, or file:line. Answers cite
-file:line; "sin resolver" marks a table or call only known at run time. Answers are in Spanish.`
+file:line; "sin resolver" marks a table or call only known at run time. Answers are in Spanish.
+
+For a diagram, run "go run ./tools/codemap diagram architecture" or "... diagram sequence NAME
+[-target web]": deterministic Archify JSON + HTML under .codemap/diagrams, citations checked against
+HEAD. For other Archify types (workflow, dataflow, erd…) use the archify skill with these tools as
+the evidence.`
 
 // indexPatience is how long a tool waits for the index before answering
 // "still indexing" (the very first build compiles dependency export data).

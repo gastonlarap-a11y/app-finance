@@ -9,6 +9,7 @@
 //	codemap symbol NAME                   explain one symbol: mirrors, callers, callees, tables
 //	codemap trace [-target T] [-full] NAME   flow from NAME down to the tables
 //	codemap impact NAME                   who breaks if NAME changes, and the tests to run
+//	codemap diagram architecture|sequence NAME   Archify diagrams under .codemap/diagrams
 //	codemap mcp                           the same answers as MCP tools over stdio
 //
 // NAME is a name or a trailing part of it (CreateExpense, ExpenseForm.submit),
@@ -40,6 +41,9 @@ commands:
   trace [-target desktop|web] [-depth N] [-full] NAME
                                             flow from NAME down to the tables
   impact [-depth N] NAME                    upstream callers, UI reached, tests to run
+  diagram architecture [-finalize]          Archify system overview → .codemap/diagrams/
+  diagram sequence [-target desktop|web] [-finalize] NAME
+                                            Archify sequence of one flow → .codemap/diagrams/
   mcp                                       the same answers as MCP tools over stdio (.mcp.json)
 
 every command accepts -root DIR (default: nearest parent holding go.mod)`
@@ -68,6 +72,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	target := fs.String("target", "", "trace: follow only the desktop or the web build")
 	depth := fs.Int("depth", 0, "trace/impact: maximum depth")
 	full := fs.Bool("full", false, "trace: keep branches that never reach data")
+	finalize := fs.Bool("finalize", false, "diagram: also run Archify's real-browser check (needs Chrome)")
 	// Flags may come before or after the name (`trace X -target web`): the
 	// flag package stops at the first positional argument, so keep going.
 	var positional []string
@@ -82,6 +87,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		args = fs.Args()[1:]
 	}
 	query := strings.Join(positional, " ")
+	if *target != "" && *target != graph.TargetDesktop && *target != graph.TargetWeb {
+		return fmt.Errorf("-target must be %s or %s", graph.TargetDesktop, graph.TargetWeb)
+	}
 
 	dir, err := repoRoot(*root)
 	if err != nil {
@@ -93,6 +101,16 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	switch cmd {
 	case "mcp":
 		return serveMCP(ctx, dir)
+	case "diagram":
+		req, err := parseDiagram(positional, *target, *finalize)
+		if err != nil {
+			return fmt.Errorf("%w\n\n%s", err, usage)
+		}
+		g, err := build()
+		if err != nil {
+			return err
+		}
+		return runDiagram(ctx, dir, g, req, out)
 	case "overview":
 		g, err := build()
 		if err != nil {
@@ -106,9 +124,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		opt, err := searchOptions(*kind, *lang, *limit)
 		if err != nil {
 			return err
-		}
-		if *target != "" && *target != graph.TargetDesktop && *target != graph.TargetWeb {
-			return fmt.Errorf("-target must be %s or %s", graph.TargetDesktop, graph.TargetWeb)
 		}
 		g, err := build()
 		if err != nil {

@@ -38,7 +38,7 @@ cd frontend && npx playwright install chromium                # once per machine
 # Packaging and releases (tag vX.Y.Z → .github/workflows/release.yml) → `release` skill (user-invoked)
 
 # Code map (dev tool, also the `codemap` MCP server): flows UI → contract → Go/engine → tables
-go run ./tools/codemap trace ExpenseForm.submit   # or overview | search Q | symbol NAME | impact NAME
+go run ./tools/codemap trace ExpenseForm.submit   # or overview | search | symbol | impact | diagram architecture|sequence NAME
 
 # Bindings and toolchain
 wails3 generate bindings -ts   # regenerate TS bindings after changing exported Go signatures
