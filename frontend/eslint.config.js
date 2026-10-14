@@ -10,7 +10,8 @@ import jsxA11y from 'eslint-plugin-jsx-a11y'
 export default defineConfig(
   { ignores: ['dist', 'bindings', 'dev-dist', 'node_modules', '*.config.ts', '*.config.js'] },
   {
-    files: ['src/**/*.{ts,tsx}'],
+    // scripts/*.ts: dev tooling Node runs directly (tools/codemap's extractor).
+    files: ['src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommendedTypeChecked,
@@ -44,7 +45,7 @@ export default defineConfig(
   },
   {
     // Tests assert on shapes built from fixtures; non-null assertions keep them readable.
-    files: ['src/**/*.test.ts'],
+    files: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
 )

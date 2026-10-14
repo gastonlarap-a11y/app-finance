@@ -26,7 +26,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['src/**/*.test.ts'],
+          include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
           // Vitest blanks CSS modules by default, even ?raw: the token contrast
           // test (src/styles/tokens.test.ts) reads index.css as text.
           css: { include: [/src\/index\.css/] },

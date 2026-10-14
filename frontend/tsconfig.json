@@ -16,5 +16,5 @@
     "types": ["vite/client", "vite-plugin-pwa/vanillajs"],
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }

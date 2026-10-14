@@ -83,6 +83,12 @@ jobs:
       - name: npm ci
         run: npm ci
         working-directory: frontend
+      # tools/codemap's Go⇄TS link tests run its TypeScript extractor, which
+      # needs frontend/node_modules: the race-detector run above skipped them.
+      - name: Test codemap with the TypeScript extractor
+        run: go test -race ./tools/codemap/...
+        env:
+          CODEMAP_REQUIRE_NODE: "1"
       - name: Lint (ESLint, type-aware)
         run: npm run lint
         working-directory: frontend

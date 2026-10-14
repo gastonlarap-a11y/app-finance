@@ -14,6 +14,7 @@ require (
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/text v0.42.0
+	golang.org/x/tools v0.49.0
 	google.golang.org/api v0.299.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.59.0
@@ -60,6 +61,7 @@ require (
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
